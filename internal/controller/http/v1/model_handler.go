@@ -35,7 +35,7 @@ func (h *ModelHandler) ListModels(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, models)
+	response.OK(c, gin.H{"modelPacks": models, "list": models})
 }
 
 // ModelDetail handles model detail retrieval.

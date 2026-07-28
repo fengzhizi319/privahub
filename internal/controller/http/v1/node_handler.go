@@ -86,7 +86,7 @@ func (h *NodeHandler) List(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, gin.H{"nodes": nodes})
+	response.OK(c, gin.H{"list": nodes, "nodes": nodes, "total": len(nodes)})
 }
 
 // Delete handles node deletion.

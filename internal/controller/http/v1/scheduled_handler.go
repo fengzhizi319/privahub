@@ -51,7 +51,7 @@ func (h *ScheduledHandler) List(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, tasks)
+	response.OK(c, gin.H{"list": tasks})
 }
 
 // Delete handles scheduled task deletion.

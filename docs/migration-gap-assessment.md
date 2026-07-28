@@ -75,6 +75,19 @@
 
 **综上：离线可验证的迁移工作已全部完成**（端点覆盖 100%、契约命名由中间件打通、无结构性抛错、骨架端点均为真实 DB 实现）。后续重点应转向搭建 Kuscia 联调环境，验证实时计算链路（结果产出、pushToTee、图执行真实输出）。
 
+### 2.5 列表响应包装结构修复（2026-07-28）✅
+
+> 进一步审计发现第三类差距：**列表响应包装键不匹配**。前端 `client.ts` 的列表方法多数带 `Array.isArray(payload) ? ... : (payload?.X || payload?.list || [])` 兑底，但有 **6 个强制要求特定包装键**（无裸数组兑底）。逐一核对后发现其中 **4 个 Go handler 返回形状不匹配，导致对应页面空数据**（不报错但无内容，隐蔽性高）。
+
+| 端点 | 前端读取 | 修复前 Go 返回 | 修复后 | 影响页面 |
+| --- | --- | --- | --- | --- |
+| `node/page` | `payload.list` + `payload.total` | `{nodes}` | `{list,nodes,total}` | 节点管理 |
+| `model/page` | `payload.modelPacks` 或 `payload.list` | 裸数组 | `{modelPacks,list}` | 模型管理 |
+| `scheduled/page` | `payload.list` | 裸数组 | `{list}` | 周期任务 |
+| `message/list` | `payload.messages` 或 `payload.list` | `{data,total,...}` | `{messages,list,total,...}` | 消息中心 |
+
+另两个强制包装端点 `scheduled/task/page`、`scheduled/job/list` 原本即返回 `{list}`，无需修复。此类差距中间件无法覆盖（只改键名不改包装结构），需逐个 handler 对齐。修复后上述四个页面可正常渲染列表。
+
 ---
 
 ## 三、评估方法
