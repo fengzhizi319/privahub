@@ -6,9 +6,9 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -82,9 +82,14 @@ type DeleteModelRequest struct {
 
 // CreateServingRequest represents a serving creation request.
 type CreateServingRequest struct {
-	ProjectID          string `json:"project_id" binding:"required"`
-	Initiator          string `json:"initiator" binding:"required"`
-	ServingInputConfig string `json:"serving_input_config" binding:"required"`
+	// Frontend deploys a model by sending only {modelId, projectId}; the serving
+	// configuration (initiator/parties/input config) is derived from the packed model.
+	ModelID            string `json:"modelId"`
+	ModelIDAlt         string `json:"model_id"`
+	ProjectID          string `json:"projectId"`
+	ProjectIDAlt       string `json:"project_id"`
+	Initiator          string `json:"initiator"`
+	ServingInputConfig string `json:"serving_input_config"`
 	Parties            string `json:"parties"`
 	PartyEndpoints     string `json:"party_endpoints"`
 }
@@ -113,7 +118,33 @@ type DeleteServingRequest struct {
 
 // ServingDetailRequest represents a serving detail request.
 type ServingDetailRequest struct {
-	ServingID string `json:"serving_id" binding:"required"`
+	ServingID    string `json:"servingId"`
+	ServingIDAlt string `json:"serving_id"`
+}
+
+// ServingResourceVO is a resource entry under a serving party (frontend contract).
+type ServingResourceVO struct {
+	AppImage string `json:"appImage,omitempty"`
+	Path     string `json:"path,omitempty"`
+}
+
+// ServingDetailItemVO describes one party's serving endpoint (frontend contract).
+type ServingDetailItemVO struct {
+	NodeID          string              `json:"nodeId"`
+	NodeName        string              `json:"nodeName"`
+	IsMock          bool                `json:"isMock"`
+	Endpoints       string              `json:"endpoints,omitempty"`
+	FeatureHTTP     string              `json:"featureHttp,omitempty"`
+	SourcePath      string              `json:"sourcePath,omitempty"`
+	FeatureMappings map[string]string   `json:"featureMappings,omitempty"`
+	Resources       []ServingResourceVO `json:"resources,omitempty"`
+}
+
+// ServingDetailVO is the model serving detail response (frontend contract).
+type ServingDetailVO struct {
+	ServingID      string                `json:"servingId"`
+	ModelID        string                `json:"modelId,omitempty"`
+	ServingDetails []ServingDetailItemVO `json:"servingDetails"`
 }
 
 // --- Model Service Methods ---
@@ -223,6 +254,37 @@ func (s *ModelService) ExportModel(ctx context.Context, modelID string) (string,
 
 // CreateServing creates a new serving and registers it with Kuscia.
 func (s *ModelService) CreateServing(ctx context.Context, req *CreateServingRequest) (*ServingVO, error) {
+	// Normalize snake/camel variants sent by different clients.
+	if req.ModelID == "" {
+		req.ModelID = req.ModelIDAlt
+	}
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+
+	// The frontend deploys a packed model by sending only {modelId, projectId};
+	// derive initiator/parties/input config from the stored model pack.
+	if req.ModelID != "" {
+		var pack model.ProjectModelPackDO
+		if err := s.db.WithContext(ctx).Where("model_id = ?", req.ModelID).First(&pack).Error; err == nil {
+			if req.Initiator == "" {
+				req.Initiator = pack.Initiator
+			}
+			if req.ProjectID == "" {
+				req.ProjectID = pack.ProjectID
+			}
+			if req.Parties == "" {
+				req.Parties = s.deriveServingParties(ctx, pack)
+			}
+			if req.ServingInputConfig == "" {
+				req.ServingInputConfig = pack.ModelList
+			}
+		}
+	}
+	if req.Initiator == "" {
+		req.Initiator = req.ProjectID
+	}
+
 	servingID := uuid.New().String()[:8]
 
 	serving := &model.ProjectModelServingDO{
@@ -256,6 +318,12 @@ func (s *ModelService) CreateServing(ctx context.Context, req *CreateServingRequ
 		}
 	}
 
+	// Link the serving back to the model pack so detail/list can resolve it.
+	if req.ModelID != "" {
+		_ = s.db.WithContext(ctx).Model(&model.ProjectModelPackDO{}).
+			Where("model_id = ?", req.ModelID).Update("serving_id", servingID).Error
+	}
+
 	return &ServingVO{
 		ServingID:          servingID,
 		ProjectID:          req.ProjectID,
@@ -265,6 +333,30 @@ func (s *ModelService) CreateServing(ctx context.Context, req *CreateServingRequ
 		ServingStats:       serving.ServingStats,
 		GmtCreate:          serving.GmtCreate.Format("2006-01-02 15:04:05"),
 	}, nil
+}
+
+// deriveServingParties builds a JSON array of serving parties from the packed
+// model's project nodes, falling back to the model datasource owner.
+func (s *ModelService) deriveServingParties(ctx context.Context, pack model.ProjectModelPackDO) string {
+	domainIDs := make([]string, 0)
+	var projectNodes []model.ProjectNodeDO
+	if err := s.db.WithContext(ctx).Where("project_id = ?", pack.ProjectID).Find(&projectNodes).Error; err == nil {
+		for _, pn := range projectNodes {
+			domainIDs = append(domainIDs, pn.NodeID)
+		}
+	}
+	if len(domainIDs) == 0 && pack.ModelDatasource != "" {
+		domainIDs = append(domainIDs, pack.ModelDatasource)
+	}
+	if len(domainIDs) == 0 {
+		return ""
+	}
+	parties := make([]kuscia.ServingParty, 0, len(domainIDs))
+	for _, d := range domainIDs {
+		parties = append(parties, kuscia.ServingParty{DomainID: d, Role: "guest", AppImage: "secretflow"})
+	}
+	b, _ := json.Marshal(parties)
+	return string(b)
 }
 
 // ListServings lists servings.
@@ -297,7 +389,10 @@ func (s *ModelService) ListServings(ctx context.Context, req *ServingListRequest
 }
 
 // GetServingDetail retrieves serving detail, syncing status from Kuscia if available.
-func (s *ModelService) GetServingDetail(ctx context.Context, req *ServingDetailRequest) (*ServingVO, error) {
+func (s *ModelService) GetServingDetail(ctx context.Context, req *ServingDetailRequest) (*ServingDetailVO, error) {
+	if req.ServingID == "" {
+		req.ServingID = req.ServingIDAlt
+	}
 	var sv model.ProjectModelServingDO
 	if err := s.db.WithContext(ctx).Where("serving_id = ?", req.ServingID).First(&sv).Error; err != nil {
 		return nil, ErrServingNotFound
@@ -314,16 +409,60 @@ func (s *ModelService) GetServingDetail(ctx context.Context, req *ServingDetailR
 		}
 	}
 
-	return &ServingVO{
-		ServingID:          sv.ServingID,
-		ProjectID:          sv.ProjectID,
-		Initiator:          sv.Initiator,
-		ServingInputConfig: sv.ServingInputConfig,
-		Parties:            sv.Parties,
-		ServingStats:       sv.ServingStats,
-		ErrorMsg:           sv.ErrorMsg,
-		GmtCreate:          sv.GmtCreate.Format("2006-01-02 15:04:05"),
+	// Resolve the owning model (if any) for the response.
+	modelID := ""
+	var pack model.ProjectModelPackDO
+	if err := s.db.WithContext(ctx).Where("serving_id = ?", sv.ServingID).First(&pack).Error; err == nil {
+		modelID = pack.ModelID
+	}
+
+	return &ServingDetailVO{
+		ServingID:      sv.ServingID,
+		ModelID:        modelID,
+		ServingDetails: s.buildServingDetails(ctx, sv),
 	}, nil
+}
+
+// buildServingDetails expands the stored parties/endpoints into the per-party
+// detail list expected by the frontend (ServingDetailVO.servingDetails).
+func (s *ModelService) buildServingDetails(ctx context.Context, sv model.ProjectModelServingDO) []ServingDetailItemVO {
+	endpoints := map[string]string{}
+	if sv.PartyEndpoints != "" {
+		_ = json.Unmarshal([]byte(sv.PartyEndpoints), &endpoints)
+	}
+
+	domainIDs := make([]string, 0)
+	if sv.Parties != "" {
+		var parties []kuscia.ServingParty
+		if err := json.Unmarshal([]byte(sv.Parties), &parties); err == nil {
+			for _, p := range parties {
+				if p.DomainID != "" {
+					domainIDs = append(domainIDs, p.DomainID)
+				}
+			}
+		} else {
+			for _, p := range strings.Split(sv.Parties, ",") {
+				if p = strings.TrimSpace(p); p != "" {
+					domainIDs = append(domainIDs, p)
+				}
+			}
+		}
+	}
+
+	items := make([]ServingDetailItemVO, 0, len(domainIDs))
+	for _, d := range domainIDs {
+		nodeName := d
+		var node model.NodeDO
+		if err := s.db.WithContext(ctx).Where("node_id = ?", d).First(&node).Error; err == nil && node.Name != "" {
+			nodeName = node.Name
+		}
+		items = append(items, ServingDetailItemVO{
+			NodeID:    d,
+			NodeName:  nodeName,
+			Endpoints: endpoints[d],
+		})
+	}
+	return items
 }
 
 // DeleteServing deletes a serving locally and from Kuscia.

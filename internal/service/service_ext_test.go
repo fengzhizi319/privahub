@@ -571,8 +571,11 @@ func TestModelService_ServingCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetServingDetail failed: %v", err)
 	}
-	if detail.Initiator != "alice" {
-		t.Errorf("expected initiator 'alice', got %q", detail.Initiator)
+	if detail.ServingID != vo.ServingID {
+		t.Errorf("expected serving ID %q, got %q", vo.ServingID, detail.ServingID)
+	}
+	if len(detail.ServingDetails) != 2 {
+		t.Errorf("expected 2 serving detail parties, got %d", len(detail.ServingDetails))
 	}
 
 	// Delete

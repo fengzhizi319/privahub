@@ -129,6 +129,15 @@
 
 修复：handler 改收裸数组并以 `domain/name` 拼 codeName，响应改为 `map[string]ComponentDef`（键为 codeName）。中间件 `camelCaseResponseKeys` 为追加式（保留原键），故 `data_prep/psi` 类键不被破坏，`defs[codeName]` 索引正常。`go build`/`vet`/`test` 全过。
 
+### 2.11 模型服务（部署）请求/响应结构修复（2026-07-28）✅
+
+审计模型管理页「部署/发布详情」链路，发现 `model/serving` 两个端点均存在真实契约缺陷：
+
+- **`model/serving/create`（部署恒失败）**：前端 `createModelServing` 仅发 `{modelId, projectId}`，Go 原 `CreateServingRequest` 要求 `project_id`/`initiator`/`serving_input_config` 均为 `binding:"required"` 且全为 snake_case → `ShouldBindJSON` 校验失败返回 ParamError，模型部署每次都失败。修复：请求改收 `{modelId, projectId}`（含 snake/camel 变体），并据 `modelId` 查 `ProjectModelPackDO` 派生 `initiator`（pack.Initiator）、`parties`（新增 `deriveServingParties`，从项目节点 `ProjectNodeDO` 构建 `kuscia.ServingParty` JSON 数组，回退 `model_datasource`）、`serving_input_config`（pack.ModelList）；创建后回写 pack 的 `serving_id` 以便详情解析。
+- **`model/serving/detail`（发布详情恒为空）**：Go 原返回扁平 `ServingVO`（`serving_id`/`serving_stats`…），前端期望 `ServingDetailVO`（`{servingId, modelId, servingDetails[]}`，每项含 `nodeId/nodeName/endpoints/featureHttp/sourcePath/featureMappings`）。前端模型详情弹窗据 `servingDetails.length` 渲染，扁平响应使该面板永远显示「暂无」。修复：`GetServingDetail` 改返回 `*ServingDetailVO`，新增 `buildServingDetails` 解析存储的 `parties`（JSON 数组或逗号分隔）与 `party_endpoints`（map），展开为各参与方明细并解析节点名。
+
+同步更新 `service_ext_test.go` 断言（`detail.ServingID` + `len(detail.ServingDetails)==2`）。`go build`/`vet`/`test` 全过。
+
 ---
 
 ## 三、评估方法
