@@ -726,7 +726,7 @@ func (s *GraphService) GetNodeLogs(ctx context.Context, req *GraphNodeLogsReques
 }
 
 // RefreshNodeMaxIndex recalculates and updates the node max index.
-func (s *GraphService) RefreshNodeMaxIndex(ctx context.Context, req *RefreshNodeMaxIndexRequest) error {
+func (s *GraphService) RefreshNodeMaxIndex(ctx context.Context, req *RefreshNodeMaxIndexRequest) (int, error) {
 	if req.ProjectID == "" {
 		req.ProjectID = req.ProjectIDAlt
 	}
@@ -735,16 +735,18 @@ func (s *GraphService) RefreshNodeMaxIndex(ctx context.Context, req *RefreshNode
 	}
 	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, req.ProjectID, req.GraphID)
 	if err != nil {
-		return ErrGraphNotFound
+		return 0, ErrGraphNotFound
 	}
 
 	nodes, _ := s.graphNodeRepo.FindByGraphID(ctx, req.ProjectID, req.GraphID)
 	if len(nodes) > graph.NodeMaxIndex {
 		graph.NodeMaxIndex = len(nodes)
-		return s.graphRepo.Update(ctx, graph)
+		if err := s.graphRepo.Update(ctx, graph); err != nil {
+			return graph.NodeMaxIndex, err
+		}
 	}
 
-	return nil
+	return graph.NodeMaxIndex, nil
 }
 
 // containsStr checks if a string slice contains a value.

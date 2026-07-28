@@ -204,5 +204,6 @@ func (h *MessageHandler) Pending(c *gin.Context) {
 	}
 	query.Count(&count)
 
-	response.OK(c, gin.H{"pending_count": count})
+	// Frontend reads the response data as a bare number (Number(unwrap(data))).
+	response.OK(c, count)
 }

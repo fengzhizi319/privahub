@@ -253,7 +253,8 @@ func (h *GraphHandler) NodeMaxIndex(c *gin.Context) {
 		return
 	}
 
-	if err := h.graphService.RefreshNodeMaxIndex(c.Request.Context(), &req); err != nil {
+	idx, err := h.graphService.RefreshNodeMaxIndex(c.Request.Context(), &req)
+	if err != nil {
 		if err == service.ErrGraphNotFound {
 			response.Fail(c, errcode.GraphNotFound)
 			return
@@ -262,5 +263,5 @@ func (h *GraphHandler) NodeMaxIndex(c *gin.Context) {
 		return
 	}
 
-	response.OKEmpty(c)
+	response.OK(c, gin.H{"max_index": idx})
 }

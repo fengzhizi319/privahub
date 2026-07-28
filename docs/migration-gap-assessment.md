@@ -88,6 +88,13 @@
 
 另两个强制包装端点 `scheduled/task/page`、`scheduled/job/list` 原本即返回 `{list}`，无需修复。此类差距中间件无法覆盖（只改键名不改包装结构），需逐个 handler 对齐。修复后上述四个页面可正常渲染列表。
 
+### 2.6 标量/单值响应结构修复（2026-07-28）✅
+
+同类审计发现返回「单一标量」的端点也有结构不匹配（前端 `unwrap` 在 `data` 为 null/undefined 时会直接报错 `API returned empty data`）：
+
+- `message/pending`：前端 `Number(unwrap(data))` 期望 `data` 为裸数字，Go 原返回 `{pending_count}` 对象 → `Number(对象)` 为 NaN → 待处理消息计数恒为 0。修复：直接返回裸数字 `count`。
+- `graph/node/max_index`：前端读 `payload.maxIndex`，Go 原返回 `OKEmpty`（无 `data` 字段）→ `unwrap` 报错，DAG 画布添加节点流程中断。修复：`RefreshNodeMaxIndex` 改为返回 `(int, error)`，handler 返回 `{max_index}`（中间件补 camelCase `maxIndex`）。
+
 ---
 
 ## 三、评估方法
