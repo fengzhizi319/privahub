@@ -42,7 +42,13 @@ func (h *DataHandler) Upload(c *gin.Context) {
 	}
 	defer file.Close()
 
-	nodeID := c.PostForm("node_id")
+	nodeID := c.Query("Node-Id")
+	if nodeID == "" {
+		nodeID = c.GetHeader("Node-Id")
+	}
+	if nodeID == "" {
+		nodeID = c.PostForm("node_id")
+	}
 	datasourceID := c.PostForm("datasource_id")
 
 	// Save file to data directory
@@ -64,12 +70,16 @@ func (h *DataHandler) Upload(c *gin.Context) {
 	}
 
 	response.OK(c, gin.H{
-		"filename":      header.Filename,
-		"size":          written,
-		"node_id":       nodeID,
-		"datasource_id": datasourceID,
-		"path":          dstPath,
-		"status":        "uploaded",
+		"name":            header.Filename,
+		"real_name":       header.Filename,
+		"datasource":      datasourceID,
+		"datasource_type": "local",
+		"filename":        header.Filename,
+		"size":            written,
+		"node_id":         nodeID,
+		"datasource_id":   datasourceID,
+		"path":            dstPath,
+		"status":          "uploaded",
 	})
 }
 
@@ -109,11 +119,24 @@ func (h *DataHandler) Create(c *gin.Context) {
 
 // Download handles data file download from data directory.
 func (h *DataHandler) Download(c *gin.Context) {
+	// Frontend sends {nodeId, domainDataId} via raw fetch; accept snake/camel variants.
 	var req struct {
-		DatatableID string `json:"datatable_id" binding:"required"`
-		NodeID      string `json:"node_id"`
+		DatatableID    string `json:"datatable_id"`
+		DatatableIDAlt string `json:"domainDataId"`
+		NodeID         string `json:"node_id"`
+		NodeIDAlt      string `json:"nodeId"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+	if req.DatatableID == "" {
+		req.DatatableID = req.DatatableIDAlt
+	}
+	if req.NodeID == "" {
+		req.NodeID = req.NodeIDAlt
+	}
+	if req.DatatableID == "" {
 		response.Fail(c, errcode.ParamError)
 		return
 	}

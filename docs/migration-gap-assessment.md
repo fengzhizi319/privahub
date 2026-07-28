@@ -138,6 +138,15 @@
 
 同步更新 `service_ext_test.go` 断言（`detail.ServingID` + `len(detail.ServingDetails)==2`）。`go build`/`vet`/`test` 全过。
 
+### 2.12 数据上传/下载请求字段修复（2026-07-28）✅
+
+审计数据管理「上传/下载」链路（前端用原生 `fetch` 而非 openapi-fetch，不走中间件孪生键扩展），发现两处请求字段不匹配：
+
+- **`data/download`（下载恒失败）**：前端 `downloadData` 发 `{nodeId, domainDataId}`，Go 原期望 `{datatable_id (binding:required), node_id}` → 校验失败返回 ParamError，数据下载每次都失败。修复：请求改收 `datatable_id`/`domainDataId` 与 `node_id`/`nodeId` 双变体并归一化。
+- **`data/upload`（节点丢失）**：前端经 query `?Node-Id=<id>` 传节点（multipart），Go 原用 `c.PostForm("node_id")` 读取（表单无此字段）→ nodeID 恒为空，文件被存到错误目录（缺节点前缀），后续下载找不到。修复：改从 `c.Query("Node-Id")` → `c.GetHeader("Node-Id")` → `c.PostForm("node_id")` 依次回退；响应补充前端 `UploadDataResultVO` 期望的 `name`/`real_name`/`datasource`/`datasource_type` 字段（中间件补 camelCase 孪生键）。
+
+`go build`/`vet`/`test` 全过。
+
 ---
 
 ## 三、评估方法
