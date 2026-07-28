@@ -9,12 +9,13 @@ import (
 
 // ProjectHandler handles project-related HTTP requests.
 type ProjectHandler struct {
-	projectService *service.ProjectService
+	projectService   *service.ProjectService
+	datatableService *service.DatatableService
 }
 
 // NewProjectHandler creates a new ProjectHandler.
-func NewProjectHandler(projectService *service.ProjectService) *ProjectHandler {
-	return &ProjectHandler{projectService: projectService}
+func NewProjectHandler(projectService *service.ProjectService, datatableService *service.DatatableService) *ProjectHandler {
+	return &ProjectHandler{projectService: projectService, datatableService: datatableService}
 }
 
 // Create handles project creation.
@@ -213,13 +214,30 @@ func (h *ProjectHandler) DeleteDatatable(c *gin.Context) {
 
 // GetDatatable handles getting a datatable from a project.
 func (h *ProjectHandler) GetDatatable(c *gin.Context) {
-	var req service.ProjGetDatatableRequest
+	var req struct {
+		ProjectID   string `json:"projectId"`
+		NodeID      string `json:"nodeId"`
+		DatatableID string `json:"datatableId"`
+		Type        string `json:"type"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
 
-	response.OK(c, gin.H{"project_id": req.ProjectID, "datatable_id": req.DatatableID})
+	// Reuse the datatable service compat query so the response matches the
+	// frontend DatatableNodeVO contract ({datatableVO, nodeName, nodeId}).
+	vo, err := h.datatableService.GetDatatableCompat(c.Request.Context(), &service.GetDatatableCompatRequest{
+		NodeID:      req.NodeID,
+		DatatableID: req.DatatableID,
+		Type:        req.Type,
+	})
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, vo)
 }
 
 // TeeList handles TEE job list retrieval.

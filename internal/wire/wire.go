@@ -174,7 +174,7 @@ func NewApp(db *gorm.DB, cfg *config.Config) *App {
 	// Handlers
 	authHandler := v1.NewAuthHandler(authService)
 	nodeHandler := v1.NewNodeHandler(nodeService)
-	projectHandler := v1.NewProjectHandler(projectService)
+	projectHandler := v1.NewProjectHandler(projectService, datatableService)
 	graphHandler := v1.NewGraphHandler(graphService)
 	jobHandler := v1.NewJobHandler(jobService)
 	datatableHandler := v1.NewDatatableHandler(datatableService, kusciaClient)

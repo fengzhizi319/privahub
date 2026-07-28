@@ -24,6 +24,10 @@ func NewRouter(log *zap.Logger, app *wire.App) *gin.Engine {
 	r := gin.New()
 
 	// Global middleware chain
+	// CaseKeysResponse must be outermost so every /api JSON response gets
+	// camelCase twin keys added (frontend contract is uniformly camelCase while
+	// legacy Go DTOs marshal snake_case).
+	r.Use(middleware.CaseKeysResponse())
 	r.Use(middleware.TraceID())
 	r.Use(middleware.Recovery(log))
 	r.Use(middleware.Metrics())
@@ -32,6 +36,10 @@ func NewRouter(log *zap.Logger, app *wire.App) *gin.Engine {
 	r.Use(middleware.AuditLog(log))
 	r.Use(middleware.RateLimiter(100, 20)) // 100 burst, 20 req/s refill
 	r.Use(middleware.BodyLimit(32 << 20))  // 32 MB max body
+	// CaseKeysRequest runs after BodyLimit so it reads the size-limited body; it
+	// additively injects snake_case/camelCase twin keys into JSON request bodies
+	// so handlers binding either convention receive the frontend's camelCase fields.
+	r.Use(middleware.CaseKeysRequest())
 
 	// Health check (no auth required)
 	r.GET("/api/v1alpha1/healthz", func(c *gin.Context) {
@@ -257,6 +265,12 @@ func registerServingRoutes(rg *gin.RouterGroup, h *v1.ModelHandler) {
 	rg.POST("/serving/list", h.ListServings)
 	rg.POST("/serving/delete", h.DeleteServing)
 	rg.POST("/serving/detail", h.ServingDetail)
+	// Java SecretPad-compatible aliases used by the frontend (client.ts calls
+	// /model/serving/* rather than /serving/*).
+	rg.POST("/model/serving/create", h.CreateServing)
+	rg.POST("/model/serving/list", h.ListServings)
+	rg.POST("/model/serving/delete", h.DeleteServing)
+	rg.POST("/model/serving/detail", h.ServingDetail)
 }
 
 func registerInstRoutes(rg *gin.RouterGroup, h *v1.MiscHandler) {

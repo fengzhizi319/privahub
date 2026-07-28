@@ -4,13 +4,13 @@
 > - **迁移版**：前端 `clwork/privahub/web`（privaconsole，vite + React + Tailwind + FSD），后端 `clwork/privahub`（Go + Gin + GORM）
 > - **全功能版**：前端 `sfwork/secretpad/frontend-src`（umi + AntD5），后端 `sfwork/secretpad`（Java + Spring Boot）
 >
-> 评估日期：2026-07-28
+> 评估日期：2026-07-28（首版）；2026-07-28 二次深度评估（修订版）
 
 ---
 
 ## 一、背景与目标
 
-`clwork/privahub` 是从 `sfwork/secretpad` 迁移而来的 Go 重构版后端，`clwork/privahub/web` 是配套的全新前端（Feature-Sliced 架构）。迁移版前端在重写时已按照全功能版的业务能力定义了完整的 API 契约（`web/openapi/secretpad.openapi.json` + `packages/api-client`），但 Go 后端尚未实现其中全部端点，导致部分页面功能在迁移版中不可用。
+`clwork/privahub` 是从 `sfwork/secretpad` 迁移而来的 Go 重构版后端，`clwork/privahub/web` 是配套的全新前端（Feature-Sliced 架构）。迁移版前端在重写时已按照全功能版的业务能力定义了完整的 API 契约（`web/openapi/secretpad.openapi.json` + `packages/api-client`，**统一 camelCase**），但 Go 后端尚未实现其中全部端点，且**已实现端点的请求/响应契约与前端存在系统性不一致**，导致部分页面功能在迁移版中不可用。
 
 本文目标：
 
@@ -22,24 +22,106 @@
 
 ## 二、评估结论（TL;DR）
 
+### 2.1 首版结论（端点覆盖维度，已基本完成）
+
 | 维度 | 结论 |
 | --- | --- |
 | **前端页面覆盖** | ✅ 基本完整。`web` 已覆盖全部 24 个页面 + 8 个 feature，与全功能版业务能力一一对应，无缺失页面。 |
 | **前端 API 契约** | ✅ 完整。`packages/api-client` 已定义约 90 个端点的调用与 Zod 运行时校验。 |
-| **后端 API 实现** | ⚠️ **存在 16 个端点缺失**。前端已调用、OpenAPI 已定义，但 Go 后端未注册/未实现，是功能不可用的根因。 |
-| **补齐重点** | 🔧 **后端**。实现 16 个缺失端点即可打通迁移版全部功能；前端无需新增页面。 |
+| **后端 API 实现** | ✅ 16 个缺失端点已补齐（commit `882c3ff`），端点路径覆盖率 100%。 |
 
-**核心差距 = 后端 16 个缺失的 API 端点。**
+### 2.2 修订版结论（契约一致性维度，二次评估新发现）⭐
+
+> **端点「存在」≠ 功能「可用」。二次评估以「前端实际请求/响应契约」为准逐端点核对，发现真正的深层差距是系统性的契约不匹配。**
+
+| 维度 | 结论 | 严重度 |
+| --- | --- | --- |
+| **请求体字段命名不匹配** | ⚠️ Go 大量 handler 用 `snake_case` + `binding:"required"`（如 `project_id`），而前端统一发 `camelCase`（如 `projectId`）。`encoding/json` 无法匹配二者，导致 **project/model/message/noderoute/p2p/inst 等模块大面积返回 ParamError**。 | 🔴 P0 |
+| **响应体字段命名不匹配** | ⚠️ Go 现有 DTO 几乎全部 `snake_case`，而前端 Zod schema / 类型统一 `camelCase`。严格校验端点（22 个 `unwrapValidated`）中必填字段缺失会**抛错**（如 `project/get` 的 `projectId`），其余端点前端取到 **全 undefined（页面空数据）**。 | 🔴 P0 |
+| **路径不匹配** | ⚠️ 前端调 `/model/serving/create\|delete\|detail`，Go 注册为 `/serving/*`（缺 `model/` 前缀），模型服务功能不可用。 | 🟠 P1 |
+| **graph 模块为何正常** | ✅ `graph_service.go` 采用「双字段兼容」DTO（`project_id` + `projectId`），请求侧可接收 camelCase；是唯一遵循该约定的模块。 | — |
+
+**修订版核心差距 = 系统性 snake_case ↔ camelCase 契约不匹配（请求 + 响应），而非端点缺失。**
+
+最优解：在 Gin 层引入**全局 camelCase 兼容中间件**（请求体双向补键 + 响应体 snake→camel 转换），一次性、无侵入地打通全部现有端点；再补齐 `model/serving/*` 路径别名。
 
 ---
 
 ## 三、评估方法
+
+### 3.1 首版（端点覆盖维度）
 
 1. 提取全功能版后端全部 Controller 的 `@*Mapping` 端点清单（26 个 Controller）；
 2. 提取迁移版后端 `internal/controller/http/router.go` 已注册路由清单；
 3. 提取迁移版前端 `packages/api-client/src/client.ts` 实际调用的端点清单（约 90 个）；
 4. 三方交叉比对：以**前端实际调用**为准，筛出「前端要调、后端没有」的端点；
 5. 对每个缺失端点，核对前端 Zod schema / OpenAPI 契约，确认请求/响应结构，并确认其在页面中的真实使用情况。
+
+### 3.2 修订版（契约一致性维度）⭐
+
+首版只回答了「端点存不存在」，修订版进一步回答「端点能不能用」：
+
+1. **路径精确 diff**：将前端 `client.ts` 的 123 个调用路径（含 `/api/v1alpha1` 前缀）逐一映射为 Go 注册后缀，与 `router.go` 的 166 条路由做集合差，找出路径不匹配项；
+2. **请求契约核对**：逐个核对前端请求 body 字段（camelCase）与 Go handler `ShouldBindJSON` 的 struct tag，重点关注 `binding:"required"` 的 snake_case 字段（前端不发 → ParamError）；
+3. **响应契约核对**：逐个核对前端 22 个 `unwrapValidated`（Zod `safeParse` 严格校验）端点的响应 DTO 字段命名，区分「必填字段缺失→抛错」与「全 optional→空数据」两类影响；
+4. **机制验证**：确认 Go `encoding/json` 对 `projectId` vs `project_id` **不匹配**（非纯大小写差异），Zod `z.object` 默认非 strict（未知字段忽略、可选字段可缺、**必填字段缺失报错**）。
+
+---
+
+## 三’、契约不匹配明细（修订版核心发现）⭐
+
+### A. 路径不匹配（1 组，3 端点）
+
+| 前端调用路径 | Go 注册路径 | 影响 |
+| --- | --- | --- |
+| `POST /api/v1alpha1/model/serving/create` | `POST /api/v1alpha1/serving/create` | 模型服务创建不可用（404） |
+| `POST /api/v1alpha1/model/serving/delete` | `POST /api/v1alpha1/serving/delete` | 模型服务删除不可用（404） |
+| `POST /api/v1alpha1/model/serving/detail` | `POST /api/v1alpha1/serving/detail` | 模型服务详情不可用（404） |
+
+> 注：`/api/login`、`/api/logout` 仅为前端登录的**降级备用路径**，主路径 `/api/v1alpha1/user/login|logout` Go 已实现，故不构成差距。
+
+### B. 请求体 snake_case required 绑定（前端 camelCase → ParamError）
+
+`grep 'json:"[a-z]+_.." binding:"required"'` 统计，分布于 11 个 handler 文件：
+
+| 字段 | 出现次数 | 涉及模块 |
+| --- | --- | --- |
+| `node_id` | 16 | node / project / misc / p2p |
+| `project_id` | 12 | project / job / model / scheduled |
+| `vote_id` | 4 | message / vote |
+| `schedule_task_id` | 4 | scheduled |
+| `router_id` | 4 | noderoute |
+| `inst_id` | 4 | project / misc |
+| `datatable_id` / `model_id` / `datasource_id` / `src_node_id` / `dst_node_id` / `table_name` / `result_id` / `refresh_token` | 各 1–2 | 各模块 |
+
+典型例：`project/get` handler 绑定 `json:"project_id" binding:"required"`，前端发 `{projectId}` → Go 收到空 `project_id` → **ParamError**，项目详情页完全不可用。同类：`project/delete`、`project/node/add`、`project/inst/add`、`project/tee/list`、`project/getOutTable`、`project/datasource/list`、`project/update/tableConfig` 等。
+
+### C. 响应体 snake_case（前端 camelCase 取空 / 严格校验报错）
+
+前端 22 个 `unwrapValidated` 严格校验端点中，Go 响应为 snake_case 的：
+
+| 端点 | Zod schema | 影响类型 |
+| --- | --- | --- |
+| `project/get` | `ProjectVOSchema`（`projectId` **必填**） | 🔴 报错（页面崩溃） |
+| `project/datatable/get` | `DatatableNodeVOSchema`（全 optional） | 🟡 空数据 |
+| `project/job/get` | `ProjectJobVOSchema`（全 optional） | 🟡 空数据 |
+| `message/detail` | `MessageDetailVOSchema` | 🟡 空数据 |
+| `model/pack` | `ModelExportPackageResponseSchema` | 🟡 空数据 |
+| `model/detail` | `ModelPackDetailVOSchema` | 🟡 空数据 |
+| `data/sync` | `SyncDataDTOSchema` | 🟡 空数据 |
+| `inst/node/add\|token\|newToken` | `InstTokenVOSchema` | 🟡 空数据 |
+| `p2p/project/participants` | `ProjectParticipantsDetailVOSchema` | 🟡 空数据 |
+| `user/get` | `UserContextDTOSchema` | 🟡 空数据 |
+| `datasource/detail` | `DatasourceDetailAggregateVOSchema` | 🟡 空数据 |
+| `approval/pull/status` | `PullStatusVOSchema` | 🟡 空数据 |
+
+> 上一轮已补齐的 5 个端点（`node/result/list|detail`、`datatable/get`、`datasource/nodes`、`scheduled/info|task/info`）已用 camelCase 「Compat」DTO，不受此问题影响。
+
+此外，非严格校验但前端直接读 camelCase 字段的端点（如 `graph/detail` 返回 `graph_id/project_id/nodes[].graph_node_id`，前端读 `graphId/projectId/graphNodeId`）同样取空，影响 DAG 画布渲染。
+
+### D. 骨架实现（逻辑深度差距）
+
+部分 handler 仅绑定请求后直接返回空值，无实际业务逻辑：`project/datatable/add|delete`（OKEmpty）、`project/tee/list`（空数组）、`project/getOutTable`（空 tables）、`project/datasource/list`（空数组）、`project/update/tableConfig`（OKEmpty）。这些属于与全功能版的**逻辑深度差距**，优先级低于契约不匹配（契约不通时页面直接不可用），列为后续迭代项。
 
 ---
 
@@ -139,7 +221,26 @@
 
 ## 六、补齐实施方案
 
-### 6.1 总体策略
+### 6.0 修订版方案（契约一致性，本轮重点）⭐
+
+针对「三’」的系统性契约不匹配，采用**全局中间件**一次性无侵入修复，避免逐个 handler 改造（11 个文件、数十个 DTO）的高风险与高成本：
+
+**方案：`internal/controller/http/middleware/camelcase.go`**
+
+1. **请求体双向补键**（`CamelSnakeRequest`）：仅对 `Content-Type: application/json` 的请求，递归遍历 body JSON，为每个 key 补充其「另一种命名」孪生键（camelCase↔snake_case），写回 `c.Request.Body`。
+   - 前端发 `{projectId}` → 补 `{project_id}`，snake_case 绑定可接收；
+   - 前端发 `{scheduleId}` → 补 `{schedule_id}`，同时原 camelCase 键保留，camelCase 绑定（上一轮 16 端点）仍可接收；
+   - **加法式**，不删除原键，故不破坏任何现有端点。
+2. **响应体 snake→camel 转换**（`CamelSnakeResponse`）：包装 `gin.ResponseWriter`，在 `Write` 时拦截 JSON，递归将所有 snake_case key 转为 camelCase（保留原键以防其他消费方）。跳过 SSE（`/sync`）、非 JSON 响应。
+   - Go 返回 `{project_id}` → 补 `{projectId}`，前端 `ProjectVOSchema.projectId`（必填）满足，严格校验通过；
+   - 已是 camelCase 的键（无下划线）不变，上一轮 16 端点不受影响。
+3. **跳过规则**：multipart（`inst/node/register`）、SSE（`/sync`）、静态资源、`/metrics`、`/healthz` 不走转换。
+
+**路径别名**：`router.go` 为 `model/serving/create|delete|detail` 增加带 `model/` 前缀的别名路由，指向现有 `ModelHandler.CreateServing|DeleteServing|ServingDetail`。
+
+**优势**：一次实现、全局生效、加法式无破坏、后续新端点自动兼容。风险点（嵌套/`json.RawMessage` 递归转换、大 body 性能）在实现中针对性处理并加单测。
+
+### 6.1 首版总体策略（端点补齐，已完成）
 
 - **契约优先**：以 `web/openapi/secretpad.openapi.json` 与 `packages/api-client/src/schemas/index.ts` 中的 Zod schema 为唯一请求/响应契约，Go 实现的入参/出参字段名（camelCase）与之严格对齐，保证前端 `unwrapValidated` 运行时校验通过。
 - **复用优先**：优先复用 Go 后端已有的 service / repository / kuscia client，不重复造轮子。
@@ -182,9 +283,13 @@
 ## 七、验证计划
 
 1. **后端**：`go build ./...`、`go vet ./...`、`gofmt -l`、`go test ./...` 全部通过；
-2. **契约自检**：对每个新端点，人工核对 Go 响应 JSON 字段与前端 Zod schema 字段一一对应（camelCase）；
-3. **前端**：`pnpm typecheck` / `pnpm lint` / `pnpm build` 通过（前端无代码改动时应保持原样通过）；
-4. **路由核对**：确认 `router.go` 中 16 个路由均已注册且指向正确 handler。
+2. **中间件单测**（修订版新增）：
+   - 请求补键：`{projectId}` → 同时含 `project_id`；嵌套对象/数组递归补键；已是 camelCase 的键不重复；
+   - 响应转换：`{project_id}` → 同时含 `projectId`；嵌套/`json.RawMessage` 递归；非 JSON / SSE 跳过；
+   - 加法式不破坏：原键始终保留。
+3. **契约自检**：对每个新端点，人工核对 Go 响应 JSON 字段与前端 Zod schema 字段一一对应（camelCase）；
+4. **前端**：`pnpm typecheck` / `pnpm lint` / `pnpm build` / `pnpm test` 通过（前端无代码改动时应保持原样通过）；
+5. **路由核对**：确认 `router.go` 中 16 个路由 + `model/serving/*` 3 个别名均已注册且指向正确 handler。
 
 ---
 
