@@ -90,9 +90,9 @@ type GraphNodeVO struct {
 	Label       string `json:"label"`
 	X           int    `json:"x"`
 	Y           int    `json:"y"`
-	Inputs      string `json:"inputs"`
-	Outputs     string `json:"outputs"`
-	NodeDef     string `json:"node_def"`
+	Inputs      []string        `json:"inputs"`
+	Outputs     []string        `json:"outputs"`
+	NodeDef     json.RawMessage `json:"node_def"`
 }
 
 // GraphDetailVO is the full graph detail.
@@ -234,9 +234,9 @@ func (s *GraphService) GetGraphDetail(ctx context.Context, req *GetGraphRequest)
 			Label:       n.Label,
 			X:           n.X,
 			Y:           n.Y,
-			Inputs:      n.Inputs,
-			Outputs:     n.Outputs,
-			NodeDef:     n.NodeDef,
+			Inputs:      splitOutputs(n.Inputs),
+			Outputs:     splitOutputs(n.Outputs),
+			NodeDef:     rawJSONMessage(n.NodeDef),
 		})
 	}
 
@@ -249,6 +249,15 @@ func (s *GraphService) GetGraphDetail(ctx context.Context, req *GetGraphRequest)
 		NodeMaxIndex:   graph.NodeMaxIndex,
 		MaxParallelism: graph.MaxParallelism,
 	}, nil
+}
+
+// rawJSONMessage converts a stored JSON string to json.RawMessage so it is embedded
+// as a parsed object/array in the response. Empty or invalid input yields null.
+func rawJSONMessage(raw string) json.RawMessage {
+	if raw == "" || !json.Valid([]byte(raw)) {
+		return json.RawMessage("null")
+	}
+	return json.RawMessage(raw)
 }
 
 // DeleteGraph deletes a graph and all its nodes.

@@ -103,6 +103,12 @@
 - `model/modelPartyPath`：前端 `getModelPartyPath` 传 `{projectId, graphNodeId, graphNodeOutPutId}` 并期望参与方裸数组 `[{nodeId, nodeName, dataSources}]`；Go 原误读 `{modelId}` 且返回对象 `{model_id, parties}` → 请求参数不匹配 + `z.array` 校验失败，模型打包参与方路径加载失败。修复：handler 改收正确请求体，`ModelService` 新增 `GetModelPartyPath`（按项目节点 + 各节点数据源构建），返回裸数组。数据源项同时输出 `dataSourceId`/`datasourceId` 以兼容前端读取。
 - `p2p/project/list`：复查确认 Go 已返回裸数组，与 `z.array(ProjectVOSchema)` 匹配，无需修复。
 
+### 2.8 图节点字段类型修复（DAG 画布，2026-07-28）✅
+
+`graph/detail` 返回的 `GraphNodeVO` 将 `inputs`/`outputs`/`node_def` 以 **JSON 字符串**输出（数据库 text 列原样返回），但前端 `GraphNodeDetail` 契约要求 `inputs`/`outputs` 为 `string[]`、`nodeDef` 为对象。中间件只改键名不解析 JSON，导致 DAG 画布读取 `node.outputs?.[0]` 取到字符串首字符 `[`、`node.outputs?.length` 取到字符串长度，边连接与输出处理错误。
+
+修复：`GraphNodeVO.Inputs/Outputs` 改为 `[]string`（复用 job 服务已有的 `splitOutputs` 解析 JSON 数组），`NodeDef` 改为 `json.RawMessage`（新增 `rawJSONMessage` 辅助函数，空/非法转 null）。同包的 `JobGraphNodeVO` 早已正确处理（`Outputs []string` + `splitOutputs`），本次使 graph 路径与其对齐。`go build`/`vet`/`test` 全过。
+
 ---
 
 ## 三、评估方法
