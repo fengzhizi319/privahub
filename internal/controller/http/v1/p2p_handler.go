@@ -1,6 +1,8 @@
 package v1
 
 import (
+	"context"
+
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
@@ -66,12 +68,22 @@ func (h *P2PHandler) ProjectCreate(c *gin.Context) {
 
 // ProjectList handles P2P project list.
 func (h *P2PHandler) ProjectList(c *gin.Context) {
-	var projects []model.ProjectDO
-	if err := h.db.WithContext(c.Request.Context()).
-		Where("compute_mode = ?", "p2p").
-		Order("gmt_create DESC").Find(&projects).Error; err != nil {
+	result, err := h.buildP2pProjectList(c.Request.Context())
+	if err != nil {
 		response.Fail(c, errcode.SystemError)
 		return
+	}
+
+	response.OK(c, result)
+}
+
+// buildP2pProjectList queries P2P projects and builds the frontend-facing bare array.
+func (h *P2PHandler) buildP2pProjectList(ctx context.Context) ([]gin.H, error) {
+	var projects []model.ProjectDO
+	if err := h.db.WithContext(ctx).
+		Where("compute_mode = ?", "p2p").
+		Order("gmt_create DESC").Find(&projects).Error; err != nil {
+		return nil, err
 	}
 
 	result := make([]gin.H, 0, len(projects))
@@ -85,8 +97,7 @@ func (h *P2PHandler) ProjectList(c *gin.Context) {
 			"gmt_create":   p.GmtCreate.Format("2006-01-02 15:04:05"),
 		})
 	}
-
-	response.OK(c, result)
+	return result, nil
 }
 
 // ProjectUpdate handles P2P project update.
@@ -137,7 +148,14 @@ func (h *P2PHandler) ProjectArchive(c *gin.Context) {
 		return
 	}
 
-	response.OKEmpty(c)
+	// Frontend validates the response as a bare ProjectVO array (z.array); return the refreshed list.
+	result, err := h.buildP2pProjectList(c.Request.Context())
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, result)
 }
 
 // ProjectParticipants handles P2P project participants retrieval.

@@ -260,27 +260,39 @@ func (h *ModelHandler) PackStatus(c *gin.Context) {
 // ModelPartyPath handles model party path query.
 func (h *ModelHandler) ModelPartyPath(c *gin.Context) {
 	var req struct {
-		ModelID string `json:"modelId" binding:"required"`
+		ProjectID            string `json:"projectId"`
+		ProjectIDAlt         string `json:"project_id"`
+		GraphNodeID          string `json:"graphNodeId"`
+		GraphNodeIDAlt       string `json:"graph_node_id"`
+		GraphNodeOutPutID    string `json:"graphNodeOutPutId"`
+		GraphNodeOutPutIDAlt string `json:"graph_node_out_put_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
 
-	vo, err := h.modelService.GetModelDetail(c.Request.Context(), &service.ModelDetailRequest{ModelID: req.ModelID})
+	projectID := req.ProjectID
+	if projectID == "" {
+		projectID = req.ProjectIDAlt
+	}
+	graphNodeID := req.GraphNodeID
+	if graphNodeID == "" {
+		graphNodeID = req.GraphNodeIDAlt
+	}
+	outputID := req.GraphNodeOutPutID
+	if outputID == "" {
+		outputID = req.GraphNodeOutPutIDAlt
+	}
+
+	// Frontend validates the response as a bare array (z.array(ModelPartyPathResponseSchema)).
+	parties, err := h.modelService.GetModelPartyPath(c.Request.Context(), projectID, graphNodeID, outputID)
 	if err != nil {
-		if err == service.ErrModelNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
-		}
 		response.Fail(c, errcode.SystemError)
 		return
 	}
 
-	response.OK(c, gin.H{
-		"model_id": vo.ModelID,
-		"parties":  vo.ModelList,
-	})
+	response.OK(c, parties)
 }
 
 // Discard handles model discard (soft delete / archive).

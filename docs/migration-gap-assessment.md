@@ -95,6 +95,14 @@
 - `message/pending`：前端 `Number(unwrap(data))` 期望 `data` 为裸数字，Go 原返回 `{pending_count}` 对象 → `Number(对象)` 为 NaN → 待处理消息计数恒为 0。修复：直接返回裸数字 `count`。
 - `graph/node/max_index`：前端读 `payload.maxIndex`，Go 原返回 `OKEmpty`（无 `data` 字段）→ `unwrap` 报错，DAG 画布添加节点流程中断。修复：`RefreshNodeMaxIndex` 改为返回 `(int, error)`，handler 返回 `{max_index}`（中间件补 camelCase `maxIndex`）。
 
+### 2.7 严格数组校验端点修复（2026-07-28）✅
+
+前端部分方法用 `validated(z.array(...), unwrap(data))` 严格校验响应为**裸数组**（无包装兜底，且 `unwrap` 在 `data` 为空时报错）。逐一核对后发现：
+
+- `p2p/project/archive`：前端 `archiveP2pProject` 期望返回刷新后的 `ProjectVO[]`，Go 原返回 `OKEmpty` → `unwrap` 报错，P2P 项目归档操作失败。修复：抽取 `buildP2pProjectList` 辅助方法，归档后重查并返回裸项目数组（`ProjectList` 同步复用）。
+- `model/modelPartyPath`：前端 `getModelPartyPath` 传 `{projectId, graphNodeId, graphNodeOutPutId}` 并期望参与方裸数组 `[{nodeId, nodeName, dataSources}]`；Go 原误读 `{modelId}` 且返回对象 `{model_id, parties}` → 请求参数不匹配 + `z.array` 校验失败，模型打包参与方路径加载失败。修复：handler 改收正确请求体，`ModelService` 新增 `GetModelPartyPath`（按项目节点 + 各节点数据源构建），返回裸数组。数据源项同时输出 `dataSourceId`/`datasourceId` 以兼容前端读取。
+- `p2p/project/list`：复查确认 Go 已返回裸数组，与 `z.array(ProjectVOSchema)` 匹配，无需修复。
+
 ---
 
 ## 三、评估方法

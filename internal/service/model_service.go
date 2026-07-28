@@ -358,3 +358,58 @@ func buildServingParties(partiesJSON string) []kuscia.ServingParty {
 	}
 	return parties
 }
+
+// ModelPartySourceVO is a data source entry under a party (frontend contract).
+type ModelPartySourceVO struct {
+	DataSourceID string `json:"dataSourceId"`
+	DatasourceID string `json:"datasourceId"`
+	Name         string `json:"name"`
+	Type         string `json:"type"`
+}
+
+// ModelPartyPathVO describes a party (node) contributing to a model output (frontend contract).
+type ModelPartyPathVO struct {
+	NodeID      string               `json:"nodeId"`
+	NodeName    string               `json:"nodeName"`
+	DataSources []ModelPartySourceVO `json:"dataSources"`
+}
+
+// GetModelPartyPath returns the parties (project nodes) and their data sources that
+// contribute to a graph-node output. DB-backed best-effort implementation matching the
+// frontend contract (bare array of {nodeId, nodeName, dataSources}).
+func (s *ModelService) GetModelPartyPath(ctx context.Context, projectID, graphNodeID, outputID string) ([]ModelPartyPathVO, error) {
+	result := make([]ModelPartyPathVO, 0)
+
+	var projectNodes []model.ProjectNodeDO
+	if err := s.db.WithContext(ctx).Where("project_id = ?", projectID).Find(&projectNodes).Error; err != nil {
+		return result, err
+	}
+
+	for _, pn := range projectNodes {
+		nodeName := pn.NodeID
+		var node model.NodeDO
+		if err := s.db.WithContext(ctx).Where("node_id = ?", pn.NodeID).First(&node).Error; err == nil && node.Name != "" {
+			nodeName = node.Name
+		}
+
+		var dss []model.DatasourceDO
+		s.db.WithContext(ctx).Where("owner_id = ?", pn.NodeID).Find(&dss)
+		sources := make([]ModelPartySourceVO, 0, len(dss))
+		for _, ds := range dss {
+			sources = append(sources, ModelPartySourceVO{
+				DataSourceID: ds.DatasourceID,
+				DatasourceID: ds.DatasourceID,
+				Name:         ds.Name,
+				Type:         ds.Type,
+			})
+		}
+
+		result = append(result, ModelPartyPathVO{
+			NodeID:      pn.NodeID,
+			NodeName:    nodeName,
+			DataSources: sources,
+		})
+	}
+
+	return result, nil
+}
