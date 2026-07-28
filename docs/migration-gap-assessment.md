@@ -109,6 +109,17 @@
 
 修复：`GraphNodeVO.Inputs/Outputs` 改为 `[]string`（复用 job 服务已有的 `splitOutputs` 解析 JSON 数组），`NodeDef` 改为 `json.RawMessage`（新增 `rawJSONMessage` 辅助函数，空/非法转 null）。同包的 `JobGraphNodeVO` 早已正确处理（`Outputs []string` + `splitOutputs`），本次使 graph 路径与其对齐。`go build`/`vet`/`test` 全过。
 
+### 2.9 核心链路全面核验与 node/token 补全（2026-07-28）✅
+
+本轮对主要业务链路做了端到端核验（前端读取契约 vs Go 响应形状），确认经前几轮修复后**可离线修复的结构性/类型/命名契约差距已基本收敛**：
+
+- **已验证正确**：login（`access_token`+`user.owner_id/name/owner_type` 齐全）、project/job/get（`JobVO` 含 `finished`/`graph`，`JobGraphNodeVO.Outputs` 已为 `[]string`）、datasource/create（`datasource_id`）、datatable/create（`dataTableNodeInfos[].domainDataId` 已 camelCase）、createGraph/startGraph（`graph_id`/`job_id`）、node/refresh（前端高度防御）。
+- **前端忽略返回值或有兜底**：node/create（返回值未使用，仅 refetch）、createProject/createDataTable（均带 fallback）。
+- **Kuscia 依赖的优雅降级**（需联调环境，非代码缺陷）：graph/node/output、project/job/task/output 的输出预览（`meta.rows`）需真实计算结果，Go 降级返回输出名，前端 fallback 到 JSON 展示。
+- **本轮修复**：`node/token` 原仅返回 `{token}`，节点管理页 `Status: {tokenStatus}` 显示占位符。补充 `token_status: "Available"` 与 `last_transition_time`（中间件补 camelCase）。
+
+结论：剩余实质差距为 **Kuscia 运行时深度**（实时计算、结果产出、pushToTee 等需联调环境验证），离线代码层面的契约对齐已趋于完成。
+
 ---
 
 ## 三、评估方法

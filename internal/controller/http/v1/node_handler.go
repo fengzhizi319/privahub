@@ -1,6 +1,8 @@
 package v1
 
 import (
+	"time"
+
 	"github.com/gin-gonic/gin"
 	"github.com/fengzhizi319/privahub/internal/service"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
@@ -131,7 +133,11 @@ func (h *NodeHandler) Token(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, gin.H{"token": token})
+	response.OK(c, gin.H{
+		"token":                token,
+		"token_status":         "Available",
+		"last_transition_time": time.Now().Format("2006-01-02 15:04:05"),
+	})
 }
 
 // CreateRoute handles route creation.
