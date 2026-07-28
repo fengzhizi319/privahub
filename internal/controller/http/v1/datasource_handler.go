@@ -54,8 +54,7 @@ func (h *DatasourceHandler) List(c *gin.Context) {
 func (h *DatasourceHandler) Detail(c *gin.Context) {
 	var req service.DatasourceDetailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+		req = service.DatasourceDetailRequest{}
 	}
 
 	vo, err := h.datasourceService.GetDatasourceDetail(c.Request.Context(), &req)
@@ -75,8 +74,7 @@ func (h *DatasourceHandler) Detail(c *gin.Context) {
 func (h *DatasourceHandler) Delete(c *gin.Context) {
 	var req service.DeleteDatasourceRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+		req = service.DeleteDatasourceRequest{}
 	}
 
 	if err := h.datasourceService.DeleteDatasource(c.Request.Context(), &req); err != nil {

@@ -109,6 +109,26 @@ func SeedData(ctx context.Context, db *gorm.DB, log *zap.Logger) error {
 		return err
 	}
 
+	// Seed default datasources
+	if err := seedDatasources(ctx, db); err != nil {
+		return err
+	}
+
+	// Seed default projects
+	if err := seedProjects(ctx, db); err != nil {
+		return err
+	}
+
+	// Seed default datatables
+	if err := seedDatatables(ctx, db); err != nil {
+		return err
+	}
+
+	// Seed default graphs
+	if err := seedGraphs(ctx, db); err != nil {
+		return err
+	}
+
 	log.Info("Initial data seeding completed")
 	return nil
 }
@@ -117,6 +137,7 @@ func seedInstitutions(ctx context.Context, db *gorm.DB) error {
 	insts := []model.InstDO{
 		{InstID: "alice", Name: "alice"},
 		{InstID: "bob", Name: "bob"},
+		{InstID: "admin", Name: "admin"},
 	}
 
 	for _, inst := range insts {
@@ -255,4 +276,147 @@ func seedRBAC(ctx context.Context, db *gorm.DB) error {
 func hashPassword(password string) string {
 	hash := sha256.Sum256([]byte(password))
 	return hex.EncodeToString(hash[:])
+}
+
+func seedDatasources(ctx context.Context, db *gorm.DB) error {
+	datasources := []model.DatasourceDO{
+		{
+			DatasourceID:   "ds-alice",
+			Name:           "alice-default-ds",
+			Type:           "LOCAL_FS",
+			Status:         "Available",
+			OwnerID:        "alice",
+			ConnectionInfo: `{"path":"/home/kuscia/var/storage"}`,
+			Description:    "Default local filesystem datasource for Alice",
+		},
+		{
+			DatasourceID:   "ds-bob",
+			Name:           "bob-default-ds",
+			Type:           "LOCAL_FS",
+			Status:         "Available",
+			OwnerID:        "bob",
+			ConnectionInfo: `{"path":"/home/kuscia/var/storage"}`,
+			Description:    "Default local filesystem datasource for Bob",
+		},
+	}
+
+	for _, ds := range datasources {
+		var count int64
+		db.WithContext(ctx).Model(&model.DatasourceDO{}).Where("datasource_id = ?", ds.DatasourceID).Count(&count)
+		if count == 0 {
+			if err := db.WithContext(ctx).Create(&ds).Error; err != nil {
+				return err
+			}
+			db.WithContext(ctx).Create(&model.DatasourceNodeDO{
+				DatasourceID: ds.DatasourceID,
+				NodeID:       ds.OwnerID,
+			})
+		}
+	}
+	return nil
+}
+
+func seedProjects(ctx context.Context, db *gorm.DB) error {
+	var count int64
+	db.WithContext(ctx).Model(&model.ProjectDO{}).Where("project_id = ?", "p-default").Count(&count)
+	if count == 0 {
+		project := &model.ProjectDO{
+			ProjectID:   "p-default",
+			Name:        "SecretFlow Demo Project",
+			ComputeMode: "MPC",
+			Status:      0,
+			Description: "Default MPC Project for Alice and Bob",
+		}
+		if err := db.WithContext(ctx).Create(project).Error; err != nil {
+			return err
+		}
+		nodes := []string{"alice", "bob"}
+		for _, nodeID := range nodes {
+			db.WithContext(ctx).Create(&model.ProjectNodeDO{
+				ProjectID: "p-default",
+				NodeID:    nodeID,
+			})
+		}
+	}
+	return nil
+}
+
+func seedDatatables(ctx context.Context, db *gorm.DB) error {
+	datatables := []model.ProjectDatatableDO{
+		{
+			ProjectID:    "p-default",
+			NodeID:       "alice",
+			DatatableID:  "alice_table",
+			Source:       "IMPORTED",
+			TableConfigs: `{"tablename":"alice_table","datasourceId":"ds-alice","relativeUri":"alice.csv","columns":[{"colName":"id","colType":"string"},{"colName":"age","colType":"int"},{"colName":"education","colType":"string"},{"colName":"income","colType":"float"}]}`,
+		},
+		{
+			ProjectID:    "p-default",
+			NodeID:       "bob",
+			DatatableID:  "bob_table",
+			Source:       "IMPORTED",
+			TableConfigs: `{"tablename":"bob_table","datasourceId":"ds-bob","relativeUri":"bob.csv","columns":[{"colName":"id","colType":"string"},{"colName":"y","colType":"int"},{"colName":"balance","colType":"float"}]}`,
+		},
+	}
+
+	for _, dt := range datatables {
+		var count int64
+		db.WithContext(ctx).Model(&model.ProjectDatatableDO{}).
+			Where("project_id = ? AND node_id = ? AND datatable_id = ?", dt.ProjectID, dt.NodeID, dt.DatatableID).
+			Count(&count)
+		if count == 0 {
+			if err := db.WithContext(ctx).Create(&dt).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func seedGraphs(ctx context.Context, db *gorm.DB) error {
+	var count int64
+	db.WithContext(ctx).Model(&model.ProjectGraphDO{}).Where("graph_id = ?", "g-demo").Count(&count)
+	if count == 0 {
+		graph := &model.ProjectGraphDO{
+			ProjectID:      "p-default",
+			GraphID:        "g-demo",
+			Name:           "SecretFlow Demo Pipeline",
+			Edges:          `[{"edgeId":"e1","source":"n1","target":"n2"}]`,
+			NodeMaxIndex:   2,
+			MaxParallelism: 1,
+		}
+		if err := db.WithContext(ctx).Create(graph).Error; err != nil {
+			return err
+		}
+		nodes := []model.ProjectGraphNodeDO{
+			{
+				ProjectID:   "p-default",
+				GraphID:     "g-demo",
+				GraphNodeID: "n1",
+				CodeName:    "data_prep/csv_data_import",
+				Label:       "Data Import",
+				X:           150,
+				Y:           150,
+				Inputs:      "[]",
+				Outputs:     `["n1-output-0"]`,
+				NodeDef:     `{"domain":"data_prep","name":"csv_data_import","version":"1.0.0"}`,
+			},
+			{
+				ProjectID:   "p-default",
+				GraphID:     "g-demo",
+				GraphNodeID: "n2",
+				CodeName:    "data_prep/psi",
+				Label:       "Private Set Intersection",
+				X:           400,
+				Y:           150,
+				Inputs:      `["n1-output-0"]`,
+				Outputs:     `["n2-output-0"]`,
+				NodeDef:     `{"domain":"data_prep","name":"psi","version":"1.0.0"}`,
+			},
+		}
+		for _, node := range nodes {
+			db.WithContext(ctx).Create(&node)
+		}
+	}
+	return nil
 }

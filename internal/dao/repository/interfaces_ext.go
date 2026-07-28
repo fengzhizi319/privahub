@@ -49,8 +49,10 @@ type TaskLogRepository interface {
 type DatatableRepository interface {
 	BaseRepository[model.ProjectDatatableDO]
 	FindByProjectID(ctx context.Context, projectID string) ([]model.ProjectDatatableDO, error)
+	FindByNodeID(ctx context.Context, nodeID string) ([]model.ProjectDatatableDO, error)
 	FindByProjectAndNodeID(ctx context.Context, projectID, nodeID string) ([]model.ProjectDatatableDO, error)
 	FindByProjectNodeDatatable(ctx context.Context, projectID, nodeID, datatableID string) (*model.ProjectDatatableDO, error)
+	FindAll(ctx context.Context) ([]model.ProjectDatatableDO, error)
 }
 
 // FedTableRepository provides access to federated table data.

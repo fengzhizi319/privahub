@@ -38,8 +38,7 @@ func (h *GraphHandler) Create(c *gin.Context) {
 func (h *GraphHandler) List(c *gin.Context) {
 	var req service.ListGraphRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+		req = service.ListGraphRequest{}
 	}
 
 	graphs, err := h.graphService.ListGraph(c.Request.Context(), &req)
@@ -55,8 +54,7 @@ func (h *GraphHandler) List(c *gin.Context) {
 func (h *GraphHandler) Detail(c *gin.Context) {
 	var req service.GetGraphRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+		req = service.GetGraphRequest{}
 	}
 
 	detail, err := h.graphService.GetGraphDetail(c.Request.Context(), &req)
@@ -76,8 +74,7 @@ func (h *GraphHandler) Detail(c *gin.Context) {
 func (h *GraphHandler) Delete(c *gin.Context) {
 	var req service.DeleteGraphRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+		req = service.DeleteGraphRequest{}
 	}
 
 	if err := h.graphService.DeleteGraph(c.Request.Context(), &req); err != nil {

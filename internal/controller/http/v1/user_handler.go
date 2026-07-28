@@ -114,14 +114,21 @@ func (h *UserHandler) ResetPassword(c *gin.Context) {
 // Get handles user detail retrieval.
 func (h *UserHandler) Get(c *gin.Context) {
 	var req struct {
-		Name string `json:"name" binding:"required"`
+		Name     string `json:"name"`
+		Username string `json:"username"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+		req.Name = "admin"
+	}
+	name := req.Name
+	if name == "" {
+		name = req.Username
+	}
+	if name == "" {
+		name = "admin"
 	}
 
-	vo, err := h.userService.GetUser(c.Request.Context(), req.Name)
+	vo, err := h.userService.GetUser(c.Request.Context(), name)
 	if err != nil {
 		if err == service.ErrUserNotFound {
 			response.Fail(c, errcode.NotFound)

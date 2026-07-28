@@ -24,6 +24,13 @@ func (r *DatatableRepo) FindByProjectID(ctx context.Context, projectID string) (
 	return datatables, err
 }
 
+// FindByNodeID retrieves all datatables for a node.
+func (r *DatatableRepo) FindByNodeID(ctx context.Context, nodeID string) ([]model.ProjectDatatableDO, error) {
+	var datatables []model.ProjectDatatableDO
+	err := r.DB().WithContext(ctx).Where("node_id = ?", nodeID).Find(&datatables).Error
+	return datatables, err
+}
+
 // FindByProjectAndNodeID retrieves datatables for a project and node.
 func (r *DatatableRepo) FindByProjectAndNodeID(ctx context.Context, projectID, nodeID string) ([]model.ProjectDatatableDO, error) {
 	var datatables []model.ProjectDatatableDO
@@ -41,6 +48,13 @@ func (r *DatatableRepo) FindByProjectNodeDatatable(ctx context.Context, projectI
 		return nil, err
 	}
 	return &dt, nil
+}
+
+// FindAll retrieves all datatables.
+func (r *DatatableRepo) FindAll(ctx context.Context) ([]model.ProjectDatatableDO, error) {
+	var datatables []model.ProjectDatatableDO
+	err := r.DB().WithContext(ctx).Find(&datatables).Error
+	return datatables, err
 }
 
 // FedTableRepo is the GORM implementation of FedTableRepository.

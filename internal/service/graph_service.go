@@ -49,8 +49,9 @@ func NewGraphService(
 
 // CreateGraphRequest represents a graph creation request.
 type CreateGraphRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
-	Name      string `json:"name" binding:"required"`
+	ProjectID    string `json:"project_id"`
+	ProjectIDAlt string `json:"projectId"`
+	Name         string `json:"name"`
 }
 
 // CreateGraphVO is the response for graph creation.
@@ -62,7 +63,8 @@ type CreateGraphVO struct {
 
 // ListGraphRequest represents a graph list request.
 type ListGraphRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
+	ProjectID    string `json:"project_id"`
+	ProjectIDAlt string `json:"projectId"`
 }
 
 // GraphMetaVO is a graph summary.
@@ -75,8 +77,10 @@ type GraphMetaVO struct {
 
 // GetGraphRequest represents a graph detail request.
 type GetGraphRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
-	GraphID   string `json:"graph_id" binding:"required"`
+	ProjectID    string `json:"project_id"`
+	ProjectIDAlt string `json:"projectId"`
+	GraphID      string `json:"graph_id"`
+	GraphIDAlt   string `json:"graphId"`
 }
 
 // GraphNodeVO represents a graph node in detail response.
@@ -104,49 +108,62 @@ type GraphDetailVO struct {
 
 // DeleteGraphRequest represents a graph deletion request.
 type DeleteGraphRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
-	GraphID   string `json:"graph_id" binding:"required"`
+	ProjectID    string `json:"project_id"`
+	ProjectIDAlt string `json:"projectId"`
+	GraphID      string `json:"graph_id"`
+	GraphIDAlt   string `json:"graphId"`
 }
 
 // FullUpdateGraphRequest represents a full graph update (nodes + edges).
 type FullUpdateGraphRequest struct {
-	ProjectID string          `json:"project_id" binding:"required"`
-	GraphID   string          `json:"graph_id" binding:"required"`
-	Edges     json.RawMessage `json:"edges"`
-	Nodes     []GraphNodeReq  `json:"nodes"`
+	ProjectID    string          `json:"project_id"`
+	ProjectIDAlt string          `json:"projectId"`
+	GraphID      string          `json:"graph_id"`
+	GraphIDAlt   string          `json:"graphId"`
+	Edges        json.RawMessage `json:"edges"`
+	Nodes        []GraphNodeReq  `json:"nodes"`
 }
 
 // GraphNodeReq represents a node in a full update request.
 type GraphNodeReq struct {
-	GraphNodeID string `json:"graph_node_id"`
-	CodeName    string `json:"code_name"`
-	Label       string `json:"label"`
-	X           int    `json:"x"`
-	Y           int    `json:"y"`
-	Inputs      string `json:"inputs"`
-	Outputs     string `json:"outputs"`
-	NodeDef     string `json:"node_def"`
+	GraphNodeID    string `json:"graph_node_id"`
+	GraphNodeIDAlt string `json:"graphNodeId"`
+	CodeName       string `json:"code_name"`
+	Label          string `json:"label"`
+	X              int    `json:"x"`
+	Y              int    `json:"y"`
+	Inputs         string `json:"inputs"`
+	Outputs        string `json:"outputs"`
+	NodeDef        string `json:"node_def"`
 }
 
 // UpdateGraphMetaRequest updates graph name only.
 type UpdateGraphMetaRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
-	GraphID   string `json:"graph_id" binding:"required"`
-	Name      string `json:"name" binding:"required"`
+	ProjectID    string `json:"project_id"`
+	ProjectIDAlt string `json:"projectId"`
+	GraphID      string `json:"graph_id"`
+	GraphIDAlt   string `json:"graphId"`
+	Name         string `json:"name"`
 }
 
 // UpdateGraphNodeRequest updates a single graph node.
 type UpdateGraphNodeRequest struct {
-	ProjectID   string `json:"project_id" binding:"required"`
-	GraphID     string `json:"graph_id" binding:"required"`
-	GraphNodeID string `json:"graph_node_id" binding:"required"`
-	NodeDef     string `json:"node_def"`
+	ProjectID      string `json:"project_id"`
+	ProjectIDAlt   string `json:"projectId"`
+	GraphID        string `json:"graph_id"`
+	GraphIDAlt     string `json:"graphId"`
+	GraphNodeID    string `json:"graph_node_id"`
+	GraphNodeIDAlt string `json:"graphNodeId"`
+	NodeDef        string `json:"node_def"`
 }
 
 // --- Service Methods ---
 
 // CreateGraph creates a new DAG graph.
 func (s *GraphService) CreateGraph(ctx context.Context, req *CreateGraphRequest) (*CreateGraphVO, error) {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
 	graphID := uuid.New().String()[:8]
 
 	graph := &model.ProjectGraphDO{
@@ -171,6 +188,9 @@ func (s *GraphService) CreateGraph(ctx context.Context, req *CreateGraphRequest)
 
 // ListGraph lists all graphs for a project.
 func (s *GraphService) ListGraph(ctx context.Context, req *ListGraphRequest) ([]GraphMetaVO, error) {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
 	graphs, err := s.graphRepo.FindByProjectID(ctx, req.ProjectID)
 	if err != nil {
 		return nil, err
@@ -190,6 +210,12 @@ func (s *GraphService) ListGraph(ctx context.Context, req *ListGraphRequest) ([]
 
 // GetGraphDetail retrieves full graph detail including nodes.
 func (s *GraphService) GetGraphDetail(ctx context.Context, req *GetGraphRequest) (*GraphDetailVO, error) {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.GraphID == "" {
+		req.GraphID = req.GraphIDAlt
+	}
 	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, req.ProjectID, req.GraphID)
 	if err != nil {
 		return nil, ErrGraphNotFound
@@ -227,6 +253,12 @@ func (s *GraphService) GetGraphDetail(ctx context.Context, req *GetGraphRequest)
 
 // DeleteGraph deletes a graph and all its nodes.
 func (s *GraphService) DeleteGraph(ctx context.Context, req *DeleteGraphRequest) error {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.GraphID == "" {
+		req.GraphID = req.GraphIDAlt
+	}
 	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, req.ProjectID, req.GraphID)
 	if err != nil {
 		return ErrGraphNotFound
@@ -242,6 +274,12 @@ func (s *GraphService) DeleteGraph(ctx context.Context, req *DeleteGraphRequest)
 
 // FullUpdateGraph replaces all nodes and edges in a graph.
 func (s *GraphService) FullUpdateGraph(ctx context.Context, req *FullUpdateGraphRequest) error {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.GraphID == "" {
+		req.GraphID = req.GraphIDAlt
+	}
 	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, req.ProjectID, req.GraphID)
 	if err != nil {
 		return ErrGraphNotFound
@@ -310,9 +348,11 @@ func (s *GraphService) UpdateGraphNode(ctx context.Context, req *UpdateGraphNode
 
 // StartGraphRequest represents a graph start request.
 type StartGraphRequest struct {
-	ProjectID string   `json:"project_id" binding:"required"`
-	GraphID   string   `json:"graph_id" binding:"required"`
-	Nodes     []string `json:"nodes"` // optional: specific nodes to run
+	ProjectID    string   `json:"project_id"`
+	ProjectIDAlt string   `json:"projectId"`
+	GraphID      string   `json:"graph_id"`
+	GraphIDAlt   string   `json:"graphId"`
+	Nodes        []string `json:"nodes"` // optional: specific nodes to run
 }
 
 // StartGraphVO is the response for graph start.
@@ -324,17 +364,24 @@ type StartGraphVO struct {
 
 // StopGraphRequest represents a graph stop request.
 type StopGraphRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
-	GraphID   string `json:"graph_id" binding:"required"`
-	JobID     string `json:"job_id"`
-	TaskID    string `json:"task_id"`
+	ProjectID    string `json:"project_id"`
+	ProjectIDAlt string `json:"projectId"`
+	GraphID      string `json:"graph_id"`
+	GraphIDAlt   string `json:"graphId"`
+	JobID        string `json:"job_id"`
+	JobIDAlt     string `json:"jobId"`
+	TaskID       string `json:"task_id"`
+	TaskIDAlt    string `json:"taskId"`
 }
 
 // ListGraphNodeStatusRequest represents a node status request.
 type ListGraphNodeStatusRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
-	GraphID   string `json:"graph_id" binding:"required"`
-	JobID     string `json:"job_id"`
+	ProjectID    string `json:"project_id"`
+	ProjectIDAlt string `json:"projectId"`
+	GraphID      string `json:"graph_id"`
+	GraphIDAlt   string `json:"graphId"`
+	JobID        string `json:"job_id"`
+	JobIDAlt     string `json:"jobId"`
 }
 
 // GraphNodeStatusVO represents a single node's status.
@@ -353,10 +400,14 @@ type GraphStatusVO struct {
 
 // GraphNodeOutputRequest represents a node output request.
 type GraphNodeOutputRequest struct {
-	ProjectID   string `json:"project_id" binding:"required"`
-	GraphID     string `json:"graph_id" binding:"required"`
-	GraphNodeID string `json:"graph_node_id" binding:"required"`
-	JobID       string `json:"job_id"`
+	ProjectID      string `json:"project_id"`
+	ProjectIDAlt   string `json:"projectId"`
+	GraphID        string `json:"graph_id"`
+	GraphIDAlt     string `json:"graphId"`
+	GraphNodeID    string `json:"graph_node_id"`
+	GraphNodeIDAlt string `json:"graphNodeId"`
+	JobID          string `json:"job_id"`
+	JobIDAlt       string `json:"jobId"`
 }
 
 // GraphNodeOutputVO represents a node's output.
@@ -374,11 +425,16 @@ type NodeOutput struct {
 
 // GraphNodeLogsRequest represents a node logs request.
 type GraphNodeLogsRequest struct {
-	ProjectID   string `json:"project_id" binding:"required"`
-	GraphID     string `json:"graph_id" binding:"required"`
-	GraphNodeID string `json:"graph_node_id" binding:"required"`
-	JobID       string `json:"job_id"`
-	TaskID      string `json:"task_id"`
+	ProjectID      string `json:"project_id"`
+	ProjectIDAlt   string `json:"projectId"`
+	GraphID        string `json:"graph_id"`
+	GraphIDAlt     string `json:"graphId"`
+	GraphNodeID    string `json:"graph_node_id"`
+	GraphNodeIDAlt string `json:"graphNodeId"`
+	JobID          string `json:"job_id"`
+	JobIDAlt       string `json:"jobId"`
+	TaskID         string `json:"task_id"`
+	TaskIDAlt      string `json:"taskId"`
 }
 
 // GraphNodeLogsVO represents a node's task logs.
@@ -390,14 +446,22 @@ type GraphNodeLogsVO struct {
 
 // RefreshNodeMaxIndexRequest represents a max index refresh request.
 type RefreshNodeMaxIndexRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
-	GraphID   string `json:"graph_id" binding:"required"`
+	ProjectID    string `json:"project_id"`
+	ProjectIDAlt string `json:"projectId"`
+	GraphID      string `json:"graph_id"`
+	GraphIDAlt   string `json:"graphId"`
 }
 
 // --- Graph Execution Methods ---
 
 // StartGraph starts graph execution by creating a job.
 func (s *GraphService) StartGraph(ctx context.Context, req *StartGraphRequest) (*StartGraphVO, error) {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.GraphID == "" {
+		req.GraphID = req.GraphIDAlt
+	}
 	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, req.ProjectID, req.GraphID)
 	if err != nil {
 		return nil, ErrGraphNotFound
@@ -460,7 +524,7 @@ func (s *GraphService) StartGraph(ctx context.Context, req *StartGraphRequest) (
 			},
 		}
 		if _, err := s.kusciaClient.CreateJob(ctx, kusciaReq); err != nil {
-			// Kuscia unreachable — job stays RUNNING locally for status polling
+			// Kuscia unreachable — keep job in RUNNING, log warning
 			_ = s.jobRepo.UpdateStatus(ctx, jobID, "RUNNING", "kuscia unreachable: "+err.Error())
 		}
 	}
@@ -474,6 +538,18 @@ func (s *GraphService) StartGraph(ctx context.Context, req *StartGraphRequest) (
 
 // StopGraph stops a running graph execution.
 func (s *GraphService) StopGraph(ctx context.Context, req *StopGraphRequest) error {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.GraphID == "" {
+		req.GraphID = req.GraphIDAlt
+	}
+	if req.JobID == "" {
+		req.JobID = req.JobIDAlt
+	}
+	if req.TaskID == "" {
+		req.TaskID = req.TaskIDAlt
+	}
 	if req.JobID == "" {
 		return ErrGraphNotFound
 	}
@@ -505,6 +581,15 @@ func (s *GraphService) StopGraph(ctx context.Context, req *StopGraphRequest) err
 
 // ListNodeStatus retrieves status of all nodes in a graph execution.
 func (s *GraphService) ListNodeStatus(ctx context.Context, req *ListGraphNodeStatusRequest) (*GraphStatusVO, error) {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.GraphID == "" {
+		req.GraphID = req.GraphIDAlt
+	}
+	if req.JobID == "" {
+		req.JobID = req.JobIDAlt
+	}
 	if req.JobID == "" {
 		// No job running - all nodes idle
 		nodes, _ := s.graphNodeRepo.FindByGraphID(ctx, req.ProjectID, req.GraphID)
@@ -543,6 +628,18 @@ func (s *GraphService) ListNodeStatus(ctx context.Context, req *ListGraphNodeSta
 // GetNodeOutput retrieves output of a specific graph node.
 // Queries Kuscia DomainData for actual output when available, falls back to declared outputs.
 func (s *GraphService) GetNodeOutput(ctx context.Context, req *GraphNodeOutputRequest) (*GraphNodeOutputVO, error) {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.GraphID == "" {
+		req.GraphID = req.GraphIDAlt
+	}
+	if req.GraphNodeID == "" {
+		req.GraphNodeID = req.GraphNodeIDAlt
+	}
+	if req.JobID == "" {
+		req.JobID = req.JobIDAlt
+	}
 	node, err := s.graphNodeRepo.FindByGraphNodeID(ctx, req.ProjectID, req.GraphID, req.GraphNodeID)
 	if err != nil {
 		return nil, ErrGraphNotFound
@@ -585,6 +682,21 @@ func (s *GraphService) GetNodeOutput(ctx context.Context, req *GraphNodeOutputRe
 
 // GetNodeLogs retrieves logs for a specific graph node.
 func (s *GraphService) GetNodeLogs(ctx context.Context, req *GraphNodeLogsRequest) (*GraphNodeLogsVO, error) {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.GraphID == "" {
+		req.GraphID = req.GraphIDAlt
+	}
+	if req.GraphNodeID == "" {
+		req.GraphNodeID = req.GraphNodeIDAlt
+	}
+	if req.JobID == "" {
+		req.JobID = req.JobIDAlt
+	}
+	if req.TaskID == "" {
+		req.TaskID = req.TaskIDAlt
+	}
 	if req.TaskID == "" && req.JobID != "" {
 		// Find task by graph node ID
 		tasks, _ := s.taskRepo.FindByJobID(ctx, req.JobID)
@@ -615,6 +727,12 @@ func (s *GraphService) GetNodeLogs(ctx context.Context, req *GraphNodeLogsReques
 
 // RefreshNodeMaxIndex recalculates and updates the node max index.
 func (s *GraphService) RefreshNodeMaxIndex(ctx context.Context, req *RefreshNodeMaxIndexRequest) error {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.GraphID == "" {
+		req.GraphID = req.GraphIDAlt
+	}
 	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, req.ProjectID, req.GraphID)
 	if err != nil {
 		return ErrGraphNotFound

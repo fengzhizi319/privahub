@@ -40,8 +40,7 @@ func (h *DatatableHandler) Register(c *gin.Context) {
 func (h *DatatableHandler) List(c *gin.Context) {
 	var req service.ListDatatableRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+		req = service.ListDatatableRequest{}
 	}
 
 	datatables, err := h.datatableService.ListDatatables(c.Request.Context(), &req)

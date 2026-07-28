@@ -220,24 +220,34 @@ func (s *ProjectService) ArchiveProject(ctx context.Context, projectID string) e
 
 // AddDatatableRequest represents adding a datatable to a project.
 type AddDatatableRequest struct {
-	ProjectID     string `json:"project_id" binding:"required"`
-	DatatableID   string `json:"datatable_id" binding:"required"`
-	DatatableName string `json:"datatable_name"`
-	NodeID        string `json:"node_id"`
-	DatasourceID  string `json:"datasource_id"`
+	ProjectID        string `json:"project_id"`
+	ProjectIDAlt     string `json:"projectId"`
+	DatatableID      string `json:"datatable_id"`
+	DatatableIDAlt   string `json:"datatableId"`
+	DatatableName    string `json:"datatable_name"`
+	DatatableNameAlt string `json:"datatableName"`
+	NodeID           string `json:"node_id"`
+	NodeIDAlt        string `json:"nodeId"`
+	DatasourceID     string `json:"datasource_id"`
+	DatasourceIDAlt  string `json:"datasourceId"`
 }
 
 // ProjDeleteDatatableRequest represents removing a datatable from a project.
 type ProjDeleteDatatableRequest struct {
-	ProjectID   string `json:"project_id" binding:"required"`
-	DatatableID string `json:"datatable_id" binding:"required"`
-	NodeID      string `json:"node_id"`
+	ProjectID      string `json:"project_id"`
+	ProjectIDAlt   string `json:"projectId"`
+	DatatableID    string `json:"datatable_id"`
+	DatatableIDAlt string `json:"datatableId"`
+	NodeID         string `json:"node_id"`
+	NodeIDAlt      string `json:"nodeId"`
 }
 
 // ProjGetDatatableRequest represents getting a datatable from a project.
 type ProjGetDatatableRequest struct {
-	ProjectID   string `json:"project_id" binding:"required"`
-	DatatableID string `json:"datatable_id" binding:"required"`
+	ProjectID      string `json:"project_id"`
+	ProjectIDAlt   string `json:"projectId"`
+	DatatableID    string `json:"datatable_id"`
+	DatatableIDAlt string `json:"datatableId"`
 }
 
 // ProjectDatatableVO represents a project datatable view object.

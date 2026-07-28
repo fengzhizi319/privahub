@@ -54,8 +54,13 @@ type DatatableVO struct {
 
 // ListDatatableRequest represents a datatable list request.
 type ListDatatableRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
-	NodeID    string `json:"node_id"`
+	ProjectID  string `json:"project_id"`
+	NodeID     string `json:"node_id"`
+	OwnerID    string `json:"owner_id"`
+	NodeIDAlt  string `json:"nodeId"`
+	OwnerIDAlt string `json:"ownerId"`
+	PageNumber int    `json:"pageNumber"`
+	PageSize   int    `json:"pageSize"`
 }
 
 // GetDatatableRequest represents a datatable detail request.
@@ -141,10 +146,25 @@ func (s *DatatableService) ListDatatables(ctx context.Context, req *ListDatatabl
 	var datatables []model.ProjectDatatableDO
 	var err error
 
-	if req.NodeID != "" {
-		datatables, err = s.datatableRepo.FindByProjectAndNodeID(ctx, req.ProjectID, req.NodeID)
-	} else {
+	nodeID := req.NodeID
+	if nodeID == "" {
+		nodeID = req.NodeIDAlt
+	}
+	if nodeID == "" {
+		nodeID = req.OwnerID
+	}
+	if nodeID == "" {
+		nodeID = req.OwnerIDAlt
+	}
+
+	if req.ProjectID != "" && nodeID != "" {
+		datatables, err = s.datatableRepo.FindByProjectAndNodeID(ctx, req.ProjectID, nodeID)
+	} else if req.ProjectID != "" {
 		datatables, err = s.datatableRepo.FindByProjectID(ctx, req.ProjectID)
+	} else if nodeID != "" {
+		datatables, err = s.datatableRepo.FindByNodeID(ctx, nodeID)
+	} else {
+		datatables, err = s.datatableRepo.FindAll(ctx)
 	}
 	if err != nil {
 		return nil, err

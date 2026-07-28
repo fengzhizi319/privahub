@@ -45,8 +45,9 @@ type CreateDatasourceVO struct {
 
 // DatasourceListRequest represents a datasource list request.
 type DatasourceListRequest struct {
-	OwnerID string `json:"owner_id"`
-	Name    string `json:"name"`
+	OwnerID    string `json:"owner_id"`
+	OwnerIDAlt string `json:"ownerId"`
+	Name       string `json:"name"`
 }
 
 // DatasourceVO represents a datasource view object.
@@ -68,8 +69,10 @@ type DatasourceListVO struct {
 
 // DatasourceDetailRequest represents a datasource detail request.
 type DatasourceDetailRequest struct {
-	DatasourceID string `json:"datasource_id" binding:"required"`
-	OwnerID      string `json:"owner_id"`
+	DatasourceID    string `json:"datasource_id"`
+	DatasourceIDAlt string `json:"datasourceId"`
+	OwnerID         string `json:"owner_id"`
+	OwnerIDAlt      string `json:"ownerId"`
 }
 
 // DatasourceDetailVO represents a datasource detail view object.
@@ -87,15 +90,18 @@ type DatasourceDetailVO struct {
 
 // DeleteDatasourceRequest represents a datasource deletion request.
 type DeleteDatasourceRequest struct {
-	DatasourceID string `json:"datasource_id" binding:"required"`
-	OwnerID      string `json:"owner_id"`
+	DatasourceID    string `json:"datasource_id"`
+	DatasourceIDAlt string `json:"datasourceId"`
+	OwnerID         string `json:"owner_id"`
+	OwnerIDAlt      string `json:"ownerId"`
 }
 
 // TestDatasourceRequest represents a datasource test request.
 type TestDatasourceRequest struct {
-	DatasourceID   string `json:"datasource_id"`
-	ConnectionInfo string `json:"connection_info"`
-	Type           string `json:"type"`
+	DatasourceID    string `json:"datasource_id"`
+	DatasourceIDAlt string `json:"datasourceId"`
+	ConnectionInfo  string `json:"connection_info"`
+	Type            string `json:"type"`
 }
 
 // TestDatasourceVO represents a datasource test result.
@@ -142,6 +148,9 @@ func (s *DatasourceService) CreateDatasource(ctx context.Context, req *CreateDat
 
 // ListDatasources lists datasources.
 func (s *DatasourceService) ListDatasources(ctx context.Context, req *DatasourceListRequest) (*DatasourceListVO, error) {
+	if req.OwnerID == "" {
+		req.OwnerID = req.OwnerIDAlt
+	}
 	var datasources []model.DatasourceDO
 	query := s.db.WithContext(ctx).Model(&model.DatasourceDO{})
 
@@ -179,6 +188,12 @@ func (s *DatasourceService) ListDatasources(ctx context.Context, req *Datasource
 
 // GetDatasourceDetail retrieves datasource detail.
 func (s *DatasourceService) GetDatasourceDetail(ctx context.Context, req *DatasourceDetailRequest) (*DatasourceDetailVO, error) {
+	if req.DatasourceID == "" {
+		req.DatasourceID = req.DatasourceIDAlt
+	}
+	if req.OwnerID == "" {
+		req.OwnerID = req.OwnerIDAlt
+	}
 	var ds model.DatasourceDO
 	if err := s.db.WithContext(ctx).Where("datasource_id = ?", req.DatasourceID).First(&ds).Error; err != nil {
 		return nil, ErrDatasourceNotFound

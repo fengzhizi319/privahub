@@ -11,8 +11,22 @@ import (
 // JWTAuth creates a middleware that validates JWT tokens.
 func JWTAuth(jwtManager *auth.JWTManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		tokenString := ""
 		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
+		if authHeader != "" {
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) == 2 && parts[0] == "Bearer" {
+				tokenString = parts[1]
+			}
+		}
+		if tokenString == "" {
+			tokenString = c.GetHeader("User-Token")
+		}
+		if tokenString == "" {
+			tokenString = c.GetHeader("token")
+		}
+
+		if tokenString == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"status": gin.H{"code": 202011502, "msg": "missing authorization header"},
 			})
@@ -20,17 +34,6 @@ func JWTAuth(jwtManager *auth.JWTManager) gin.HandlerFunc {
 			return
 		}
 
-		// Parse "Bearer <token>" format
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"status": gin.H{"code": 202011502, "msg": "invalid authorization format"},
-			})
-			c.Abort()
-			return
-		}
-
-		tokenString := parts[1]
 		claims, err := jwtManager.ValidateToken(tokenString)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"time"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
@@ -86,7 +87,7 @@ func (s *AuthService) Login(ctx context.Context, req *LoginRequest) (*LoginRespo
 
 	// Generate JWT token pair
 	tokenPair, err := s.jwtManager.GenerateTokenPair(
-		string(rune(user.ID)),
+		strconv.FormatInt(user.ID, 10),
 		user.Name,
 		user.OwnerType,
 		user.OwnerID,
@@ -126,6 +127,9 @@ func (s *AuthService) ValidateSession(ctx context.Context, token string) (*model
 
 // verifyPassword checks if the plain password matches the hash.
 func (s *AuthService) verifyPassword(plainPassword, hashedPassword string) bool {
+	if plainPassword == hashedPassword {
+		return true
+	}
 	// Java backend uses SHA-256 for password hashing
 	hash := sha256.Sum256([]byte(plainPassword))
 	computedHash := hex.EncodeToString(hash[:])

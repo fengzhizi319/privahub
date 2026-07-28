@@ -195,3 +195,30 @@ func (h *NodeHandler) DeleteRoute(c *gin.Context) {
 
 	response.OKEmpty(c)
 }
+
+// Refresh handles node status refresh.
+func (h *NodeHandler) Refresh(c *gin.Context) {
+	var req struct {
+		NodeID    string `json:"nodeId"`
+		NodeIDAlt string `json:"node_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		req.NodeID = ""
+	}
+	nodeID := req.NodeID
+	if nodeID == "" {
+		nodeID = req.NodeIDAlt
+	}
+
+	node, err := h.nodeService.RefreshNode(c.Request.Context(), nodeID)
+	if err != nil {
+		if err == service.ErrNodeNotFound {
+			response.FailWithMsg(c, errcode.NotFound, "node not found")
+			return
+		}
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, node)
+}

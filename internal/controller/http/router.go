@@ -178,6 +178,7 @@ func registerNodeRoutes(rg *gin.RouterGroup, h *v1.NodeHandler) {
 	rg.POST("/node/list", h.List)
 	rg.POST("/node/get", h.Get)
 	rg.POST("/node/delete", h.Delete)
+	rg.POST("/node/refresh", h.Refresh)
 	rg.POST("/node/token", h.Token)
 	rg.POST("/node/newToken", h.Token)
 	rg.POST("/node/route/create", h.CreateRoute)
@@ -231,7 +232,9 @@ func registerUserRoutes(rg *gin.RouterGroup, authH *v1.AuthHandler, userH *v1.Us
 
 func registerModelRoutes(rg *gin.RouterGroup, h *v1.ModelHandler) {
 	rg.POST("/model/list", h.ListModels)
+	rg.POST("/model/page", h.ListModels)
 	rg.POST("/model/detail", h.ModelDetail)
+	rg.POST("/model/info", h.ModelDetail)
 	rg.POST("/model/delete", h.DeleteModel)
 	rg.POST("/model/export", h.ExportModel)
 	rg.POST("/model/pack", h.Pack)
@@ -261,7 +264,9 @@ func registerInstRoutes(rg *gin.RouterGroup, h *v1.MiscHandler) {
 func registerScheduledRoutes(rg *gin.RouterGroup, h *v1.ScheduledHandler) {
 	rg.POST("/scheduled/create", h.Create)
 	rg.POST("/scheduled/list", h.List)
+	rg.POST("/scheduled/page", h.List)
 	rg.POST("/scheduled/delete", h.Delete)
+	rg.POST("/scheduled/del", h.Delete)
 	rg.POST("/scheduled/pause", h.Pause)
 	rg.POST("/scheduled/resume", h.Resume)
 	rg.POST("/scheduled/offline", h.Offline)

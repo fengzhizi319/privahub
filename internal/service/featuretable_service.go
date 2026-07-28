@@ -22,13 +22,16 @@ func NewFeatureTableService(db *gorm.DB) *FeatureTableService {
 
 // CreateFeatureDatasourceRequest represents a feature datasource creation request.
 type CreateFeatureDatasourceRequest struct {
-	NodeID           string `json:"node_id" binding:"required"`
-	FeatureTableName string `json:"feature_table_name" binding:"required"`
-	Type             string `json:"type"`
-	Description      string `json:"description"`
-	URL              string `json:"url" binding:"required"`
-	Columns          string `json:"columns" binding:"required"`
-	ProjectID        string `json:"project_id"`
+	NodeID              string `json:"node_id"`
+	NodeIDAlt           string `json:"nodeId"`
+	FeatureTableName    string `json:"feature_table_name"`
+	FeatureTableNameAlt string `json:"featureTableName"`
+	Type                string `json:"type"`
+	Description         string `json:"description"`
+	URL                 string `json:"url"`
+	Columns             string `json:"columns"`
+	ProjectID           string `json:"project_id"`
+	ProjectIDAlt        string `json:"projectId"`
 }
 
 // FeatureDataSourceVO represents a feature datasource view object.

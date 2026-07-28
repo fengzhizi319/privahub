@@ -42,10 +42,12 @@ func NewJobService(
 
 // CreateJobRequest represents a job creation request.
 type CreateJobRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
-	Name      string `json:"name" binding:"required"`
-	GraphID   string `json:"graph_id"`
-	Edges     string `json:"edges"`
+	ProjectID    string `json:"project_id"`
+	ProjectIDAlt string `json:"projectId"`
+	Name         string `json:"name"`
+	GraphID      string `json:"graph_id"`
+	GraphIDAlt   string `json:"graphId"`
+	Edges        string `json:"edges"`
 }
 
 // JobVO represents a job view object.
@@ -73,9 +75,10 @@ type TaskVO struct {
 
 // JobListRequest represents a job list request.
 type JobListRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
-	Page      int    `json:"page"`
-	Size      int    `json:"size"`
+	ProjectID    string `json:"project_id"`
+	ProjectIDAlt string `json:"projectId"`
+	Page         int    `json:"page"`
+	Size         int    `json:"size"`
 }
 
 // JobListResponse represents a paginated job list.
@@ -88,22 +91,30 @@ type JobListResponse struct {
 
 // GetJobRequest represents a job detail request.
 type GetJobRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
-	JobID     string `json:"job_id" binding:"required"`
+	ProjectID    string `json:"project_id"`
+	ProjectIDAlt string `json:"projectId"`
+	JobID        string `json:"job_id"`
+	JobIDAlt     string `json:"jobId"`
 }
 
 // StopJobRequest represents a job stop request.
 type StopJobRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
-	JobID     string `json:"job_id" binding:"required"`
-	TaskID    string `json:"task_id"`
+	ProjectID    string `json:"project_id"`
+	ProjectIDAlt string `json:"projectId"`
+	JobID        string `json:"job_id"`
+	JobIDAlt     string `json:"jobId"`
+	TaskID       string `json:"task_id"`
+	TaskIDAlt    string `json:"taskId"`
 }
 
 // GetTaskLogRequest represents a task log request.
 type GetTaskLogRequest struct {
-	ProjectID string `json:"project_id" binding:"required"`
-	JobID     string `json:"job_id" binding:"required"`
-	TaskID    string `json:"task_id" binding:"required"`
+	ProjectID    string `json:"project_id"`
+	ProjectIDAlt string `json:"projectId"`
+	JobID        string `json:"job_id"`
+	JobIDAlt     string `json:"jobId"`
+	TaskID       string `json:"task_id"`
+	TaskIDAlt    string `json:"taskId"`
 }
 
 // TaskLogVO represents task log entries.
@@ -116,6 +127,12 @@ type TaskLogVO struct {
 
 // CreateJob creates a new job and submits it to Kuscia.
 func (s *JobService) CreateJob(ctx context.Context, req *CreateJobRequest) (*JobVO, error) {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.GraphID == "" {
+		req.GraphID = req.GraphIDAlt
+	}
 	jobID := uuid.New().String()[:8]
 
 	job := &model.ProjectJobDO{
@@ -168,6 +185,9 @@ func (s *JobService) CreateJob(ctx context.Context, req *CreateJobRequest) (*Job
 
 // ListJobs lists jobs for a project with pagination.
 func (s *JobService) ListJobs(ctx context.Context, req *JobListRequest) (*JobListResponse, error) {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
 	if req.Page < 1 {
 		req.Page = 1
 	}
@@ -206,6 +226,12 @@ func (s *JobService) ListJobs(ctx context.Context, req *JobListRequest) (*JobLis
 
 // GetJob retrieves job detail with tasks.
 func (s *JobService) GetJob(ctx context.Context, req *GetJobRequest) (*JobVO, error) {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.JobID == "" {
+		req.JobID = req.JobIDAlt
+	}
 	job, err := s.jobRepo.FindByProjectAndJobID(ctx, req.ProjectID, req.JobID)
 	if err != nil {
 		return nil, ErrJobNotFound
@@ -222,6 +248,15 @@ func (s *JobService) GetJob(ctx context.Context, req *GetJobRequest) (*JobVO, er
 
 // StopJob stops a running job both locally and in Kuscia.
 func (s *JobService) StopJob(ctx context.Context, req *StopJobRequest) error {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.JobID == "" {
+		req.JobID = req.JobIDAlt
+	}
+	if req.TaskID == "" {
+		req.TaskID = req.TaskIDAlt
+	}
 	job, err := s.jobRepo.FindByProjectAndJobID(ctx, req.ProjectID, req.JobID)
 	if err != nil {
 		return ErrJobNotFound
@@ -255,6 +290,15 @@ func (s *JobService) StopJob(ctx context.Context, req *StopJobRequest) error {
 
 // GetTaskLogs retrieves logs for a task.
 func (s *JobService) GetTaskLogs(ctx context.Context, req *GetTaskLogRequest) (*TaskLogVO, error) {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.JobID == "" {
+		req.JobID = req.JobIDAlt
+	}
+	if req.TaskID == "" {
+		req.TaskID = req.TaskIDAlt
+	}
 	logs, err := s.taskLogRepo.FindByTaskID(ctx, req.ProjectID, req.JobID, req.TaskID)
 	if err != nil {
 		return nil, err

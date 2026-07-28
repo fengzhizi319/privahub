@@ -27,10 +27,16 @@ func NewGraphDatasourceService(db *gorm.DB) *GraphDatasourceService {
 
 // GraphDatasourceBindRequest represents a bind request.
 type GraphDatasourceBindRequest struct {
-	ProjectID    string `json:"project_id" binding:"required"`
-	GraphID      string `json:"graph_id" binding:"required"`
-	DomainID     string `json:"domain_id" binding:"required"`
-	DatasourceID string `json:"datasource_id" binding:"required"`
+	ProjectID       string `json:"project_id"`
+	ProjectIDAlt    string `json:"projectId"`
+	GraphID         string `json:"graph_id"`
+	GraphIDAlt      string `json:"graphId"`
+	DomainID        string `json:"domain_id"`
+	DomainIDAlt     string `json:"domainId"`
+	NodeID          string `json:"node_id"`
+	NodeIDAlt       string `json:"nodeId"`
+	DatasourceID    string `json:"datasource_id"`
+	DatasourceIDAlt string `json:"datasourceId"`
 }
 
 // GraphDatasourceVO represents a graph domain datasource view object.
@@ -45,6 +51,24 @@ type GraphDatasourceVO struct {
 
 // Bind creates or updates a graph-domain-datasource binding.
 func (s *GraphDatasourceService) Bind(ctx context.Context, req *GraphDatasourceBindRequest) error {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.GraphID == "" {
+		req.GraphID = req.GraphIDAlt
+	}
+	if req.DomainID == "" {
+		req.DomainID = req.DomainIDAlt
+	}
+	if req.DomainID == "" {
+		req.DomainID = req.NodeID
+	}
+	if req.DomainID == "" {
+		req.DomainID = req.NodeIDAlt
+	}
+	if req.DatasourceID == "" {
+		req.DatasourceID = req.DatasourceIDAlt
+	}
 	var existing model.ProjectGraphDomainDatasourceDO
 	err := s.db.WithContext(ctx).
 		Where("project_id = ? AND graph_id = ? AND domain_id = ?", req.ProjectID, req.GraphID, req.DomainID).

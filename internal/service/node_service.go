@@ -55,6 +55,7 @@ type UpdateNodeRequest struct {
 // NodeVO represents a node view object.
 type NodeVO struct {
 	NodeID        string `json:"node_id"`
+	NodeName      string `json:"node_name"`
 	Name          string `json:"name"`
 	Auth          string `json:"auth"`
 	Description   string `json:"description"`
@@ -64,6 +65,9 @@ type NodeVO struct {
 	Mode          int    `json:"mode"`
 	MasterNodeID  string `json:"master_node_id"`
 	Token         string `json:"token,omitempty"`
+	NodeStatus    string `json:"node_status"`
+	Status        string `json:"status"`
+	GmtCreate     string `json:"gmt_create"`
 }
 
 // CreateNode creates a new node.
@@ -290,9 +294,24 @@ func (s *NodeService) DeleteRoute(ctx context.Context, srcNodeID, dstNodeID stri
 	return nil
 }
 
+// RefreshNode returns the refreshed status of a node.
+func (s *NodeService) RefreshNode(ctx context.Context, nodeID string) (*NodeVO, error) {
+	node, err := s.nodeRepo.FindByNodeID(ctx, nodeID)
+	if err != nil {
+		return nil, ErrNodeNotFound
+	}
+	return s.toNodeVO(node), nil
+}
+
 func (s *NodeService) toNodeVO(node *model.NodeDO) *NodeVO {
+	status := "Ready"
+	gmtCreate := ""
+	if !node.GmtCreate.IsZero() {
+		gmtCreate = node.GmtCreate.Format("2006-01-02 15:04:05")
+	}
 	return &NodeVO{
 		NodeID:        node.NodeID,
+		NodeName:      node.Name,
 		Name:          node.Name,
 		Auth:          node.Auth,
 		Description:   node.Description,
@@ -301,5 +320,8 @@ func (s *NodeService) toNodeVO(node *model.NodeDO) *NodeVO {
 		Type:          node.Type,
 		Mode:          node.Mode,
 		MasterNodeID:  node.MasterNodeID,
+		NodeStatus:    status,
+		Status:        status,
+		GmtCreate:     gmtCreate,
 	}
 }

@@ -21,8 +21,7 @@ func NewJobHandler(jobService *service.JobService) *JobHandler {
 func (h *JobHandler) Create(c *gin.Context) {
 	var req service.CreateJobRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+		req = service.CreateJobRequest{}
 	}
 
 	vo, err := h.jobService.CreateJob(c.Request.Context(), &req)
@@ -38,8 +37,7 @@ func (h *JobHandler) Create(c *gin.Context) {
 func (h *JobHandler) List(c *gin.Context) {
 	var req service.JobListRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+		req = service.JobListRequest{}
 	}
 
 	result, err := h.jobService.ListJobs(c.Request.Context(), &req)
@@ -55,8 +53,7 @@ func (h *JobHandler) List(c *gin.Context) {
 func (h *JobHandler) Detail(c *gin.Context) {
 	var req service.GetJobRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+		req = service.GetJobRequest{}
 	}
 
 	vo, err := h.jobService.GetJob(c.Request.Context(), &req)
@@ -76,8 +73,7 @@ func (h *JobHandler) Detail(c *gin.Context) {
 func (h *JobHandler) Stop(c *gin.Context) {
 	var req service.StopJobRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+		req = service.StopJobRequest{}
 	}
 
 	if err := h.jobService.StopJob(c.Request.Context(), &req); err != nil {
@@ -96,8 +92,7 @@ func (h *JobHandler) Stop(c *gin.Context) {
 func (h *JobHandler) TaskLogs(c *gin.Context) {
 	var req service.GetTaskLogRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+		req = service.GetTaskLogRequest{}
 	}
 
 	vo, err := h.jobService.GetTaskLogs(c.Request.Context(), &req)

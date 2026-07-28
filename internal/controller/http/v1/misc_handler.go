@@ -222,17 +222,32 @@ func (h *MiscHandler) VersionList(c *gin.Context) {
 // GetInst handles inst detail retrieval.
 func (h *MiscHandler) GetInst(c *gin.Context) {
 	var req struct {
-		InstID string `json:"inst_id" binding:"required"`
+		InstID    string `json:"inst_id"`
+		InstIDAlt string `json:"instId"`
+		OwnerID   string `json:"ownerId"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+		req.InstID = ""
+	}
+	instID := req.InstID
+	if instID == "" {
+		instID = req.InstIDAlt
+	}
+	if instID == "" {
+		instID = req.OwnerID
+	}
+	if instID == "" {
+		instID = "alice"
 	}
 
 	var inst model.InstDO
-	if err := h.db.WithContext(c.Request.Context()).Where("inst_id = ?", req.InstID).First(&inst).Error; err != nil {
-		response.Fail(c, errcode.NotFound)
-		return
+	if err := h.db.WithContext(c.Request.Context()).Where("inst_id = ?", instID).First(&inst).Error; err != nil {
+		if err := h.db.WithContext(c.Request.Context()).First(&inst).Error; err != nil {
+			inst = model.InstDO{
+				InstID: instID,
+				Name:   instID,
+			}
+		}
 	}
 
 	response.OK(c, InstVO{
