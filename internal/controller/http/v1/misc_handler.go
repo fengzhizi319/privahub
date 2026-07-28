@@ -420,9 +420,17 @@ func (h *MiscHandler) RegisterInstNode(c *gin.Context) {
 // InstNodeToken handles inst node token retrieval.
 func (h *MiscHandler) InstNodeToken(c *gin.Context) {
 	var req struct {
-		NodeID string `json:"node_id" binding:"required"`
+		NodeID    string `json:"node_id"`
+		NodeIDAlt string `json:"nodeId"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+	if req.NodeID == "" {
+		req.NodeID = req.NodeIDAlt
+	}
+	if req.NodeID == "" {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
@@ -433,7 +441,12 @@ func (h *MiscHandler) InstNodeToken(c *gin.Context) {
 		return
 	}
 
-	response.OK(c, gin.H{"token": node.Token})
+	response.OK(c, gin.H{
+		"node_id":          node.NodeID,
+		"node_name":        node.Name,
+		"inst_token":       node.Token,
+		"inst_token_state": "Available",
+	})
 }
 
 // DeleteInstNode handles deleting a node from an inst with Kuscia domain cleanup.
@@ -466,9 +479,17 @@ func (h *MiscHandler) DeleteInstNode(c *gin.Context) {
 // RefreshNode handles node status refresh.
 func (h *MiscHandler) RefreshNode(c *gin.Context) {
 	var req struct {
-		NodeID string `json:"node_id" binding:"required"`
+		NodeID    string `json:"node_id"`
+		NodeIDAlt string `json:"nodeId"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+	if req.NodeID == "" {
+		req.NodeID = req.NodeIDAlt
+	}
+	if req.NodeID == "" {
 		response.Fail(c, errcode.ParamError)
 		return
 	}

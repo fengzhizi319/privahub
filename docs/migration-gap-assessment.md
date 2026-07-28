@@ -147,6 +147,15 @@
 
 `go build`/`vet`/`test` 全过。
 
+### 2.13 机构节点 token 响应字段修复（2026-07-28）✅
+
+扫描原生 `fetch` 端点（绕过中间件孪生键扩展）后，复查机构管理页 token 链路：
+
+- **`inst/node/newToken`（token 恒为空）**：前端 `getInstNodeToken` 用 `unwrapValidated(InstTokenVOSchema)` 读取 `instToken`/`instTokenState`，Go 原仅返回 `{token}`（键名不匹配，中间件也不会把 `token` 重命名为 `instToken`）→ 机构页 token 文本框恒为空、「复制 token」按钮恒禁用。修复：响应改为 `{node_id, node_name, inst_token, inst_token_state}`（中间件补 `instToken`/`instTokenState` 孪生键）。
+- 顺带为 `InstNodeToken`/`RefreshNode` 请求绑定补充 `nodeId` camelCase 变体（防御性，中间件本已扩展孪生键）。`inst/node/register`（原生 fetch + `json_data` query + multipart）复查正确，无需修复。
+
+`go build`/`vet`/`test` 全过。
+
 ---
 
 ## 三、评估方法
