@@ -59,6 +59,22 @@
 
 **当前唯一剩余差距 = Kuscia 运行时深度**：结果列表/详情、pushToTee、图执行产生真实输出等能力依赖活 Kuscia 集群；无 Kuscia 时按设计优雅降级（返回空集合 / 最佳努力记录），页面可打开但无实时计算数据。这属于**部署/运行时能力差距**，非代码缺失，需联调环境验证而非离线补齐。
 
+### 2.4 结构性契约深度审计（2026-07-28）✅
+
+> 中间件只修复「键命名」（snake↔camel），不修复「结构」。为进一步排除中间件覆盖不到的结构性报错风险，对前端全部 **21 个严格校验端点**（`unwrapValidated` → Zod `safeParse`）逐个核对其 schema 的**必填字段**。
+
+**结论：21 个严格校验端点中，仅 `project/get`（`ProjectVOSchema.projectId`）含必填字段**，且已由中间件（响应补 camelCase `projectId`）修复；其余 20 个 schema（`DatatableNodeVO`/`ProjectJobVO`/`ModelPackDetailVO`/`AllNodeResultsListVO`/`NodeResultDetailVO`/`InstTokenVO`/`UserContextDTO`/`DatasourceNodesVO`/`DatasourceDetailAggregateVO`/`PullStatusVO`/`MessageDetailVO`/`SyncDataDTO`/`ProjectParticipantsDetailVO`/`ModelExportPackageResponse` 等）**字段全为 `.optional()`**，`safeParse` 永不因缺字段抛错。
+
+| 核查项 | 结果 |
+| --- | --- |
+| 严格校验端点数 | 21（`unwrapValidated`）；其余 74 个为宽松 `unwrap`（不报错） |
+| 含必填字段的严格端点 | 仅 `project/get`（1 个），已由中间件修复 |
+| 剩余结构性抛错风险 | ✅ 无 |
+| 图执行 DB 链路 | ✅ `StartGraph` 在 DB 层创建 `ProjectJobDO`（RUNNING）+ 每节点 `ProjectJobTaskDO`，作业记录页有数据；Kuscia 提交失败时降级 |
+| `model/serving/*` 别名 | ✅ `create/list/delete/detail` 均已注册指向 `ModelHandler` |
+
+**综上：离线可验证的迁移工作已全部完成**（端点覆盖 100%、契约命名由中间件打通、无结构性抛错、骨架端点均为真实 DB 实现）。后续重点应转向搭建 Kuscia 联调环境，验证实时计算链路（结果产出、pushToTee、图执行真实输出）。
+
 ---
 
 ## 三、评估方法
