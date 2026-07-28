@@ -105,3 +105,19 @@ func (h *DatasourceHandler) Test(c *gin.Context) {
 
 	response.OK(c, vo)
 }
+
+// Nodes handles datasource-nodes retrieval.
+func (h *DatasourceHandler) Nodes(c *gin.Context) {
+	var req service.DatasourceNodesRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		req = service.DatasourceNodesRequest{}
+	}
+
+	vo, err := h.datasourceService.GetDatasourceNodes(c.Request.Context(), &req)
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, vo)
+}

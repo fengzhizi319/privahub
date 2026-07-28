@@ -134,3 +134,53 @@ func (h *DatatableHandler) CreateFedTable(c *gin.Context) {
 
 	response.OK(c, vo)
 }
+
+// Create handles datatable creation (frontend contract).
+func (h *DatatableHandler) Create(c *gin.Context) {
+	var req service.CreateDatatableCompatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	vo, err := h.datatableService.CreateDatatableCompat(c.Request.Context(), &req)
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, vo)
+}
+
+// Get handles datatable detail retrieval (frontend contract).
+func (h *DatatableHandler) Get(c *gin.Context) {
+	var req service.GetDatatableCompatRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	vo, err := h.datatableService.GetDatatableCompat(c.Request.Context(), &req)
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, vo)
+}
+
+// PushToTee handles pushing a datatable to TEE.
+func (h *DatatableHandler) PushToTee(c *gin.Context) {
+	var req service.PushDatatableToTeeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	if err := h.datatableService.PushDatatableToTee(c.Request.Context(), &req); err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OKEmpty(c)
+}

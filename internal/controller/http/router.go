@@ -7,14 +7,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/fengzhizi319/privahub/internal/controller/http/middleware"
 	v1 "github.com/fengzhizi319/privahub/internal/controller/http/v1"
 	"github.com/fengzhizi319/privahub/internal/service"
 	"github.com/fengzhizi319/privahub/internal/wire"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/response"
+	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
@@ -145,7 +145,6 @@ func registerProjectRoutes(rg *gin.RouterGroup, h *v1.ProjectHandler) {
 	rg.POST("/project/getOutTable", h.GetOutTable)
 	rg.POST("/project/update/tableConfig", h.UpdateTableConfig)
 	rg.POST("/project/datasource/list", h.DatasourceList)
-	rg.POST("/project/job/task/output", h.TaskOutput)
 }
 
 func registerGraphRoutes(rg *gin.RouterGroup, h *v1.GraphHandler) {
@@ -170,6 +169,10 @@ func registerJobRoutes(rg *gin.RouterGroup, h *v1.JobHandler) {
 	rg.POST("/project/job/detail", h.Detail)
 	rg.POST("/project/job/stop", h.Stop)
 	rg.POST("/project/job/task/log", h.TaskLogs)
+	// Java SecretPad-compatible aliases used by the frontend (client.ts).
+	rg.POST("/project/job/get", h.Detail)
+	rg.POST("/project/job/task/logs", h.TaskLogs)
+	rg.POST("/project/job/task/output", h.TaskOutput)
 }
 
 func registerNodeRoutes(rg *gin.RouterGroup, h *v1.NodeHandler) {
@@ -185,6 +188,8 @@ func registerNodeRoutes(rg *gin.RouterGroup, h *v1.NodeHandler) {
 	rg.POST("/node/route/list", h.ListRoutes)
 	rg.POST("/node/route/delete", h.DeleteRoute)
 	rg.POST("/node/page", h.List)
+	rg.POST("/node/result/list", h.ResultList)
+	rg.POST("/node/result/detail", h.ResultDetail)
 }
 
 func registerVoteRoutes(rg *gin.RouterGroup, h *v1.VoteHandler) {
@@ -201,6 +206,9 @@ func registerDatatableRoutes(rg *gin.RouterGroup, h *v1.DatatableHandler) {
 	rg.POST("/datatable/delete", h.Delete)
 	rg.POST("/datatable/grant", h.Grant)
 	rg.POST("/datatable/fed/create", h.CreateFedTable)
+	rg.POST("/datatable/create", h.Create)
+	rg.POST("/datatable/get", h.Get)
+	rg.POST("/datatable/pushToTee", h.PushToTee)
 }
 
 func registerDatasourceRoutes(rg *gin.RouterGroup, h *v1.DatasourceHandler) {
@@ -209,6 +217,7 @@ func registerDatasourceRoutes(rg *gin.RouterGroup, h *v1.DatasourceHandler) {
 	rg.POST("/datasource/detail", h.Detail)
 	rg.POST("/datasource/delete", h.Delete)
 	rg.POST("/datasource/test", h.Test)
+	rg.POST("/datasource/nodes", h.Nodes)
 }
 
 func registerAuthRoutes(rg *gin.RouterGroup, h *v1.AuthHandler) {
@@ -256,6 +265,7 @@ func registerInstRoutes(rg *gin.RouterGroup, h *v1.MiscHandler) {
 	rg.POST("/inst/get", h.GetInst)
 	rg.POST("/inst/node/list", h.ListInstNodes)
 	rg.POST("/inst/node/add", h.AddInstNode)
+	rg.POST("/inst/node/register", h.RegisterInstNode)
 	rg.POST("/inst/node/token", h.InstNodeToken)
 	rg.POST("/inst/node/newToken", h.InstNodeToken)
 	rg.POST("/inst/node/delete", h.DeleteInstNode)
@@ -270,6 +280,15 @@ func registerScheduledRoutes(rg *gin.RouterGroup, h *v1.ScheduledHandler) {
 	rg.POST("/scheduled/pause", h.Pause)
 	rg.POST("/scheduled/resume", h.Resume)
 	rg.POST("/scheduled/offline", h.Offline)
+	rg.POST("/scheduled/graph/create", h.GraphCreate)
+	rg.POST("/scheduled/id", h.GetID)
+	rg.POST("/scheduled/info", h.Info)
+	rg.POST("/scheduled/task/page", h.TaskPage)
+	rg.POST("/scheduled/task/rerun", h.TaskReRun)
+	rg.POST("/scheduled/task/stop", h.TaskStop)
+	rg.POST("/scheduled/graph/once/success", h.OnceSuccess)
+	rg.POST("/scheduled/job/list", h.JobList)
+	rg.POST("/scheduled/task/info", h.TaskInfo)
 }
 
 func registerComponentRoutes(rg *gin.RouterGroup, h *v1.MiscHandler) {

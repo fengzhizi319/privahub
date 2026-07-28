@@ -4,7 +4,6 @@ package wire
 import (
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/fengzhizi319/privahub/internal/controller/http/middleware"
 	v1 "github.com/fengzhizi319/privahub/internal/controller/http/v1"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
@@ -12,6 +11,7 @@ import (
 	"github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/fengzhizi319/privahub/pkg/config"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
@@ -164,8 +164,8 @@ func NewApp(db *gorm.DB, cfg *config.Config) *App {
 	nodeService := service.NewNodeService(nodeRepo, routeRepo, kusciaClient)
 	projectService := service.NewProjectService(projectRepo, projectInstRepo, projectNodeRepo)
 	graphService := service.NewGraphService(graphRepo, graphNodeRepo, jobRepo, taskRepo, taskLogRepo, kusciaClient)
-	jobService := service.NewJobService(jobRepo, taskRepo, taskLogRepo, kusciaClient)
-	datatableService := service.NewDatatableService(datatableRepo, fedTableRepo)
+	jobService := service.NewJobService(jobRepo, taskRepo, taskLogRepo, graphRepo, graphNodeRepo, kusciaClient)
+	datatableService := service.NewDatatableService(datatableRepo, fedTableRepo, db, kusciaClient)
 	voteService := service.NewVoteService(voteRequestRepo, voteInviteRepo)
 	userService := service.NewUserService(userRepo, permRepo, sysUserNodeRepo)
 	datasourceService := service.NewDatasourceService(db, kusciaClient)

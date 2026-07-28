@@ -110,6 +110,24 @@ type TestDatasourceVO struct {
 	Message string `json:"message"`
 }
 
+// DatasourceNodesRequest represents a datasource-nodes query request (frontend contract).
+type DatasourceNodesRequest struct {
+	OwnerID      string `json:"ownerId"`
+	DatasourceID string `json:"datasourceId"`
+}
+
+// DataSourceRelatedNode represents a node associated with a datasource.
+type DataSourceRelatedNode struct {
+	NodeID   string `json:"nodeId"`
+	NodeName string `json:"nodeName"`
+	Status   string `json:"status"`
+}
+
+// DatasourceNodesVO represents the datasource-nodes response.
+type DatasourceNodesVO struct {
+	Nodes []DataSourceRelatedNode `json:"nodes"`
+}
+
 // --- Service Methods ---
 
 // CreateDatasource creates a new datasource.
@@ -249,4 +267,27 @@ func (s *DatasourceService) TestDatasource(ctx context.Context, req *TestDatasou
 		Success: true,
 		Message: "connection test passed",
 	}, nil
+}
+
+// GetDatasourceNodes lists nodes associated with a datasource.
+func (s *DatasourceService) GetDatasourceNodes(ctx context.Context, req *DatasourceNodesRequest) (*DatasourceNodesVO, error) {
+	var rels []model.DatasourceNodeDO
+	if err := s.db.WithContext(ctx).Where("datasource_id = ?", req.DatasourceID).Find(&rels).Error; err != nil {
+		return nil, err
+	}
+
+	nodes := make([]DataSourceRelatedNode, 0, len(rels))
+	for _, rel := range rels {
+		item := DataSourceRelatedNode{
+			NodeID: rel.NodeID,
+			Status: "Available",
+		}
+		var node model.NodeDO
+		if err := s.db.WithContext(ctx).Where("node_id = ?", rel.NodeID).First(&node).Error; err == nil {
+			item.NodeName = node.Name
+		}
+		nodes = append(nodes, item)
+	}
+
+	return &DatasourceNodesVO{Nodes: nodes}, nil
 }

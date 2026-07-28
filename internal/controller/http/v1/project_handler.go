@@ -1,10 +1,10 @@
 package v1
 
 import (
-	"github.com/gin-gonic/gin"
 	"github.com/fengzhizi319/privahub/internal/service"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/response"
+	"github.com/gin-gonic/gin"
 )
 
 // ProjectHandler handles project-related HTTP requests.
@@ -277,19 +277,4 @@ func (h *ProjectHandler) DatasourceList(c *gin.Context) {
 	}
 
 	response.OK(c, []interface{}{})
-}
-
-// TaskOutput handles task output retrieval.
-func (h *ProjectHandler) TaskOutput(c *gin.Context) {
-	var req struct {
-		ProjectID string `json:"project_id" binding:"required"`
-		JobID     string `json:"job_id" binding:"required"`
-		TaskID    string `json:"task_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	response.OK(c, gin.H{"task_id": req.TaskID, "outputs": []interface{}{}})
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
@@ -324,4 +325,172 @@ func (s *NodeService) toNodeVO(node *model.NodeDO) *NodeVO {
 		Status:        status,
 		GmtCreate:     gmtCreate,
 	}
+}
+
+// --- Node Result (camelCase) DTOs aligned with the frontend contract ---
+
+// ListNodeResultRequest represents a node result list request (frontend contract).
+type ListNodeResultRequest struct {
+	OwnerID         string   `json:"ownerId"`
+	PageSize        int      `json:"pageSize"`
+	PageNumber      int      `json:"pageNumber"`
+	NodeNamesFilter []string `json:"nodeNamesFilter"`
+	KindFilters     []string `json:"kindFilters"`
+	NameFilter      string   `json:"nameFilter"`
+	TimeSortingRule string   `json:"timeSortingRule"`
+	TeeNodeID       string   `json:"teeNodeId"`
+}
+
+// NodeResultsCompatVO represents a single node result entry (frontend contract).
+type NodeResultsCompatVO struct {
+	DomainDataID      string `json:"domainDataId,omitempty"`
+	DatasourceID      string `json:"datasourceId,omitempty"`
+	DatasourceType    string `json:"datasourceType,omitempty"`
+	ProductName       string `json:"productName,omitempty"`
+	DatatableType     string `json:"datatableType,omitempty"`
+	SourceProjectID   string `json:"sourceProjectId,omitempty"`
+	SourceProjectName string `json:"sourceProjectName,omitempty"`
+	RelativeURI       string `json:"relativeUri,omitempty"`
+	JobID             string `json:"jobId,omitempty"`
+	TrainFlow         string `json:"trainFlow,omitempty"`
+	PullFromTeeStatus string `json:"pullFromTeeStatus,omitempty"`
+	PullFromTeeErrMsg string `json:"pullFromTeeErrMsg,omitempty"`
+	GmtCreate         string `json:"gmtCreate,omitempty"`
+	ComputeMode       string `json:"computeMode,omitempty"`
+}
+
+// NodeAllResultsCompatVO groups a result with its owning node (frontend contract).
+type NodeAllResultsCompatVO struct {
+	NodeResultsVO *NodeResultsCompatVO `json:"nodeResultsVO,omitempty"`
+	NodeID        string               `json:"nodeId,omitempty"`
+	NodeName      string               `json:"nodeName,omitempty"`
+}
+
+// AllNodeResultsListCompatVO represents the node result list response (frontend contract).
+type AllNodeResultsListCompatVO struct {
+	NodeAllResultsVOList []NodeAllResultsCompatVO `json:"nodeAllResultsVOList"`
+	TotalNodeResultNums  int                      `json:"totalNodeResultNums"`
+}
+
+// GetNodeResultDetailRequest represents a node result detail request (frontend contract).
+type GetNodeResultDetailRequest struct {
+	NodeID       string `json:"nodeId" binding:"required"`
+	DomainDataID string `json:"domainDataId" binding:"required"`
+	DataType     string `json:"dataType"`
+	DataVendor   string `json:"dataVendor"`
+}
+
+// NodeResultDetailCompatVO represents a node result detail response (frontend contract).
+type NodeResultDetailCompatVO struct {
+	NodeResultsVO     *NodeResultsCompatVO `json:"nodeResultsVO,omitempty"`
+	TableColumnVOList []TableColumnCompat  `json:"tableColumnVOList"`
+	Datasource        string               `json:"datasource,omitempty"`
+}
+
+// ListNodeResults lists results across nodes via Kuscia DomainData (best-effort, degrades to empty).
+func (s *NodeService) ListNodeResults(ctx context.Context, req *ListNodeResultRequest) (*AllNodeResultsListCompatVO, error) {
+	vo := &AllNodeResultsListCompatVO{NodeAllResultsVOList: make([]NodeAllResultsCompatVO, 0)}
+
+	nodes, err := s.nodeRepo.FindAll(ctx)
+	if err != nil {
+		return vo, nil
+	}
+
+	nameSet := make(map[string]bool, len(req.NodeNamesFilter))
+	for _, n := range req.NodeNamesFilter {
+		nameSet[n] = true
+	}
+	kindSet := make(map[string]bool, len(req.KindFilters))
+	for _, k := range req.KindFilters {
+		kindSet[k] = true
+	}
+
+	results := make([]NodeAllResultsCompatVO, 0)
+	for _, node := range nodes {
+		if len(nameSet) > 0 && !nameSet[node.Name] && !nameSet[node.NodeID] {
+			continue
+		}
+		if s.kusciaClient == nil {
+			continue
+		}
+
+		items, err := s.kusciaClient.ListDomainData(ctx, node.NodeID)
+		if err != nil {
+			continue // degrade: skip unreachable node
+		}
+
+		for _, item := range items {
+			if len(kindSet) > 0 && !kindSet[item.Type] {
+				continue
+			}
+			if req.NameFilter != "" && !strings.Contains(item.Name, req.NameFilter) {
+				continue
+			}
+			results = append(results, NodeAllResultsCompatVO{
+				NodeID:   node.NodeID,
+				NodeName: node.Name,
+				NodeResultsVO: &NodeResultsCompatVO{
+					DomainDataID:  item.DomainDataID,
+					DatasourceID:  item.DatasourceID,
+					DatatableType: item.Type,
+					ProductName:   item.Name,
+					RelativeURI:   item.RelativeURI,
+				},
+			})
+		}
+	}
+
+	vo.TotalNodeResultNums = len(results)
+
+	if req.PageSize > 0 {
+		page := req.PageNumber
+		if page < 1 {
+			page = 1
+		}
+		start := (page - 1) * req.PageSize
+		if start > len(results) {
+			start = len(results)
+		}
+		end := start + req.PageSize
+		if end > len(results) {
+			end = len(results)
+		}
+		results = results[start:end]
+	}
+
+	vo.NodeAllResultsVOList = results
+	return vo, nil
+}
+
+// GetNodeResultDetail retrieves a single node result detail via Kuscia (best-effort, degrades to minimal).
+func (s *NodeService) GetNodeResultDetail(ctx context.Context, req *GetNodeResultDetailRequest) (*NodeResultDetailCompatVO, error) {
+	vo := &NodeResultDetailCompatVO{
+		NodeResultsVO:     &NodeResultsCompatVO{DomainDataID: req.DomainDataID},
+		TableColumnVOList: make([]TableColumnCompat, 0),
+	}
+
+	if s.kusciaClient == nil {
+		return vo, nil
+	}
+
+	resp, err := s.kusciaClient.QueryDomainData(ctx, req.NodeID, req.DomainDataID)
+	if err != nil {
+		return vo, nil // degrade: return minimal VO
+	}
+
+	vo.NodeResultsVO.DatasourceID = resp.Data.DatasourceID
+	vo.NodeResultsVO.DatatableType = resp.Data.Type
+	vo.NodeResultsVO.ProductName = resp.Data.Name
+	vo.NodeResultsVO.RelativeURI = resp.Data.RelativeURI
+	vo.Datasource = resp.Data.DatasourceID
+
+	for _, c := range resp.Data.Columns {
+		vo.TableColumnVOList = append(vo.TableColumnVOList, TableColumnCompat{
+			ColName:    c.Name,
+			ColType:    c.Type,
+			ColComment: c.Description,
+		})
+	}
+
+	return vo, nil
 }

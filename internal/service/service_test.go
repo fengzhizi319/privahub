@@ -102,6 +102,8 @@ func TestJobService_CreateAndList(t *testing.T) {
 		repository.NewTaskRepo(db),
 		repository.NewTaskLogRepo(db),
 		nil,
+		nil,
+		nil,
 	)
 
 	job, err := svc.CreateJob(context.Background(), &CreateJobRequest{
@@ -139,6 +141,8 @@ func TestJobService_StopJob(t *testing.T) {
 		repository.NewJobRepo(db),
 		repository.NewTaskRepo(db),
 		repository.NewTaskLogRepo(db),
+		nil,
+		nil,
 		nil,
 	)
 

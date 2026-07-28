@@ -222,3 +222,36 @@ func (h *NodeHandler) Refresh(c *gin.Context) {
 
 	response.OK(c, node)
 }
+
+// ResultList handles node result list retrieval.
+func (h *NodeHandler) ResultList(c *gin.Context) {
+	var req service.ListNodeResultRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		req = service.ListNodeResultRequest{}
+	}
+
+	vo, err := h.nodeService.ListNodeResults(c.Request.Context(), &req)
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, vo)
+}
+
+// ResultDetail handles node result detail retrieval.
+func (h *NodeHandler) ResultDetail(c *gin.Context) {
+	var req service.GetNodeResultDetailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	vo, err := h.nodeService.GetNodeResultDetail(c.Request.Context(), &req)
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, vo)
+}

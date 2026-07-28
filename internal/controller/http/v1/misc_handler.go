@@ -2,7 +2,9 @@ package v1
 
 import (
 	"encoding/json"
+	"io"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/gin-gonic/gin"
@@ -299,6 +301,102 @@ func (h *MiscHandler) AddInstNode(c *gin.Context) {
 		_ = h.kusciaClient.CreateDomain(ctx, &kuscia.CreateDomainRequest{
 			DomainID: req.NodeID,
 			Role:     node.Type,
+		})
+	}
+
+	response.OKEmpty(c)
+}
+
+// RegisterInstNode handles institution node registration via multipart form (frontend contract).
+func (h *MiscHandler) RegisterInstNode(c *gin.Context) {
+	jsonData := c.Query("json_data")
+
+	var payload struct {
+		NodeID     string `json:"nodeId"`
+		NodeName   string `json:"nodeName"`
+		InstID     string `json:"instId"`
+		InstName   string `json:"instName"`
+		NetAddress string `json:"netAddress"`
+		CertText   string `json:"certText"`
+		Token      string `json:"token"`
+		Mode       int    `json:"mode"`
+	}
+	if jsonData != "" {
+		if err := json.Unmarshal([]byte(jsonData), &payload); err != nil {
+			response.Fail(c, errcode.ParamError)
+			return
+		}
+	}
+
+	// Optional multipart file uploads (cert / key / token) — best-effort.
+	certText := payload.CertText
+	if f, err := c.FormFile("certFile"); err == nil {
+		if fh, err := f.Open(); err == nil {
+			if b, err := io.ReadAll(fh); err == nil {
+				certText = string(b)
+			}
+			_ = fh.Close()
+		}
+	}
+	token := payload.Token
+	if f, err := c.FormFile("token"); err == nil {
+		if fh, err := f.Open(); err == nil {
+			if b, err := io.ReadAll(fh); err == nil {
+				token = strings.TrimSpace(string(b))
+			}
+			_ = fh.Close()
+		}
+	}
+
+	nodeID := payload.NodeID
+	if nodeID == "" {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Upsert the node record.
+	var node model.NodeDO
+	if err := h.db.WithContext(ctx).Where("node_id = ?", nodeID).First(&node).Error; err != nil {
+		name := payload.NodeName
+		if name == "" {
+			name = nodeID
+		}
+		newNode := &model.NodeDO{
+			NodeID:     nodeID,
+			Name:       name,
+			Auth:       certText,
+			Token:      token,
+			NetAddress: payload.NetAddress,
+			Type:       "lite",
+			Mode:       payload.Mode,
+		}
+		if err := h.db.WithContext(ctx).Create(newNode).Error; err != nil {
+			response.Fail(c, errcode.SystemError)
+			return
+		}
+	} else {
+		updates := map[string]interface{}{}
+		if certText != "" {
+			updates["auth"] = certText
+		}
+		if token != "" {
+			updates["token"] = token
+		}
+		if payload.NetAddress != "" {
+			updates["net_address"] = payload.NetAddress
+		}
+		if len(updates) > 0 {
+			_ = h.db.WithContext(ctx).Model(&node).Updates(updates).Error
+		}
+	}
+
+	// Register domain in Kuscia (best-effort).
+	if h.kusciaClient != nil {
+		_ = h.kusciaClient.CreateDomain(ctx, &kuscia.CreateDomainRequest{
+			DomainID: nodeID,
+			Cert:     certText,
 		})
 	}
 

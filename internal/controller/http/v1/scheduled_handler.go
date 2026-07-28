@@ -141,3 +141,165 @@ func (h *ScheduledHandler) Offline(c *gin.Context) {
 
 	response.OKEmpty(c)
 }
+
+// GraphCreate handles scheduled graph creation (frontend contract).
+func (h *ScheduledHandler) GraphCreate(c *gin.Context) {
+	var req service.ScheduledGraphCreateRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	if err := h.scheduledService.CreateScheduledGraph(c.Request.Context(), &req); err != nil {
+		if err == service.ErrInvalidCron {
+			response.FailWithMsg(c, errcode.ParamError, "invalid cron config")
+			return
+		}
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OKEmpty(c)
+}
+
+// GetID handles schedule id retrieval.
+func (h *ScheduledHandler) GetID(c *gin.Context) {
+	var req service.ScheduledIdRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	id, err := h.scheduledService.GetScheduledID(c.Request.Context(), &req)
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, id)
+}
+
+// Info handles schedule info retrieval.
+func (h *ScheduledHandler) Info(c *gin.Context) {
+	var req service.ScheduledInfoRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	vo, err := h.scheduledService.GetScheduledInfo(c.Request.Context(), &req)
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, vo)
+}
+
+// TaskPage handles scheduled task page retrieval.
+func (h *ScheduledHandler) TaskPage(c *gin.Context) {
+	var req service.TaskPageScheduledRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	list, err := h.scheduledService.GetScheduledTaskPage(c.Request.Context(), &req)
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, gin.H{"list": list})
+}
+
+// TaskReRun handles scheduled task rerun.
+func (h *ScheduledHandler) TaskReRun(c *gin.Context) {
+	var req service.TaskReRunScheduledRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	if err := h.scheduledService.ReRunScheduledTask(c.Request.Context(), &req); err != nil {
+		if err == service.ErrScheduledNotFound {
+			response.Fail(c, errcode.NotFound)
+			return
+		}
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OKEmpty(c)
+}
+
+// TaskStop handles scheduled task stop.
+func (h *ScheduledHandler) TaskStop(c *gin.Context) {
+	var req service.TaskStopScheduledRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	if err := h.scheduledService.StopScheduledTask(c.Request.Context(), &req); err != nil {
+		if err == service.ErrScheduledNotFound {
+			response.Fail(c, errcode.NotFound)
+			return
+		}
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OKEmpty(c)
+}
+
+// OnceSuccess handles once-success query.
+func (h *ScheduledHandler) OnceSuccess(c *gin.Context) {
+	var req service.ScheduledGraphOnceSuccessRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	ok, err := h.scheduledService.GetScheduledOnceSuccess(c.Request.Context(), &req)
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, ok)
+}
+
+// JobList handles scheduled job list retrieval.
+func (h *ScheduledHandler) JobList(c *gin.Context) {
+	var req service.ScheduleListProjectJobRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	jobs, err := h.scheduledService.GetScheduledJobs(c.Request.Context(), &req)
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, gin.H{"list": jobs})
+}
+
+// TaskInfo handles scheduled task info retrieval.
+func (h *ScheduledHandler) TaskInfo(c *gin.Context) {
+	var req service.TaskInfoScheduledRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	vo, err := h.scheduledService.GetScheduledTaskInfo(c.Request.Context(), &req)
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, vo)
+}
