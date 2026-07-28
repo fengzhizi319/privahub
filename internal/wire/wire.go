@@ -162,7 +162,7 @@ func NewApp(db *gorm.DB, cfg *config.Config) *App {
 	// Services
 	authService := service.NewAuthService(userRepo, tokenRepo, jwtManager)
 	nodeService := service.NewNodeService(nodeRepo, routeRepo, kusciaClient)
-	projectService := service.NewProjectService(projectRepo, projectInstRepo, projectNodeRepo, datatableRepo)
+	projectService := service.NewProjectService(projectRepo, projectInstRepo, projectNodeRepo, datatableRepo, db)
 	graphService := service.NewGraphService(graphRepo, graphNodeRepo, jobRepo, taskRepo, taskLogRepo, kusciaClient)
 	jobService := service.NewJobService(jobRepo, taskRepo, taskLogRepo, graphRepo, graphNodeRepo, kusciaClient)
 	datatableService := service.NewDatatableService(datatableRepo, fedTableRepo, db, kusciaClient)
@@ -174,7 +174,7 @@ func NewApp(db *gorm.DB, cfg *config.Config) *App {
 	// Handlers
 	authHandler := v1.NewAuthHandler(authService)
 	nodeHandler := v1.NewNodeHandler(nodeService)
-	projectHandler := v1.NewProjectHandler(projectService, datatableService)
+	projectHandler := v1.NewProjectHandler(projectService, datatableService, nodeService)
 	graphHandler := v1.NewGraphHandler(graphService)
 	jobHandler := v1.NewJobHandler(jobService)
 	datatableHandler := v1.NewDatatableHandler(datatableService, kusciaClient)

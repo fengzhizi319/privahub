@@ -11,11 +11,12 @@ import (
 type ProjectHandler struct {
 	projectService   *service.ProjectService
 	datatableService *service.DatatableService
+	nodeService      *service.NodeService
 }
 
 // NewProjectHandler creates a new ProjectHandler.
-func NewProjectHandler(projectService *service.ProjectService, datatableService *service.DatatableService) *ProjectHandler {
-	return &ProjectHandler{projectService: projectService, datatableService: datatableService}
+func NewProjectHandler(projectService *service.ProjectService, datatableService *service.DatatableService, nodeService *service.NodeService) *ProjectHandler {
+	return &ProjectHandler{projectService: projectService, datatableService: datatableService, nodeService: nodeService}
 }
 
 // Create handles project creation.
@@ -257,18 +258,16 @@ func (h *ProjectHandler) GetDatatable(c *gin.Context) {
 	response.OK(c, vo)
 }
 
-// TeeList handles TEE job list retrieval.
+// TeeList handles TEE-capable node list retrieval. The frontend sends an empty
+// body and expects the global list of TEE-capable nodes (mode 1 or 2).
 func (h *ProjectHandler) TeeList(c *gin.Context) {
-	var req struct {
-		ProjectID string `json:"project_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+	nodes, err := h.nodeService.ListTeeNodes(c.Request.Context())
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
 		return
 	}
 
-	// TEE jobs are a subset of jobs - return empty for now
-	response.OK(c, []interface{}{})
+	response.OK(c, nodes)
 }
 
 // GetOutTable handles output table retrieval.
@@ -305,16 +304,21 @@ func (h *ProjectHandler) UpdateTableConfig(c *gin.Context) {
 	response.OKEmpty(c)
 }
 
-// DatasourceList handles datasource list for a project.
+// DatasourceList handles datasource list for a project, aggregated per node.
 func (h *ProjectHandler) DatasourceList(c *gin.Context) {
 	var req struct {
 		ProjectID string `json:"project_id" binding:"required"`
-		NodeID    string `json:"node_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
 
-	response.OK(c, []interface{}{})
+	result, err := h.projectService.ListProjectDatasources(c.Request.Context(), req.ProjectID)
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, result)
 }

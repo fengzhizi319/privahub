@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
+	"gorm.io/gorm"
 )
 
 // Project service errors.
@@ -34,6 +35,7 @@ type ProjectService struct {
 	projectInstRepo      repository.ProjectInstRepository
 	projectNodeRepo      repository.ProjectNodeRepository
 	projectDatatableRepo repository.DatatableRepository
+	db                   *gorm.DB
 }
 
 // NewProjectService creates a new ProjectService.
@@ -42,12 +44,14 @@ func NewProjectService(
 	projectInstRepo repository.ProjectInstRepository,
 	projectNodeRepo repository.ProjectNodeRepository,
 	projectDatatableRepo repository.DatatableRepository,
+	db *gorm.DB,
 ) *ProjectService {
 	return &ProjectService{
 		projectRepo:          projectRepo,
 		projectInstRepo:      projectInstRepo,
 		projectNodeRepo:      projectNodeRepo,
 		projectDatatableRepo: projectDatatableRepo,
+		db:                   db,
 	}
 }
 
@@ -381,4 +385,69 @@ func (s *ProjectService) UpdateTableConfig(ctx context.Context, req *AddDatatabl
 		existing.TableConfigs = string(req.Configs)
 	}
 	return s.projectDatatableRepo.Update(ctx, existing)
+}
+
+// --- Project Datasource aggregation ---
+
+// ProjectDataSourceItem is a single datasource available on a project node
+// (frontend DataSource contract: dataSourceId/dataSourceName/nodeId/type).
+type ProjectDataSourceItem struct {
+	DataSourceID   string `json:"dataSourceId"`
+	DataSourceName string `json:"dataSourceName"`
+	NodeID         string `json:"nodeId"`
+	Type           string `json:"type"`
+}
+
+// ProjectDatasourceNodeVO groups a project node with its available datasources
+// (frontend ProjectGraphDomainDataSourceVO contract).
+type ProjectDatasourceNodeVO struct {
+	NodeID      string                  `json:"nodeId"`
+	NodeName    string                  `json:"nodeName"`
+	DataSources []ProjectDataSourceItem `json:"dataSources"`
+}
+
+// ListProjectDatasources aggregates the datasources available on each node of a
+// project. For every project node it resolves the node name and the datasources
+// bound to that node (via datasource_node), returning a per-node grouping that
+// matches the frontend project/datasource/list contract. Degrades gracefully to
+// an empty list when the project has no nodes or a lookup fails.
+func (s *ProjectService) ListProjectDatasources(ctx context.Context, projectID string) ([]ProjectDatasourceNodeVO, error) {
+	result := make([]ProjectDatasourceNodeVO, 0)
+
+	pnodes, err := s.projectNodeRepo.FindByProjectID(ctx, projectID)
+	if err != nil {
+		return result, nil
+	}
+
+	for _, pn := range pnodes {
+		nodeName := ""
+		var node model.NodeDO
+		if err := s.db.WithContext(ctx).Where("node_id = ?", pn.NodeID).First(&node).Error; err == nil {
+			nodeName = node.Name
+		}
+
+		items := make([]ProjectDataSourceItem, 0)
+		var dsNodes []model.DatasourceNodeDO
+		if err := s.db.WithContext(ctx).Where("node_id = ?", pn.NodeID).Find(&dsNodes).Error; err == nil {
+			for _, dsn := range dsNodes {
+				var ds model.DatasourceDO
+				if err := s.db.WithContext(ctx).Where("datasource_id = ?", dsn.DatasourceID).First(&ds).Error; err == nil {
+					items = append(items, ProjectDataSourceItem{
+						DataSourceID:   ds.DatasourceID,
+						DataSourceName: ds.Name,
+						NodeID:         pn.NodeID,
+						Type:           ds.Type,
+					})
+				}
+			}
+		}
+
+		result = append(result, ProjectDatasourceNodeVO{
+			NodeID:      pn.NodeID,
+			NodeName:    nodeName,
+			DataSources: items,
+		})
+	}
+
+	return result, nil
 }

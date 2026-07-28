@@ -33,6 +33,8 @@ func setupExtendedTestDB(t *testing.T) *gorm.DB {
 		&model.ProjectModelServingDO{},
 		&model.ProjectModelPackDO{},
 		&model.ProjectDatatableDO{},
+		&model.DatasourceDO{},
+		&model.DatasourceNodeDO{},
 	)
 	if err != nil {
 		t.Fatalf("failed to migrate: %v", err)
@@ -50,6 +52,7 @@ func TestProjectService_CreateAndGet(t *testing.T) {
 		repository.NewProjectInstRepo(db),
 		repository.NewProjectNodeRepo(db),
 		repository.NewDatatableRepo(db),
+		db,
 	)
 
 	vo, err := svc.CreateProject(context.Background(), &CreateProjectRequest{
@@ -86,6 +89,7 @@ func TestProjectService_ListProjects(t *testing.T) {
 		repository.NewProjectInstRepo(db),
 		repository.NewProjectNodeRepo(db),
 		repository.NewDatatableRepo(db),
+		db,
 	)
 
 	// Create 3 projects
@@ -115,6 +119,7 @@ func TestProjectService_DeleteProject(t *testing.T) {
 		repository.NewProjectInstRepo(db),
 		repository.NewProjectNodeRepo(db),
 		repository.NewDatatableRepo(db),
+		db,
 	)
 
 	vo, _ := svc.CreateProject(context.Background(), &CreateProjectRequest{
@@ -140,6 +145,7 @@ func TestProjectService_AddNode(t *testing.T) {
 		repository.NewProjectInstRepo(db),
 		repository.NewProjectNodeRepo(db),
 		repository.NewDatatableRepo(db),
+		db,
 	)
 
 	vo, _ := svc.CreateProject(context.Background(), &CreateProjectRequest{
@@ -165,6 +171,7 @@ func newProjectServiceForTest(db *gorm.DB) *ProjectService {
 		repository.NewProjectInstRepo(db),
 		repository.NewProjectNodeRepo(db),
 		repository.NewDatatableRepo(db),
+		db,
 	)
 }
 
@@ -288,6 +295,85 @@ func TestProjectService_UpdateTableConfig(t *testing.T) {
 	db.Where("project_id = ? AND node_id = ? AND datatable_id = ?", "proj-1", "alice", "dt-1").First(&dt)
 	if dt.TableConfigs != `[{"colName":"b"}]` {
 		t.Errorf("expected updated configs, got %q", dt.TableConfigs)
+	}
+}
+
+func TestNodeService_ListTeeNodes(t *testing.T) {
+	db := setupExtendedTestDB(t)
+	svc := NewNodeService(repository.NewNodeRepo(db), repository.NewNodeRouteRepo(db), nil)
+
+	// mode 0 = mpc-only (excluded), mode 1 = tee-only, mode 2 = mpc&tee (both included)
+	for _, n := range []CreateNodeRequest{
+		{NodeID: "mpc-node", Name: "mpc", Mode: 0},
+		{NodeID: "tee-node", Name: "tee", Mode: 1},
+		{NodeID: "hybrid-node", Name: "hybrid", Mode: 2},
+	} {
+		if _, err := svc.CreateNode(context.Background(), &n); err != nil {
+			t.Fatalf("CreateNode(%s) failed: %v", n.NodeID, err)
+		}
+	}
+
+	teeNodes, err := svc.ListTeeNodes(context.Background())
+	if err != nil {
+		t.Fatalf("ListTeeNodes failed: %v", err)
+	}
+	if len(teeNodes) != 2 {
+		t.Fatalf("expected 2 tee-capable nodes, got %d", len(teeNodes))
+	}
+	ids := map[string]bool{}
+	for _, n := range teeNodes {
+		ids[n.NodeID] = true
+	}
+	if !ids["tee-node"] || !ids["hybrid-node"] {
+		t.Errorf("expected tee-node and hybrid-node, got %v", ids)
+	}
+	if ids["mpc-node"] {
+		t.Errorf("mpc-only node must not be tee-capable")
+	}
+}
+
+func TestProjectService_ListProjectDatasources(t *testing.T) {
+	db := setupExtendedTestDB(t)
+	svc := newProjectServiceForTest(db)
+
+	vo, err := svc.CreateProject(context.Background(), &CreateProjectRequest{
+		Name: "p1", NodeIDs: []string{"alice"},
+	}, "admin")
+	if err != nil {
+		t.Fatalf("CreateProject failed: %v", err)
+	}
+
+	// Node name source.
+	if err := db.Create(&model.NodeDO{NodeID: "alice", Name: "Alice Node", ControlNodeID: "alice", Type: "normal", MasterNodeID: "master"}).Error; err != nil {
+		t.Fatalf("create node failed: %v", err)
+	}
+	// A datasource bound to node alice.
+	if err := db.Create(&model.DatasourceDO{DatasourceID: "ds1", Name: "DS One", Type: "OSS", Status: "Available", OwnerID: "admin"}).Error; err != nil {
+		t.Fatalf("create datasource failed: %v", err)
+	}
+	if err := db.Create(&model.DatasourceNodeDO{DatasourceID: "ds1", NodeID: "alice"}).Error; err != nil {
+		t.Fatalf("create datasource-node failed: %v", err)
+	}
+
+	result, err := svc.ListProjectDatasources(context.Background(), vo.ProjectID)
+	if err != nil {
+		t.Fatalf("ListProjectDatasources failed: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("expected 1 node grouping, got %d", len(result))
+	}
+	if result[0].NodeID != "alice" {
+		t.Errorf("expected nodeId alice, got %q", result[0].NodeID)
+	}
+	if result[0].NodeName != "Alice Node" {
+		t.Errorf("expected nodeName 'Alice Node', got %q", result[0].NodeName)
+	}
+	if len(result[0].DataSources) != 1 {
+		t.Fatalf("expected 1 datasource, got %d", len(result[0].DataSources))
+	}
+	ds := result[0].DataSources[0]
+	if ds.DataSourceID != "ds1" || ds.DataSourceName != "DS One" || ds.Type != "OSS" {
+		t.Errorf("unexpected datasource item: %+v", ds)
 	}
 }
 

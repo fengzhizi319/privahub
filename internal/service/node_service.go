@@ -165,6 +165,24 @@ func (s *NodeService) ListNodes(ctx context.Context) ([]NodeVO, error) {
 	return result, nil
 }
 
+// ListTeeNodes retrieves all TEE-capable nodes. A node is TEE-capable when its
+// Mode bitfield includes TEE (NodeDO.Mode: 0=mpc, 1=tee, 2=mpc&tee), i.e. mode
+// 1 or 2. Used by the frontend project/tee/list endpoint to pick TEE nodes.
+func (s *NodeService) ListTeeNodes(ctx context.Context) ([]NodeVO, error) {
+	nodes, err := s.nodeRepo.FindAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]NodeVO, 0)
+	for i := range nodes {
+		if nodes[i].Mode == 1 || nodes[i].Mode == 2 {
+			result = append(result, *s.toNodeVO(&nodes[i]))
+		}
+	}
+	return result, nil
+}
+
 // DeleteNode deletes a node by ID.
 func (s *NodeService) DeleteNode(ctx context.Context, nodeID string) error {
 	node, err := s.nodeRepo.FindByNodeID(ctx, nodeID)

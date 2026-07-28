@@ -126,8 +126,10 @@
 - ✅ `project/datatable/add`：写入项目-节点-数据表关联，列配置（`configs`）持久化到 `table_configs`
 - ✅ `project/datatable/delete`：按 (project,node,datatable) 删除关联，幂等
 - ✅ `project/update/tableConfig`：更新列配置，缺失时自动 upsert
+- ✅ `project/tee/list`：返回全局 TEE 能力节点（`NodeDO.Mode` 为 1/2），修正原 `project_id required` 导致前端空体请求必错的问题
+- ✅ `project/datasource/list`：按项目节点聚合数据源（`datasource_node` 关联），返回 `[{nodeId,nodeName,dataSources[]}]`
 
-仍为骨架、列为后续迭代项的端点：`project/tee/list`（空数组，需 TEE 节点来源）、`project/getOutTable`（空 tables，需图输出表解析，且前端请求用 `graphId`）、`project/datasource/list`（空数组，需按项目节点聚合数据源）。这些属于与全功能版的**逻辑深度差距**，优先级低于契约不匹配（契约不通时页面直接不可用）。
+仍为骨架、列为后续迭代项的端点：`project/getOutTable`（空 tables，需图输出表解析，且前端请求用 `graphId`）。这些属于与全功能版的**逻辑深度差距**，优先级低于契约不匹配（契约不通时页面直接不可用）。
 
 ---
 
