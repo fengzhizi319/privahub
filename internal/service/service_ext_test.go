@@ -377,6 +377,60 @@ func TestProjectService_ListProjectDatasources(t *testing.T) {
 	}
 }
 
+func TestProjectService_GetProjectOutTable(t *testing.T) {
+	db := setupExtendedTestDB(t)
+	svc := newProjectServiceForTest(db)
+
+	vo, err := svc.CreateProject(context.Background(), &CreateProjectRequest{
+		Name: "out-proj", NodeIDs: []string{"alice"},
+	}, "admin")
+	if err != nil {
+		t.Fatalf("CreateProject failed: %v", err)
+	}
+	pid := vo.ProjectID
+
+	// One graph, one job.
+	if err := db.Create(&model.ProjectGraphDO{ProjectID: pid, GraphID: "g1", Name: "graph-1"}).Error; err != nil {
+		t.Fatalf("create graph failed: %v", err)
+	}
+	if err := db.Create(&model.ProjectJobDO{ProjectID: pid, JobID: "j1", Name: "job-1", Status: "Succeed", GraphID: "g1"}).Error; err != nil {
+		t.Fatalf("create job failed: %v", err)
+	}
+	// Graph node with declared outputs and one without.
+	if err := db.Create(&model.ProjectGraphNodeDO{ProjectID: pid, GraphID: "g1", GraphNodeID: "n1", CodeName: "data_prep", Outputs: `["out_table_a","out_table_b"]`}).Error; err != nil {
+		t.Fatalf("create graph node n1 failed: %v", err)
+	}
+	if err := db.Create(&model.ProjectGraphNodeDO{ProjectID: pid, GraphID: "g1", GraphNodeID: "n2", CodeName: "read_data", Outputs: ``}).Error; err != nil {
+		t.Fatalf("create graph node n2 failed: %v", err)
+	}
+
+	out, err := svc.GetProjectOutTable(context.Background(), pid, "")
+	if err != nil {
+		t.Fatalf("GetProjectOutTable failed: %v", err)
+	}
+	if out.ProjectID != pid || out.ProjectName != "out-proj" {
+		t.Errorf("unexpected project meta: %+v", out)
+	}
+	if out.GraphCount != 1 || out.JobCount != 1 {
+		t.Errorf("expected graphCount=1 jobCount=1, got %d/%d", out.GraphCount, out.JobCount)
+	}
+	if len(out.Nodes) != 1 {
+		t.Fatalf("expected 1 output-bearing node, got %d", len(out.Nodes))
+	}
+	if out.Nodes[0].GraphNodeID != "n1" || len(out.Nodes[0].Outputs) != 2 {
+		t.Errorf("unexpected node output: %+v", out.Nodes[0])
+	}
+
+	// Filtering by a non-existent graph yields no nodes.
+	out2, err := svc.GetProjectOutTable(context.Background(), pid, "no-such-graph")
+	if err != nil {
+		t.Fatalf("GetProjectOutTable (filtered) failed: %v", err)
+	}
+	if len(out2.Nodes) != 0 {
+		t.Errorf("expected 0 nodes for unknown graph, got %d", len(out2.Nodes))
+	}
+}
+
 // --- GraphService Tests ---
 
 func TestGraphService_CreateAndList(t *testing.T) {

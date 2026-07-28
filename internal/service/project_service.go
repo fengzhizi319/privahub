@@ -451,3 +451,65 @@ func (s *ProjectService) ListProjectDatasources(ctx context.Context, projectID s
 
 	return result, nil
 }
+
+// ProjectGraphOutputVO lists a graph node's declared output tables (frontend contract).
+type ProjectGraphOutputVO struct {
+	GraphID     string   `json:"graphId"`
+	GraphNodeID string   `json:"graphNodeId"`
+	Outputs     []string `json:"outputs"`
+}
+
+// ProjectOutputVO aggregates project metadata with its graph-node output tables (frontend contract).
+type ProjectOutputVO struct {
+	ProjectID   string                 `json:"projectId"`
+	ProjectName string                 `json:"projectName"`
+	Description string                 `json:"description"`
+	ComputeMode string                 `json:"computeMode"`
+	GmtCreate   string                 `json:"gmtCreate"`
+	GraphCount  int64                  `json:"graphCount"`
+	JobCount    int64                  `json:"jobCount"`
+	Nodes       []ProjectGraphOutputVO `json:"nodes"`
+}
+
+// GetProjectOutTable returns a project's output tables for the frontend
+// project/getOutTable endpoint. It aggregates project metadata, graph/job
+// counts and each graph node's declared output tables (parsed from the graph
+// node Outputs JSON, the same source used by the node-output fallback). When
+// graphID is non-empty, only that graph's nodes are included.
+func (s *ProjectService) GetProjectOutTable(ctx context.Context, projectID, graphID string) (*ProjectOutputVO, error) {
+	vo := &ProjectOutputVO{ProjectID: projectID, Nodes: make([]ProjectGraphOutputVO, 0)}
+
+	if project, err := s.projectRepo.FindByProjectID(ctx, projectID); err == nil {
+		vo.ProjectName = project.Name
+		vo.Description = project.Description
+		vo.ComputeMode = project.ComputeMode
+		vo.GmtCreate = project.GmtCreate.Format("2006-01-02 15:04:05")
+	}
+
+	_ = s.db.WithContext(ctx).Model(&model.ProjectGraphDO{}).Where("project_id = ?", projectID).Count(&vo.GraphCount).Error
+	_ = s.db.WithContext(ctx).Model(&model.ProjectJobDO{}).Where("project_id = ?", projectID).Count(&vo.JobCount).Error
+
+	nodeQuery := s.db.WithContext(ctx).Where("project_id = ?", projectID)
+	if graphID != "" {
+		nodeQuery = nodeQuery.Where("graph_id = ?", graphID)
+	}
+	var graphNodes []model.ProjectGraphNodeDO
+	if err := nodeQuery.Find(&graphNodes).Error; err == nil {
+		for _, gn := range graphNodes {
+			var outNames []string
+			if gn.Outputs != "" {
+				_ = json.Unmarshal([]byte(gn.Outputs), &outNames)
+			}
+			if len(outNames) == 0 {
+				continue
+			}
+			vo.Nodes = append(vo.Nodes, ProjectGraphOutputVO{
+				GraphID:     gn.GraphID,
+				GraphNodeID: gn.GraphNodeID,
+				Outputs:     outNames,
+			})
+		}
+	}
+
+	return vo, nil
+}

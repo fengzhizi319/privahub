@@ -471,33 +471,3 @@ func (h *MiscHandler) RefreshNode(c *gin.Context) {
 		"type":    node.Type,
 	})
 }
-
-// NodeResultList handles node result list retrieval.
-func (h *MiscHandler) NodeResultList(c *gin.Context) {
-	var req struct {
-		NodeID string `json:"node_id" binding:"required"`
-		Page   int    `json:"page"`
-		Size   int    `json:"size"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	// Results come from Kuscia - return empty for now
-	response.OK(c, gin.H{"data": []interface{}{}, "total": 0})
-}
-
-// NodeResultDetail handles node result detail retrieval.
-func (h *MiscHandler) NodeResultDetail(c *gin.Context) {
-	var req struct {
-		NodeID   string `json:"node_id" binding:"required"`
-		ResultID string `json:"result_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	response.OK(c, gin.H{"result_id": req.ResultID})
-}

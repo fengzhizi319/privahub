@@ -4,7 +4,7 @@
 > - **迁移版**：前端 `clwork/privahub/web`（privaconsole，vite + React + Tailwind + FSD），后端 `clwork/privahub`（Go + Gin + GORM）
 > - **全功能版**：前端 `sfwork/secretpad/frontend-src`（umi + AntD5），后端 `sfwork/secretpad`（Java + Spring Boot）
 >
-> 评估日期：2026-07-28（首版）；2026-07-28 二次深度评估（修订版）
+> 评估日期：2026-07-28（首版）；2026-07-28 二次深度评估（修订版）；2026-07-28 三次落地复核（现状版）
 
 ---
 
@@ -44,6 +44,20 @@
 **修订版核心差距 = 系统性 snake_case ↔ camelCase 契约不匹配（请求 + 响应），而非端点缺失。**
 
 最优解：在 Gin 层引入**全局 camelCase 兼容中间件**（请求体双向补键 + 响应体 snake→camel 转换），一次性、无侵入地打通全部现有端点；再补齐 `model/serving/*` 路径别名。
+
+### 2.3 三次评估结论（落地现状，2026-07-28）✅
+
+> 本轮以「代码实际实现」为准逐端点复核，确认前两轮发现的差距**均已落地修复**，迁移版后端与全功能版的差距已从「端点缺失 / 契约不通」收敛为「Kuscia 运行时深度」。
+
+| 维度 | 现状 |
+| --- | --- |
+| **契约不匹配（修订版 P0）** | ✅ 已修复。全局 camelCase 兼容中间件（`middleware/camelcase.go`）已提交（commit `58483e4`），请求双向补键 + 响应 snake→camel，含单测。 |
+| **路径不匹配（`model/serving/*`）** | ✅ 已修复。别名路由已注册。 |
+| **16 个缺失端点（首版）** | ✅ 全部注册且实现（见第四节复核表）：DB 直连或 Kuscia＋优雅降级。 |
+| **project 模块骨架端点** | ✅ 全部落地为真实 DB 实现：datatable add/delete/tableConfig、tee/list、datasource/list、getOutTable（含服务层单测）。 |
+| **死代码清理** | ✅ 移除 `misc_handler.go` 中未路由的重复 `NodeResultList/NodeResultDetail`（真实路由指向 `NodeHandler`）。 |
+
+**当前唯一剩余差距 = Kuscia 运行时深度**：结果列表/详情、pushToTee、图执行产生真实输出等能力依赖活 Kuscia 集群；无 Kuscia 时按设计优雅降级（返回空集合 / 最佳努力记录），页面可打开但无实时计算数据。这属于**部署/运行时能力差距**，非代码缺失，需联调环境验证而非离线补齐。
 
 ---
 
@@ -128,14 +142,25 @@
 - ✅ `project/update/tableConfig`：更新列配置，缺失时自动 upsert
 - ✅ `project/tee/list`：返回全局 TEE 能力节点（`NodeDO.Mode` 为 1/2），修正原 `project_id required` 导致前端空体请求必错的问题
 - ✅ `project/datasource/list`：按项目节点聚合数据源（`datasource_node` 关联），返回 `[{nodeId,nodeName,dataSources[]}]`
+- ✅ `project/getOutTable`：聚合项目元信息 + 图/作业计数 + 各图节点声明输出表（解析 `project_graph_node.outputs` JSON，与节点输出 fallback 同源），支持 `graphId` 过滤，返回 `ProjectOutputVO`
 
-仍为骨架、列为后续迭代项的端点：`project/getOutTable`（空 tables，需图输出表解析，且前端请求用 `graphId`）。这些属于与全功能版的**逻辑深度差距**，优先级低于契约不匹配（契约不通时页面直接不可用）。
+至此，`project/*` 模块的所有骨架端点均已落地为真实 DB 实现（含服务层单测）。项目模块剩余的**逻辑深度差距**集中在依赖 Kuscia 运行时的图执行/作业链路（见下节），属于与全功能版的运行时能力差距，优先级低于契约不匹配（契约不通时页面直接不可用）。
 
 ---
 
-## 四、后端差距明细（16 个缺失端点）
+## 四、后端差距明细（16 个端点：已全部注册并实现）✅
 
-以下端点均满足：**迁移版前端 `client.ts` 已调用** + **OpenAPI 已定义契约** + **Go 后端 `router.go` 未注册**。按模块分组：
+> **三次复核更新**：以下 16 个端点首版评估时为「前端已调用 + OpenAPI 已定义 + Go `router.go` 未注册」。现状：**全部已在 `router.go` 注册并有真实实现**（DB 直连或 Kuscia＋优雅降级），不再是「缺失端点」。下表保留原始分类以供追溯，并标注当前实现方式。
+
+| 模块 | 端点数 | 当前实现方式 | 状态 |
+| --- | --- | --- | --- |
+| 4.1 结果管理 | 2 | `NodeService.ListNodeResults/GetNodeResultDetail`：Kuscia DomainData 查询＋不可用时跳过/降级 | ✅ |
+| 4.2 数据源 | 1 | `DatasourceService.GetDatasourceNodes`：`datasource_node` 关联 DB 查询 | ✅ |
+| 4.3 数据表 | 3 | `DatatableService.CreateDatatableCompat/GetDatatableCompat`（DB）＋`PushDatatableToTee`（DB 记录＋Kuscia 最佳努力授权） | ✅ |
+| 4.4 周期任务 | 9 | `ScheduledService`：cron 引擎＋`ProjectScheduleTaskDO` DB 实现，图执行依赖 Kuscia 时降级 | ✅ |
+| 4.5 机构注册 | 1 | `MiscHandler.RegisterInstNode`：multipart 上传＋机构节点注册 | ✅ |
+
+以下保留首版的原始分组明细（仅供追溯）：
 
 ### 4.1 结果管理模块（Node Result，2 个）
 

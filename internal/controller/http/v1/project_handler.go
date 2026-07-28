@@ -274,14 +274,20 @@ func (h *ProjectHandler) TeeList(c *gin.Context) {
 func (h *ProjectHandler) GetOutTable(c *gin.Context) {
 	var req struct {
 		ProjectID string `json:"project_id" binding:"required"`
-		JobID     string `json:"job_id"`
+		GraphID   string `json:"graph_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
 
-	response.OK(c, gin.H{"project_id": req.ProjectID, "tables": []interface{}{}})
+	vo, err := h.projectService.GetProjectOutTable(c.Request.Context(), req.ProjectID, req.GraphID)
+	if err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
+	response.OK(c, vo)
 }
 
 // UpdateTableConfig handles table config update.
