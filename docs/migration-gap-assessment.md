@@ -121,7 +121,13 @@
 
 ### D. 骨架实现（逻辑深度差距）
 
-部分 handler 仅绑定请求后直接返回空值，无实际业务逻辑：`project/datatable/add|delete`（OKEmpty）、`project/tee/list`（空数组）、`project/getOutTable`（空 tables）、`project/datasource/list`（空数组）、`project/update/tableConfig`（OKEmpty）。这些属于与全功能版的**逻辑深度差距**，优先级低于契约不匹配（契约不通时页面直接不可用），列为后续迭代项。
+部分 handler 仅绑定请求后直接返回空值，无实际业务逻辑。本轮已将其中**数据表关联三端点**落地为真实的 DB 实现（基于 `project_datatable` 表 / `ProjectDatatableDO`，幂等 upsert，含服务层单测）：
+
+- ✅ `project/datatable/add`：写入项目-节点-数据表关联，列配置（`configs`）持久化到 `table_configs`
+- ✅ `project/datatable/delete`：按 (project,node,datatable) 删除关联，幂等
+- ✅ `project/update/tableConfig`：更新列配置，缺失时自动 upsert
+
+仍为骨架、列为后续迭代项的端点：`project/tee/list`（空数组，需 TEE 节点来源）、`project/getOutTable`（空 tables，需图输出表解析，且前端请求用 `graphId`）、`project/datasource/list`（空数组，需按项目节点聚合数据源）。这些属于与全功能版的**逻辑深度差距**，优先级低于契约不匹配（契约不通时页面直接不可用）。
 
 ---
 

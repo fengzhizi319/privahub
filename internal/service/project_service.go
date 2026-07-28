@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/google/uuid"
@@ -11,14 +12,28 @@ import (
 
 // Project service errors.
 var (
-	ErrProjectNotFound = errors.New("project not found")
+	ErrProjectNotFound         = errors.New("project not found")
+	ErrProjectDatatableInvalid = errors.New("project datatable request missing required ids")
 )
+
+// firstNonEmpty returns the first non-empty string from the given values.
+// It reconciles the dual-field (snake_case / camelCase) DTO convention so the
+// service works whether or not the case-normalization middleware ran.
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
+}
 
 // ProjectService handles project management.
 type ProjectService struct {
-	projectRepo     repository.ProjectRepository
-	projectInstRepo repository.ProjectInstRepository
-	projectNodeRepo repository.ProjectNodeRepository
+	projectRepo          repository.ProjectRepository
+	projectInstRepo      repository.ProjectInstRepository
+	projectNodeRepo      repository.ProjectNodeRepository
+	projectDatatableRepo repository.DatatableRepository
 }
 
 // NewProjectService creates a new ProjectService.
@@ -26,11 +41,13 @@ func NewProjectService(
 	projectRepo repository.ProjectRepository,
 	projectInstRepo repository.ProjectInstRepository,
 	projectNodeRepo repository.ProjectNodeRepository,
+	projectDatatableRepo repository.DatatableRepository,
 ) *ProjectService {
 	return &ProjectService{
-		projectRepo:     projectRepo,
-		projectInstRepo: projectInstRepo,
-		projectNodeRepo: projectNodeRepo,
+		projectRepo:          projectRepo,
+		projectInstRepo:      projectInstRepo,
+		projectNodeRepo:      projectNodeRepo,
+		projectDatatableRepo: projectDatatableRepo,
 	}
 }
 
@@ -220,16 +237,20 @@ func (s *ProjectService) ArchiveProject(ctx context.Context, projectID string) e
 
 // AddDatatableRequest represents adding a datatable to a project.
 type AddDatatableRequest struct {
-	ProjectID        string `json:"project_id"`
-	ProjectIDAlt     string `json:"projectId"`
-	DatatableID      string `json:"datatable_id"`
-	DatatableIDAlt   string `json:"datatableId"`
-	DatatableName    string `json:"datatable_name"`
-	DatatableNameAlt string `json:"datatableName"`
-	NodeID           string `json:"node_id"`
-	NodeIDAlt        string `json:"nodeId"`
-	DatasourceID     string `json:"datasource_id"`
-	DatasourceIDAlt  string `json:"datasourceId"`
+	ProjectID        string          `json:"project_id"`
+	ProjectIDAlt     string          `json:"projectId"`
+	DatatableID      string          `json:"datatable_id"`
+	DatatableIDAlt   string          `json:"datatableId"`
+	DatatableName    string          `json:"datatable_name"`
+	DatatableNameAlt string          `json:"datatableName"`
+	NodeID           string          `json:"node_id"`
+	NodeIDAlt        string          `json:"nodeId"`
+	DatasourceID     string          `json:"datasource_id"`
+	DatasourceIDAlt  string          `json:"datasourceId"`
+	TeeNodeID        string          `json:"tee_node_id"`
+	TeeNodeIDAlt     string          `json:"teeNodeId"`
+	Type             string          `json:"type"`
+	Configs          json.RawMessage `json:"configs"`
 }
 
 // ProjDeleteDatatableRequest represents removing a datatable from a project.
@@ -289,4 +310,75 @@ func (s *ProjectService) toProjectVO(ctx context.Context, project *model.Project
 	}
 
 	return vo
+}
+
+// --- Project Datatable operations ---
+
+// AddDatatable associates a datatable with a project on a node. The operation
+// is idempotent: re-adding an existing association updates its column configs.
+// Column configs are persisted verbatim as JSON in ProjectDatatableDO.TableConfigs.
+func (s *ProjectService) AddDatatable(ctx context.Context, req *AddDatatableRequest) error {
+	projectID := firstNonEmpty(req.ProjectID, req.ProjectIDAlt)
+	nodeID := firstNonEmpty(req.NodeID, req.NodeIDAlt)
+	datatableID := firstNonEmpty(req.DatatableID, req.DatatableIDAlt)
+	if projectID == "" || nodeID == "" || datatableID == "" {
+		return ErrProjectDatatableInvalid
+	}
+
+	tableConfigs := "[]"
+	if len(req.Configs) > 0 {
+		tableConfigs = string(req.Configs)
+	}
+
+	existing, err := s.projectDatatableRepo.FindByProjectNodeDatatable(ctx, projectID, nodeID, datatableID)
+	if err == nil && existing != nil {
+		existing.TableConfigs = tableConfigs
+		return s.projectDatatableRepo.Update(ctx, existing)
+	}
+
+	return s.projectDatatableRepo.Create(ctx, &model.ProjectDatatableDO{
+		ProjectID:    projectID,
+		NodeID:       nodeID,
+		DatatableID:  datatableID,
+		TableConfigs: tableConfigs,
+		Source:       "IMPORTED",
+	})
+}
+
+// DeleteDatatable removes a datatable association from a project. It is
+// idempotent: deleting a non-existent association is a no-op success.
+func (s *ProjectService) DeleteDatatable(ctx context.Context, req *ProjDeleteDatatableRequest) error {
+	projectID := firstNonEmpty(req.ProjectID, req.ProjectIDAlt)
+	nodeID := firstNonEmpty(req.NodeID, req.NodeIDAlt)
+	datatableID := firstNonEmpty(req.DatatableID, req.DatatableIDAlt)
+	if projectID == "" || nodeID == "" || datatableID == "" {
+		return ErrProjectDatatableInvalid
+	}
+
+	existing, err := s.projectDatatableRepo.FindByProjectNodeDatatable(ctx, projectID, nodeID, datatableID)
+	if err != nil || existing == nil {
+		return nil
+	}
+	return s.projectDatatableRepo.Delete(ctx, existing.ID)
+}
+
+// UpdateTableConfig updates the column configs of a project datatable. If the
+// association does not exist yet it is created (upsert) so config edits are
+// durable even before an explicit add.
+func (s *ProjectService) UpdateTableConfig(ctx context.Context, req *AddDatatableRequest) error {
+	projectID := firstNonEmpty(req.ProjectID, req.ProjectIDAlt)
+	nodeID := firstNonEmpty(req.NodeID, req.NodeIDAlt)
+	datatableID := firstNonEmpty(req.DatatableID, req.DatatableIDAlt)
+	if projectID == "" || nodeID == "" || datatableID == "" {
+		return ErrProjectDatatableInvalid
+	}
+
+	existing, err := s.projectDatatableRepo.FindByProjectNodeDatatable(ctx, projectID, nodeID, datatableID)
+	if err != nil || existing == nil {
+		return s.AddDatatable(ctx, req)
+	}
+	if len(req.Configs) > 0 {
+		existing.TableConfigs = string(req.Configs)
+	}
+	return s.projectDatatableRepo.Update(ctx, existing)
 }

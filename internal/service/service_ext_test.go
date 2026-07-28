@@ -32,6 +32,7 @@ func setupExtendedTestDB(t *testing.T) *gorm.DB {
 		&model.InstDO{},
 		&model.ProjectModelServingDO{},
 		&model.ProjectModelPackDO{},
+		&model.ProjectDatatableDO{},
 	)
 	if err != nil {
 		t.Fatalf("failed to migrate: %v", err)
@@ -48,6 +49,7 @@ func TestProjectService_CreateAndGet(t *testing.T) {
 		repository.NewProjectRepo(db),
 		repository.NewProjectInstRepo(db),
 		repository.NewProjectNodeRepo(db),
+		repository.NewDatatableRepo(db),
 	)
 
 	vo, err := svc.CreateProject(context.Background(), &CreateProjectRequest{
@@ -83,6 +85,7 @@ func TestProjectService_ListProjects(t *testing.T) {
 		repository.NewProjectRepo(db),
 		repository.NewProjectInstRepo(db),
 		repository.NewProjectNodeRepo(db),
+		repository.NewDatatableRepo(db),
 	)
 
 	// Create 3 projects
@@ -111,6 +114,7 @@ func TestProjectService_DeleteProject(t *testing.T) {
 		repository.NewProjectRepo(db),
 		repository.NewProjectInstRepo(db),
 		repository.NewProjectNodeRepo(db),
+		repository.NewDatatableRepo(db),
 	)
 
 	vo, _ := svc.CreateProject(context.Background(), &CreateProjectRequest{
@@ -135,6 +139,7 @@ func TestProjectService_AddNode(t *testing.T) {
 		repository.NewProjectRepo(db),
 		repository.NewProjectInstRepo(db),
 		repository.NewProjectNodeRepo(db),
+		repository.NewDatatableRepo(db),
 	)
 
 	vo, _ := svc.CreateProject(context.Background(), &CreateProjectRequest{
@@ -151,6 +156,138 @@ func TestProjectService_AddNode(t *testing.T) {
 	db.Model(&model.ProjectNodeDO{}).Where("project_id = ? AND node_id = ?", vo.ProjectID, "alice").Count(&count)
 	if count != 1 {
 		t.Errorf("expected 1 project-node association, got %d", count)
+	}
+}
+
+func newProjectServiceForTest(db *gorm.DB) *ProjectService {
+	return NewProjectService(
+		repository.NewProjectRepo(db),
+		repository.NewProjectInstRepo(db),
+		repository.NewProjectNodeRepo(db),
+		repository.NewDatatableRepo(db),
+	)
+}
+
+func TestFirstNonEmpty(t *testing.T) {
+	if got := firstNonEmpty("", "", "x"); got != "x" {
+		t.Errorf("firstNonEmpty(\"\",\"\",\"x\") = %q, want \"x\"", got)
+	}
+	if got := firstNonEmpty("a", "b"); got != "a" {
+		t.Errorf("firstNonEmpty(\"a\",\"b\") = %q, want \"a\"", got)
+	}
+	if got := firstNonEmpty(); got != "" {
+		t.Errorf("firstNonEmpty() = %q, want \"\"", got)
+	}
+}
+
+func TestProjectService_AddDatatable(t *testing.T) {
+	db := setupExtendedTestDB(t)
+	svc := newProjectServiceForTest(db)
+
+	req := &AddDatatableRequest{
+		ProjectID:   "proj-1",
+		NodeID:      "alice",
+		DatatableID: "dt-1",
+		Configs:     []byte(`[{"colName":"id","isLabelKey":true}]`),
+	}
+	if err := svc.AddDatatable(context.Background(), req); err != nil {
+		t.Fatalf("AddDatatable failed: %v", err)
+	}
+
+	var dt model.ProjectDatatableDO
+	if err := db.Where("project_id = ? AND node_id = ? AND datatable_id = ?", "proj-1", "alice", "dt-1").First(&dt).Error; err != nil {
+		t.Fatalf("expected persisted project_datatable row: %v", err)
+	}
+	if dt.TableConfigs != `[{"colName":"id","isLabelKey":true}]` {
+		t.Errorf("unexpected table_configs: %q", dt.TableConfigs)
+	}
+	if dt.Source != "IMPORTED" {
+		t.Errorf("expected source IMPORTED, got %q", dt.Source)
+	}
+
+	// Idempotent re-add updates configs without creating a duplicate row.
+	req.Configs = []byte(`[{"colName":"name"}]`)
+	if err := svc.AddDatatable(context.Background(), req); err != nil {
+		t.Fatalf("re-AddDatatable failed: %v", err)
+	}
+	var count int64
+	db.Model(&model.ProjectDatatableDO{}).Where("project_id = ? AND node_id = ? AND datatable_id = ?", "proj-1", "alice", "dt-1").Count(&count)
+	if count != 1 {
+		t.Errorf("expected exactly 1 row after idempotent re-add, got %d", count)
+	}
+	var dt2 model.ProjectDatatableDO
+	db.Where("project_id = ? AND node_id = ? AND datatable_id = ?", "proj-1", "alice", "dt-1").First(&dt2)
+	if dt2.TableConfigs != `[{"colName":"name"}]` {
+		t.Errorf("expected updated configs, got %q", dt2.TableConfigs)
+	}
+}
+
+func TestProjectService_AddDatatable_MissingIDs(t *testing.T) {
+	db := setupExtendedTestDB(t)
+	svc := newProjectServiceForTest(db)
+
+	err := svc.AddDatatable(context.Background(), &AddDatatableRequest{ProjectID: "proj-1"})
+	if err != ErrProjectDatatableInvalid {
+		t.Errorf("expected ErrProjectDatatableInvalid, got %v", err)
+	}
+}
+
+func TestProjectService_DeleteDatatable(t *testing.T) {
+	db := setupExtendedTestDB(t)
+	svc := newProjectServiceForTest(db)
+
+	_ = svc.AddDatatable(context.Background(), &AddDatatableRequest{
+		ProjectID: "proj-1", NodeID: "alice", DatatableID: "dt-1",
+	})
+
+	err := svc.DeleteDatatable(context.Background(), &ProjDeleteDatatableRequest{
+		ProjectID: "proj-1", NodeID: "alice", DatatableID: "dt-1",
+	})
+	if err != nil {
+		t.Fatalf("DeleteDatatable failed: %v", err)
+	}
+
+	var count int64
+	db.Model(&model.ProjectDatatableDO{}).Where("project_id = ? AND node_id = ? AND datatable_id = ?", "proj-1", "alice", "dt-1").Count(&count)
+	if count != 0 {
+		t.Errorf("expected 0 rows after deletion, got %d", count)
+	}
+
+	// Idempotent: deleting a non-existent association succeeds.
+	if err := svc.DeleteDatatable(context.Background(), &ProjDeleteDatatableRequest{
+		ProjectID: "x", NodeID: "y", DatatableID: "z",
+	}); err != nil {
+		t.Errorf("idempotent delete should succeed, got %v", err)
+	}
+}
+
+func TestProjectService_UpdateTableConfig(t *testing.T) {
+	db := setupExtendedTestDB(t)
+	svc := newProjectServiceForTest(db)
+
+	// Upsert: config update on a missing association creates the row.
+	req := &AddDatatableRequest{
+		ProjectID: "proj-1", NodeID: "alice", DatatableID: "dt-1",
+		Configs: []byte(`[{"colName":"a"}]`),
+	}
+	if err := svc.UpdateTableConfig(context.Background(), req); err != nil {
+		t.Fatalf("UpdateTableConfig (upsert) failed: %v", err)
+	}
+	var count int64
+	db.Model(&model.ProjectDatatableDO{}).Where("project_id = ? AND node_id = ? AND datatable_id = ?", "proj-1", "alice", "dt-1").Count(&count)
+	if count != 1 {
+		t.Fatalf("expected 1 row after upsert, got %d", count)
+	}
+
+	// Update existing association's configs.
+	req.Configs = []byte(`[{"colName":"b"}]`)
+	if err := svc.UpdateTableConfig(context.Background(), req); err != nil {
+		t.Fatalf("UpdateTableConfig (update) failed: %v", err)
+	}
+	var dt model.ProjectDatatableDO
+	db.Where("project_id = ? AND node_id = ? AND datatable_id = ?", "proj-1", "alice", "dt-1").First(&dt)
+	if dt.TableConfigs != `[{"colName":"b"}]` {
+		t.Errorf("expected updated configs, got %q", dt.TableConfigs)
 	}
 }
 

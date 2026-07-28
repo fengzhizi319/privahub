@@ -197,7 +197,15 @@ func (h *ProjectHandler) AddDatatable(c *gin.Context) {
 		return
 	}
 
-	// Delegate to datatable service via DB (simplified)
+	if err := h.projectService.AddDatatable(c.Request.Context(), &req); err != nil {
+		if err == service.ErrProjectDatatableInvalid {
+			response.Fail(c, errcode.ParamError)
+			return
+		}
+		response.Fail(c, errcode.SystemError)
+		return
+	}
+
 	response.OKEmpty(c)
 }
 
@@ -206,6 +214,15 @@ func (h *ProjectHandler) DeleteDatatable(c *gin.Context) {
 	var req service.ProjDeleteDatatableRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	if err := h.projectService.DeleteDatatable(c.Request.Context(), &req); err != nil {
+		if err == service.ErrProjectDatatableInvalid {
+			response.Fail(c, errcode.ParamError)
+			return
+		}
+		response.Fail(c, errcode.SystemError)
 		return
 	}
 
@@ -270,13 +287,18 @@ func (h *ProjectHandler) GetOutTable(c *gin.Context) {
 
 // UpdateTableConfig handles table config update.
 func (h *ProjectHandler) UpdateTableConfig(c *gin.Context) {
-	var req struct {
-		ProjectID   string `json:"project_id" binding:"required"`
-		DatatableID string `json:"datatable_id" binding:"required"`
-		Config      string `json:"config"`
-	}
+	var req service.AddDatatableRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.ParamError)
+		return
+	}
+
+	if err := h.projectService.UpdateTableConfig(c.Request.Context(), &req); err != nil {
+		if err == service.ErrProjectDatatableInvalid {
+			response.Fail(c, errcode.ParamError)
+			return
+		}
+		response.Fail(c, errcode.SystemError)
 		return
 	}
 
