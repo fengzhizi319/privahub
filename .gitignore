@@ -14,7 +14,8 @@ bin/
 
 # OS
 .DS_Store
-
+# 子项目目录（独立仓库，不纳入 privahub 根仓库）
+/web/
 # Test coverage
 coverage.out
 coverage.html
