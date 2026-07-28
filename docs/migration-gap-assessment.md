@@ -120,6 +120,15 @@
 
 结论：剩余实质差距为 **Kuscia 运行时深度**（实时计算、结果产出、pushToTee 等需联调环境验证），离线代码层面的契约对齐已趋于完成。
 
+### 2.10 组件批量接口请求/响应结构修复（DAG 组件面板，2026-07-28）✅
+
+复查发现 2.9 “收敛”结论仍有一处遗漏的真实缺陷：`component/batch`（DAG 构建器加载组件定义的关键路径）请求与响应结构双双不匹配：
+
+- **请求**：前端 `batchGetComponent` 发裸数组 `[{domain, name, version?, app?}]`，Go 原期望对象 `{code_names: []}` → `ShouldBindJSON` 绑定失败返回 ParamError，组件定义加载恒失败。
+- **响应**：Go 原返回数组 `[]ComponentDef`，前端期望按 codeName 索引的对象 `Record<string, ComponentDef>`（dag 页用 `defs[codeName]` 取用）。
+
+修复：handler 改收裸数组并以 `domain/name` 拼 codeName，响应改为 `map[string]ComponentDef`（键为 codeName）。中间件 `camelCaseResponseKeys` 为追加式（保留原键），故 `data_prep/psi` 类键不被破坏，`defs[codeName]` 索引正常。`go build`/`vet`/`test` 全过。
+
 ---
 
 ## 三、评估方法

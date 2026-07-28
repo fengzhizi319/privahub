@@ -7,11 +7,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/gin-gonic/gin"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
 	"github.com/fengzhizi319/privahub/pkg/response"
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
@@ -182,30 +182,44 @@ func (h *MiscHandler) ComponentI18n(c *gin.Context) {
 
 // ComponentBatch handles batch component retrieval from config.
 func (h *MiscHandler) ComponentBatch(c *gin.Context) {
-	var req struct {
-		CodeNames []string `json:"code_names"`
+	// Frontend sends a bare array of {domain, name, version?, app?}; codeName is domain/name.
+	var requests []struct {
+		Domain  string `json:"domain"`
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		App     string `json:"app"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
+	codeNames := make([]string, 0)
+	if err := c.ShouldBindJSON(&requests); err == nil {
+		for _, r := range requests {
+			switch {
+			case r.Domain != "" && r.Name != "":
+				codeNames = append(codeNames, r.Domain+"/"+r.Name)
+			case r.Name != "":
+				codeNames = append(codeNames, r.Name)
+			}
+		}
 	}
 
 	allComponents := h.loadComponents()
 
-	if len(req.CodeNames) == 0 {
-		response.OK(c, allComponents)
+	// Frontend expects a map keyed by codeName (Record<string, ComponentDef>).
+	result := make(map[string]ComponentDef)
+	if len(codeNames) == 0 {
+		for _, comp := range allComponents {
+			result[comp.CodeName] = comp
+		}
+		response.OK(c, result)
 		return
 	}
 
-	nameSet := make(map[string]bool, len(req.CodeNames))
-	for _, cn := range req.CodeNames {
+	nameSet := make(map[string]bool, len(codeNames))
+	for _, cn := range codeNames {
 		nameSet[cn] = true
 	}
-
-	result := make([]ComponentDef, 0)
 	for _, comp := range allComponents {
 		if nameSet[comp.CodeName] {
-			result = append(result, comp)
+			result[comp.CodeName] = comp
 		}
 	}
 
