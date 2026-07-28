@@ -1,5 +1,5 @@
-# SecretPad-Go Edge Profile
-# Usage: SECRETPAD_PROFILE=edge NODE_ID=edge-node ./privahub
+# Privahub Edge Profile
+# Usage: PRIVAHUB_PROFILE=edge NODE_ID=edge-node ./privahub
 
 server:
   mode: "lite"
@@ -8,7 +8,7 @@ server:
 
 database:
   driver: "sqlite"
-  dsn: "secretpad-edge.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+  dsn: "privahub-edge.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 
 kuscia:
   namespace: "${NODE_ID}"

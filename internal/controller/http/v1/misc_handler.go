@@ -38,7 +38,7 @@ func NewMiscHandler(db *gorm.DB, kusciaClient *kuscia.Client) *MiscHandler {
 // loadComponents loads component definitions from config/components.json (once).
 func (h *MiscHandler) loadComponents() []ComponentDef {
 	h.compOnce.Do(func() {
-		compPath := os.Getenv("SECRETPAD_COMPONENTS_FILE")
+		compPath := os.Getenv("PRIVAHUB_COMPONENTS_FILE")
 		if compPath == "" {
 			compPath = "config/components.json"
 		}

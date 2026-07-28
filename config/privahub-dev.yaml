@@ -1,5 +1,5 @@
-# SecretPad-Go Development Profile
-# Usage: SECRETPAD_PROFILE=dev ./privahub
+# Privahub Development Profile
+# Usage: PRIVAHUB_PROFILE=dev ./privahub
 
 server:
   mode: "master"
@@ -8,14 +8,14 @@ server:
 
 database:
   driver: "sqlite"
-  dsn: "secretpad-dev.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+  dsn: "privahub-dev.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 
 kuscia:
   namespace: "kuscia-system"
   api_address: "127.0.0.1"
   api_port: 18083  # Docker mapped port
   protocol: "notls"
-  gateway: "127.0.0.1:13081"
+  gateway: "127.0.0.1:18080"
   nodes:
     - domain_id: "kuscia-system"
       mode: "master"

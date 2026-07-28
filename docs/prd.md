@@ -2,7 +2,7 @@
 
 ## 1. 产品定位
 
-SecretPad-Go 是隐私计算平台 SecretPad 的 Go 语言后端实现，为前端 Web 控制台提供完整的 RESTful API 服务。它是 Java Spring Boot 版本的性能优化重构，保持 100% API 兼容性。
+Privahub 是隐私计算平台 SecretPad 的 Go 语言后端实现，为前端 Web 控制台提供完整的 RESTful API 服务。它是 Java Spring Boot 版本的性能优化重构，保持 100% API 兼容性。
 
 ## 2. 目标用户
 
@@ -183,7 +183,7 @@ SecretPad-Go 是隐私计算平台 SecretPad 的 Go 语言后端实现，为前�
 | 并发模型 | 线程池 | Goroutine |
 | 容器镜像 | ~800MB | ~50MB |
 | 依赖管理 | Maven (多模块) | Go Modules |
-| 配置方式 | application.yaml | secretpad.yaml + env |
+| 配置方式 | application.yaml | privahub.yaml + env |
 | 数据库迁移 | Flyway | GORM AutoMigrate |
 
 ## 8. 风险与缓解

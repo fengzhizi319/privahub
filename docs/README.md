@@ -1,4 +1,4 @@
-# SecretPad-Go
+# Privahub
 
 SecretPad 后端的 Go 语言重构实现，基于 Gin + GORM 构建，完整迁移自 Java Spring Boot 版本。
 
@@ -43,10 +43,10 @@ CGO_ENABLED=1 go build -o bin/privahub ./cmd/server
 ./bin/privahub
 
 # 开发环境 profile
-SECRETPAD_PROFILE=dev ./bin/privahub
+PRIVAHUB_PROFILE=dev ./bin/privahub
 
 # 边缘节点 profile
-SECRETPAD_PROFILE=edge NODE_ID=edge-node ./bin/privahub
+PRIVAHUB_PROFILE=edge NODE_ID=edge-node ./bin/privahub
 ```
 
 ### 测试
@@ -86,9 +86,9 @@ privahub/
 │   ├── logger/          # Zap 日志
 │   └── metrics/         # Prometheus 指标
 ├── config/              # 配置文件
-│   ├── secretpad.yaml       # 基础配置
-│   ├── secretpad-dev.yaml   # 开发环境
-│   └── secretpad-edge.yaml  # 边缘节点
+│   ├── privahub.yaml       # 基础配置
+│   ├── privahub-dev.yaml   # 开发环境
+│   └── privahub-edge.yaml  # 边缘节点
 ├── docs/                # 文档
 └── deployments/docker/  # Docker 部署
 ```
@@ -143,19 +143,19 @@ privahub/
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `SECRETPAD_PROFILE` | 配置 profile | (空) |
-| `SECRETPAD_SERVER_HTTP_PORT` | HTTP 端口 | 8080 |
-| `SECRETPAD_SERVER_INNER_PORT` | 内部端口 | 9001 |
-| `SECRETPAD_KUSCIA_API_ADDRESS` | Kuscia 地址 | 127.0.0.1 |
-| `SECRETPAD_KUSCIA_API_PORT` | Kuscia 端口 | 8083 |
+| `PRIVAHUB_PROFILE` | 配置 profile | (空) |
+| `PRIVAHUB_SERVER_HTTP_PORT` | HTTP 端口 | 8080 |
+| `PRIVAHUB_SERVER_INNER_PORT` | 内部端口 | 9001 |
+| `PRIVAHUB_KUSCIA_API_ADDRESS` | Kuscia 地址 | 127.0.0.1 |
+| `PRIVAHUB_KUSCIA_API_PORT` | Kuscia 端口 | 8083 |
 
 ### 配置文件
 
-支持多 Profile 配置，通过 `SECRETPAD_PROFILE` 环境变量指定：
+支持多 Profile 配置，通过 `PRIVAHUB_PROFILE` 环境变量指定：
 
-- `secretpad.yaml` - 基础配置
-- `secretpad-dev.yaml` - 开发环境 (Docker Kuscia 端口映射)
-- `secretpad-edge.yaml` - 边缘节点 (lite 模式)
+- `privahub.yaml` - 基础配置
+- `privahub-dev.yaml` - 开发环境 (Docker Kuscia 端口映射)
+- `privahub-edge.yaml` - 边缘节点 (lite 模式)
 
 ## 文档索引
 

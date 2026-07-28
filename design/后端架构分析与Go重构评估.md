@@ -399,7 +399,7 @@ privahub/
 │   │   ├── datasync.proto            # 数据同步协议
 │   │   └── serving.proto             # 模型服务协议
 │   └── openapi/                      # OpenAPI 3.0 YAML 规范
-│       └── secretpad.yaml
+│       └── privahub.yaml
 ├── internal/                         # 私有业务代码 (不可被外部 import)
 │   ├── domain/                       # 领域层 (纯业务规则，零外部依赖)
 │   │   ├── project/                  # 项目聚合根
@@ -601,8 +601,8 @@ privahub/
 │       ├── id.go                    # UUID / Snowflake ID 生成
 │       └── time.go
 ├── config/                          # 配置文件
-│   ├── secretpad.yaml
-│   ├── secretpad-dev.yaml
+│   ├── privahub.yaml
+│   ├── privahub-dev.yaml
 │   └── secretpad-prod.yaml
 ├── deployments/                     # 部署清单
 │   ├── docker/
@@ -1991,7 +1991,7 @@ func InitializeJobHandler() (*v1.JobHandler, error) {
 
 ### 10.4 配置文件规范与 Bootstrap 引导器
 
-系统通过配置文件 `config/secretpad.yaml` 指定模式与连接池参数：
+系统通过配置文件 `config/privahub.yaml` 指定模式与连接池参数：
 
 ```yaml
 server:
@@ -2003,7 +2003,7 @@ server:
 
 database:
   driver: "sqlite" # Options: mysql, sqlite
-  dsn: "secretpad.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+  dsn: "privahub.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
   max_open_conns: 50
   max_idle_conns: 10
 
@@ -2271,7 +2271,7 @@ func (r *DataReconciler) autoRepairRecord(ctx context.Context, table string, id 
 | :--- | :--- | :--- | :--- |
 | 0.1 | 初始化 Go Module 与项目骨架 | `go.mod`、目录结构、`Makefile` | `make build` 成功编译空 main |
 | 0.2 | 集成基础工具链 | `.golangci.yml`、`.pre-commit-config.yaml`、CI YAML | `make lint` 零告警 |
-| 0.3 | 实现配置加载器 (Viper) | `pkg/config/`、`config/secretpad.yaml` | 单元测试覆盖多模式加载 |
+| 0.3 | 实现配置加载器 (Viper) | `pkg/config/`、`config/privahub.yaml` | 单元测试覆盖多模式加载 |
 | 0.4 | 实现 Zap 日志 + TraceID 中间件 | `pkg/logger/`、`middleware/trace.go` | 日志输出含 trace_id 字段 |
 | 0.5 | 实现统一错误码与响应封装 | `pkg/errcode/`、`pkg/response/` | 与 Java 版错误码完全一致 |
 | 0.6 | 实现 GORM 数据库初始化 + golang-migrate | `internal/dao/db.go`、`dao/migrations/` | 三种模式 Schema 自动迁移成功 |

@@ -8,7 +8,7 @@ server:
 
 database:
   driver: "sqlite" # Options: mysql, sqlite
-  dsn: "secretpad.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+  dsn: "privahub.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
   max_open_conns: 50
   max_idle_conns: 10
 

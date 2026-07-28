@@ -1,4 +1,4 @@
-# Multi-stage Dockerfile for SecretPad-Go
+# Multi-stage Dockerfile for Privahub
 # Produces a minimal static binary image (< 25MB)
 
 # Stage 1: Build
@@ -22,16 +22,16 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates tzdata \
-    && adduser -D -u 1000 secretpad
+    && adduser -D -u 1000 privahub
 
 COPY --from=builder /privahub /usr/local/bin/privahub
-COPY config/secretpad.yaml /etc/secretpad/secretpad.yaml
+COPY config/privahub.yaml /etc/privahub/privahub.yaml
 
-USER secretpad
+USER privahub
 EXPOSE 8080 9090 9091
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
     CMD wget -qO- http://localhost:8080/api/v1alpha1/healthz || exit 1
 
 ENTRYPOINT ["privahub"]
-CMD ["-config", "/etc/secretpad/secretpad.yaml"]
+CMD ["-config", "/etc/privahub/privahub.yaml"]

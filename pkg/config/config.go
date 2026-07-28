@@ -1,4 +1,4 @@
-// Package config provides configuration loading and management for SecretPad-Go.
+// Package config provides configuration loading and management for Privahub.
 // It supports multiple deployment modes (master, lite, autonomy) and environment-specific overrides.
 package config
 
@@ -85,9 +85,9 @@ type AuthConfig struct {
 }
 
 // Load reads configuration from file and environment variables.
-// Configuration file search order: ./config/secretpad.yaml, /etc/secretpad/secretpad.yaml
-// Environment variables with prefix SECRETPAD_ override file values.
-// Profile support: set SECRETPAD_PROFILE=dev|edge|p2p|test to load secretpad-{profile}.yaml overrides.
+// Configuration file search order: ./config/privahub.yaml, /etc/privahub/privahub.yaml
+// Environment variables with prefix PRIVAHUB_ override file values.
+// Profile support: set PRIVAHUB_PROFILE=dev|edge|p2p|test to load privahub-{profile}.yaml overrides.
 func Load(cfgFile string) (*Config, error) {
 	v := viper.New()
 
@@ -98,15 +98,15 @@ func Load(cfgFile string) (*Config, error) {
 	if cfgFile != "" {
 		v.SetConfigFile(cfgFile)
 	} else {
-		v.SetConfigName("secretpad")
+		v.SetConfigName("privahub")
 		v.SetConfigType("yaml")
 		v.AddConfigPath("./config")
-		v.AddConfigPath("/etc/secretpad")
+		v.AddConfigPath("/etc/privahub")
 		v.AddConfigPath(".")
 	}
 
 	// Environment variable override
-	v.SetEnvPrefix("SECRETPAD")
+	v.SetEnvPrefix("PRIVAHUB")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
@@ -117,17 +117,17 @@ func Load(cfgFile string) (*Config, error) {
 		}
 	}
 
-	// Load profile-specific overrides (e.g., secretpad-dev.yaml)
+	// Load profile-specific overrides (e.g., privahub-dev.yaml)
 	profile := v.GetString("profile")
 	if profile == "" {
-		profile = v.GetString("SECRETPAD_PROFILE") // fallback to env
+		profile = v.GetString("PRIVAHUB_PROFILE") // fallback to env
 	}
 	if profile != "" {
 		pv := viper.New()
-		pv.SetConfigName("secretpad-" + profile)
+		pv.SetConfigName("privahub-" + profile)
 		pv.SetConfigType("yaml")
 		pv.AddConfigPath("./config")
-		pv.AddConfigPath("/etc/secretpad")
+		pv.AddConfigPath("/etc/privahub")
 		pv.AddConfigPath(".")
 		if err := pv.ReadInConfig(); err == nil {
 			if err := v.MergeConfigMap(pv.AllSettings()); err != nil {
@@ -177,7 +177,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.shutdown_timeout", "5s")
 
 	v.SetDefault("database.driver", "sqlite")
-	v.SetDefault("database.dsn", "secretpad.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	v.SetDefault("database.dsn", "privahub.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	v.SetDefault("database.max_open_conns", 50)
 	v.SetDefault("database.max_idle_conns", 10)
 

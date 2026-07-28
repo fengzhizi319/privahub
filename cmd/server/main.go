@@ -1,4 +1,4 @@
-// SecretPad-Go is the Go reimplementation of the SecretPad backend.
+// Privahub is the Go reimplementation of the SecretPad backend.
 // It supports three deployment modes: master (center), lite (edge), and autonomy (P2P).
 package main
 
@@ -33,7 +33,7 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("secretpad-go %s (commit: %s, built: %s)\n", version, gitCommit, buildTime)
+		fmt.Printf("privahub %s (commit: %s, built: %s)\n", version, gitCommit, buildTime)
 		os.Exit(0)
 	}
 
@@ -52,7 +52,7 @@ func main() {
 	}
 	defer log.Sync()
 
-	log.Info("Starting SecretPad-Go",
+	log.Info("Starting Privahub",
 		zap.String("version", version),
 		zap.String("mode", cfg.Server.Mode),
 		zap.Int("http_port", cfg.Server.HTTPPort),

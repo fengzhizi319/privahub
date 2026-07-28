@@ -2,7 +2,7 @@
 
 ## 1. 系统概述
 
-SecretPad-Go 是隐私计算平台 SecretPad 后端的 Go 语言实现，完整迁移自 Java Spring Boot 版本。系统采用分层架构设计，提供 RESTful API 供前端调用，并通过 Kuscia 控制平面执行隐私计算任务。
+Privahub 是隐私计算平台 SecretPad 后端的 Go 语言实现，完整迁移自 Java Spring Boot 版本。系统采用分层架构设计，提供 RESTful API 供前端调用，并通过 Kuscia 控制平面执行隐私计算任务。
 
 ## 2. 架构分层
 
@@ -147,9 +147,9 @@ privahub/
 │   └── metrics/prometheus.go     # 指标
 │
 ├── config/                       # 配置文件
-│   ├── secretpad.yaml
-│   ├── secretpad-dev.yaml
-│   ├── secretpad-edge.yaml
+│   ├── privahub.yaml
+│   ├── privahub-dev.yaml
+│   ├── privahub-edge.yaml
 │   └── components.json           # 组件定义
 │
 └── deployments/docker/
@@ -270,20 +270,20 @@ if err := kusciaClient.CreateDomain(ctx, req); err != nil {
 ./privahub
 
 # 开发环境
-SECRETPAD_PROFILE=dev ./privahub
+PRIVAHUB_PROFILE=dev ./privahub
 
 # 边缘节点
-SECRETPAD_PROFILE=edge ./privahub
+PRIVAHUB_PROFILE=edge ./privahub
 ```
 
 ### 7.2 环境变量覆盖
 
-所有配置项支持环境变量覆盖，前缀 `SECRETPAD_`：
+所有配置项支持环境变量覆盖，前缀 `PRIVAHUB_`：
 
 ```bash
-SECRETPAD_SERVER_HTTP_PORT=9080
-SECRETPAD_KUSCIA_API_ADDRESS=10.0.0.1
-SECRETPAD_DATABASE_DRIVER=mysql
+PRIVAHUB_SERVER_HTTP_PORT=9080
+PRIVAHUB_KUSCIA_API_ADDRESS=10.0.0.1
+PRIVAHUB_DATABASE_DRIVER=mysql
 ```
 
 ## 8. 安全设计

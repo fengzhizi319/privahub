@@ -25,7 +25,7 @@ build-all:
 
 ## run: Build and run the server locally
 run: build
-	./bin/$(APP_NAME) -config ./config/secretpad.yaml
+	./bin/$(APP_NAME) -config ./config/privahub.yaml
 
 ## test: Run all unit tests
 test:

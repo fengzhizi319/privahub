@@ -23,7 +23,7 @@ type DataHandler struct {
 
 // NewDataHandler creates a new DataHandler.
 func NewDataHandler(db *gorm.DB, kusciaClient *kuscia.Client) *DataHandler {
-	dataDir := os.Getenv("SECRETPAD_DATA_DIR")
+	dataDir := os.Getenv("PRIVAHUB_DATA_DIR")
 	if dataDir == "" {
 		dataDir = "./data"
 	}

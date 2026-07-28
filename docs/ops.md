@@ -60,9 +60,9 @@ docker build -t privahub:latest -f deployments/docker/Dockerfile .
 
 | 文件 | 说明 |
 |------|------|
-| `secretpad.yaml` | 基础配置 |
-| `secretpad-dev.yaml` | 开发环境 |
-| `secretpad-edge.yaml` | 边缘节点 |
+| `privahub.yaml` | 基础配置 |
+| `privahub-dev.yaml` | 开发环境 |
+| `privahub-edge.yaml` | 边缘节点 |
 | `components.json` | 组件定义 |
 
 ### 3.2 配置项说明
@@ -79,7 +79,7 @@ server:
 
 database:
   driver: "sqlite"         # sqlite, mysql
-  dsn: "secretpad.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+  dsn: "privahub.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
   max_open_conns: 50
   max_idle_conns: 10
 
@@ -110,25 +110,25 @@ auth:
 
 ### 3.3 环境变量覆盖
 
-所有配置项支持环境变量覆盖，前缀 `SECRETPAD_`：
+所有配置项支持环境变量覆盖，前缀 `PRIVAHUB_`：
 
 ```bash
-export SECRETPAD_SERVER_HTTP_PORT=9080
-export SECRETPAD_KUSCIA_API_ADDRESS=10.0.0.1
-export SECRETPAD_DATABASE_DRIVER=mysql
-export SECRETPAD_DATABASE_DSN="user:pass@tcp(localhost:3306)/secretpad"
+export PRIVAHUB_SERVER_HTTP_PORT=9080
+export PRIVAHUB_KUSCIA_API_ADDRESS=10.0.0.1
+export PRIVAHUB_DATABASE_DRIVER=mysql
+export PRIVAHUB_DATABASE_DSN="user:pass@tcp(localhost:3306)/secretpad"
 ```
 
 ### 3.4 Profile 配置
 
-通过 `SECRETPAD_PROFILE` 环境变量加载 profile 配置：
+通过 `PRIVAHUB_PROFILE` 环境变量加载 profile 配置：
 
 ```bash
 # 开发环境
-SECRETPAD_PROFILE=dev ./privahub
+PRIVAHUB_PROFILE=dev ./privahub
 
 # 边缘节点
-SECRETPAD_PROFILE=edge NODE_ID=edge-node ./privahub
+PRIVAHUB_PROFILE=edge NODE_ID=edge-node ./privahub
 ```
 
 ## 4. 部署
@@ -140,7 +140,7 @@ SECRETPAD_PROFILE=edge NODE_ID=edge-node ./privahub
 make build
 
 # 2. 配置
-cp config/secretpad.yaml config/secretpad-local.yaml
+cp config/privahub.yaml config/secretpad-local.yaml
 # 编辑配置...
 
 # 3. 运行
@@ -160,7 +160,7 @@ docker run -d \
   -p 9001:9001 \
   -v $(pwd)/data:/app/data \
   -v $(pwd)/config:/app/config \
-  -e SECRETPAD_PROFILE=dev \
+  -e PRIVAHUB_PROFILE=dev \
   privahub:latest
 ```
 
@@ -179,8 +179,8 @@ services:
       - ./data:/app/data
       - ./config:/app/config
     environment:
-      - SECRETPAD_PROFILE=dev
-      - SECRETPAD_KUSCIA_API_ADDRESS=kuscia-master
+      - PRIVAHUB_PROFILE=dev
+      - PRIVAHUB_KUSCIA_API_ADDRESS=kuscia-master
     depends_on:
       - kuscia-master
 
@@ -215,7 +215,7 @@ spec:
         - containerPort: 8080
         - containerPort: 9001
         env:
-        - name: SECRETPAD_PROFILE
+        - name: PRIVAHUB_PROFILE
           value: "dev"
         resources:
           requests:
@@ -291,10 +291,10 @@ spec:
 
 ```bash
 # 备份
-sqlite3 secretpad.db ".backup backups/secretpad-$(date +%Y%m%d).db"
+sqlite3 privahub.db ".backup backups/secretpad-$(date +%Y%m%d).db"
 
 # 恢复
-sqlite3 secretpad.db ".restore backups/secretpad-20240101.db"
+sqlite3 privahub.db ".restore backups/secretpad-20240101.db"
 ```
 
 ### 6.2 MySQL 备份
@@ -322,7 +322,7 @@ mysql -u user -p secretpad < backups/secretpad-20240101.sql
 
 ```bash
 # 开启 debug 日志
-SECRETPAD_OBSERVABILITY_LOG_LEVEL=debug ./privahub
+PRIVAHUB_OBSERVABILITY_LOG_LEVEL=debug ./privahub
 
 # 查看请求日志
 tail -f logs/secretpad.log | grep "audit"
@@ -385,7 +385,7 @@ server {
 make build
 
 # 2. 备份数据库
-sqlite3 secretpad.db ".backup backups/pre-upgrade.db"
+sqlite3 privahub.db ".backup backups/pre-upgrade.db"
 
 # 3. 停止旧版本
 pkill -f privahub

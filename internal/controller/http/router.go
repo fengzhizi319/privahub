@@ -96,7 +96,7 @@ func NewRouter(log *zap.Logger, app *wire.App) *gin.Engine {
 	})
 
 	// SPA static file serving for production
-	spaDir := os.Getenv("SECRETPAD_WEB_DIR")
+	spaDir := os.Getenv("PRIVAHUB_WEB_DIR")
 	if spaDir == "" {
 		spaDir = "./web/dist"
 	}
