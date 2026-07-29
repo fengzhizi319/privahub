@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
-	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )

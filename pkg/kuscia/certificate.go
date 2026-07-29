@@ -29,7 +29,7 @@ type GenerateKeyCertsResponse struct {
 // GenerateKeyCerts generates a key/certificate pair via Kuscia.
 func (c *Client) GenerateKeyCerts(ctx context.Context, req *GenerateKeyCertsRequest) (*GenerateKeyCertsResponse, error) {
 	var resp GenerateKeyCertsResponse
-	if err := c.doRequest(ctx, "/api/v1/certificate/generateKeyCerts", req, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/certificate/generate", req, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

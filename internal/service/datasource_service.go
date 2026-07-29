@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 
-	"github.com/google/uuid"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 

@@ -73,7 +73,7 @@ type BatchQueryDomainRouteStatusResponse struct {
 // CreateDomainRoute creates a route between two domains.
 func (c *Client) CreateDomainRoute(ctx context.Context, req *CreateDomainRouteRequest) error {
 	var resp CreateDomainRouteResponse
-	if err := c.doRequest(ctx, "/api/v1alpha1/domainroute/create", req, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/route/create", req, &resp); err != nil {
 		return err
 	}
 	if !resp.Status.IsSuccess() {
@@ -87,7 +87,7 @@ func (c *Client) CreateDomainRoute(ctx context.Context, req *CreateDomainRouteRe
 func (c *Client) QueryDomainRoute(ctx context.Context, source, destination string) (*QueryDomainRouteResponse, error) {
 	var resp QueryDomainRouteResponse
 	req := &QueryDomainRouteRequest{Source: source, Destination: destination}
-	if err := c.doRequest(ctx, "/api/v1alpha1/domainroute/query", req, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/route/query", req, &resp); err != nil {
 		return nil, err
 	}
 	if !resp.Status.IsSuccess() {
@@ -101,7 +101,7 @@ func (c *Client) QueryDomainRoute(ctx context.Context, source, destination strin
 func (c *Client) DeleteDomainRoute(ctx context.Context, source, destination string) error {
 	var resp DeleteDomainRouteResponse
 	req := &DeleteDomainRouteRequest{Source: source, Destination: destination}
-	if err := c.doRequest(ctx, "/api/v1alpha1/domainroute/delete", req, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/route/delete", req, &resp); err != nil {
 		return err
 	}
 	if !resp.Status.IsSuccess() {
@@ -115,7 +115,7 @@ func (c *Client) DeleteDomainRoute(ctx context.Context, source, destination stri
 func (c *Client) BatchQueryDomainRouteStatus(ctx context.Context, routes []QueryDomainRouteRequest) ([]DomainRouteStatusEntry, error) {
 	var resp BatchQueryDomainRouteStatusResponse
 	req := &BatchQueryDomainRouteStatusRequest{Routes: routes}
-	if err := c.doRequest(ctx, "/api/v1alpha1/domainroute/status/batchQuery", req, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/route/status/batchQuery", req, &resp); err != nil {
 		return nil, err
 	}
 	if !resp.Status.IsSuccess() {

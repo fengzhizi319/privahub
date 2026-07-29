@@ -5,10 +5,10 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
+	"github.com/google/uuid"
 )
 
 // Node service errors.

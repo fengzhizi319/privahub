@@ -83,14 +83,26 @@ func (s *JobStatusSyncService) syncOnce() {
 
 	entries, err := s.kusciaClient.BatchQueryJobStatus(ctx, jobIDs)
 	if err != nil {
-		// Kuscia unreachable — skip this cycle
+		// Batch query failed (e.g. some jobs no longer exist in Kuscia).
+		// Fall back to querying each job individually.
+		for _, jid := range jobIDs {
+			resp, qErr := s.kusciaClient.QueryJob(ctx, jid)
+			if qErr != nil || resp.Data.Status == nil {
+				continue
+			}
+			mappedStatus := mapKusciaState(resp.Data.Status.State)
+			s.db.WithContext(ctx).Model(&model.ProjectJobDO{}).
+				Where("job_id = ?", jid).
+				Update("status", mappedStatus)
+			s.syncTaskStatuses(ctx, jid)
+		}
 		return
 	}
 
 	// Build lookup map
 	statusMap := make(map[string]string, len(entries))
 	for _, e := range entries {
-		statusMap[e.JobID] = e.State
+		statusMap[e.JobID] = e.Status.State
 	}
 
 	// Update local DB for jobs whose status changed
@@ -101,31 +113,29 @@ func (s *JobStatusSyncService) syncOnce() {
 		}
 
 		mappedStatus := mapKusciaState(newState)
-		if mappedStatus == job.Status {
-			continue
+		if mappedStatus != job.Status {
+			updates := map[string]interface{}{
+				"status": mappedStatus,
+			}
+			if isTerminalStatus(mappedStatus) {
+				now := time.Now()
+				updates["finished_time"] = &now
+			}
+
+			s.db.WithContext(ctx).Model(&model.ProjectJobDO{}).
+				Where("job_id = ?", job.JobID).
+				Updates(updates)
+
+			if s.log != nil {
+				s.log.Info("Job status synced from Kuscia",
+					zap.String("job_id", job.JobID),
+					zap.String("old_status", job.Status),
+					zap.String("new_status", mappedStatus),
+				)
+			}
 		}
 
-		updates := map[string]interface{}{
-			"status": mappedStatus,
-		}
-		if isTerminalStatus(mappedStatus) {
-			now := time.Now()
-			updates["finished_time"] = &now
-		}
-
-		s.db.WithContext(ctx).Model(&model.ProjectJobDO{}).
-			Where("job_id = ?", job.JobID).
-			Updates(updates)
-
-		if s.log != nil {
-			s.log.Info("Job status synced from Kuscia",
-				zap.String("job_id", job.JobID),
-				zap.String("old_status", job.Status),
-				zap.String("new_status", mappedStatus),
-			)
-		}
-
-		// Also sync task statuses
+		// Always sync task statuses (tasks may change even if job state is unchanged)
 		s.syncTaskStatuses(ctx, job.JobID)
 	}
 }
@@ -136,8 +146,11 @@ func (s *JobStatusSyncService) syncTaskStatuses(ctx context.Context, jobID strin
 	if err != nil {
 		return
 	}
+	if resp.Data.Status == nil {
+		return
+	}
 
-	for _, task := range resp.Data.Tasks {
+	for _, task := range resp.Data.Status.Tasks {
 		mappedStatus := mapKusciaState(task.State)
 		s.db.WithContext(ctx).Model(&model.ProjectJobTaskDO{}).
 			Where("task_id = ?", task.TaskID).

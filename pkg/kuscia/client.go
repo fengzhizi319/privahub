@@ -117,7 +117,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	var resp struct {
 		Status Status `json:"status"`
 	}
-	if err := c.doRequest(ctx, "/api/v1alpha1/health/query", map[string]interface{}{}, &resp); err != nil {
+	if err := c.doRequest(ctx, "/healthZ", map[string]interface{}{}, &resp); err != nil {
 		return err
 	}
 	if !resp.Status.IsSuccess() {

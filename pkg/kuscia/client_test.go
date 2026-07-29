@@ -23,7 +23,7 @@ func newTestServer(handler http.HandlerFunc) (*httptest.Server, *Client) {
 
 func TestClient_Ping_Success(t *testing.T) {
 	server, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1alpha1/health/query" {
+		if r.URL.Path != "/healthZ" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		json.NewEncoder(w).Encode(map[string]interface{}{
@@ -39,7 +39,7 @@ func TestClient_Ping_Success(t *testing.T) {
 
 func TestClient_CreateJob_Success(t *testing.T) {
 	server, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1alpha1/job/create" {
+		if r.URL.Path != "/api/v1/job/create" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		var req CreateJobRequest
@@ -75,9 +75,11 @@ func TestClient_QueryJob_Success(t *testing.T) {
 			"data": map[string]interface{}{
 				"job_id":    "job-123",
 				"initiator": "alice",
-				"state":     "Running",
-				"tasks": []map[string]interface{}{
-					{"task_id": "t1", "alias": "node-1", "state": "Running"},
+				"status": map[string]interface{}{
+					"state": "Running",
+					"tasks": []map[string]interface{}{
+						{"task_id": "t1", "alias": "node-1", "state": "Running"},
+					},
 				},
 			},
 		})
@@ -88,17 +90,17 @@ func TestClient_QueryJob_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QueryJob failed: %v", err)
 	}
-	if resp.Data.State != "Running" {
-		t.Errorf("expected state 'Running', got %q", resp.Data.State)
+	if resp.Data.Status == nil || resp.Data.Status.State != "Running" {
+		t.Errorf("expected state 'Running', got %v", resp.Data.Status)
 	}
-	if len(resp.Data.Tasks) != 1 {
-		t.Errorf("expected 1 task, got %d", len(resp.Data.Tasks))
+	if resp.Data.Status == nil || len(resp.Data.Status.Tasks) != 1 {
+		t.Errorf("expected 1 task, got %v", resp.Data.Status)
 	}
 }
 
 func TestClient_StopJob_Success(t *testing.T) {
 	server, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1alpha1/job/stop" {
+		if r.URL.Path != "/api/v1/job/stop" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		json.NewEncoder(w).Encode(StopJobResponse{
@@ -114,7 +116,7 @@ func TestClient_StopJob_Success(t *testing.T) {
 
 func TestClient_CreateDomain_Success(t *testing.T) {
 	server, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1alpha1/domain/create" {
+		if r.URL.Path != "/api/v1/domain/create" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		json.NewEncoder(w).Encode(CreateDomainResponse{
@@ -134,7 +136,7 @@ func TestClient_CreateDomain_Success(t *testing.T) {
 
 func TestClient_CreateDomainRoute_Success(t *testing.T) {
 	server, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1alpha1/domainroute/create" {
+		if r.URL.Path != "/api/v1/route/create" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		json.NewEncoder(w).Encode(CreateDomainRouteResponse{
@@ -171,7 +173,7 @@ func TestClient_ErrorResponse(t *testing.T) {
 
 func TestClient_GrantDomainData_Success(t *testing.T) {
 	server, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1alpha1/domaindata/grant" {
+		if r.URL.Path != "/api/v1/domaindatagrant/create" {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
 		json.NewEncoder(w).Encode(GrantDomainDataResponse{

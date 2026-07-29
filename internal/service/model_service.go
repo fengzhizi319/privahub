@@ -234,7 +234,7 @@ func (s *ModelService) ExportModel(ctx context.Context, modelID string) (string,
 					AppImage: "secretflow",
 					Alias:    "model_export_" + modelID,
 					Parties: []kuscia.Party{
-						{Name: "alice", Role: "guest"},
+						{DomainID: "alice", Role: "guest"},
 					},
 				},
 			},

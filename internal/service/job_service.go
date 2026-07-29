@@ -214,8 +214,8 @@ func (s *JobService) CreateJob(ctx context.Context, req *CreateJobRequest) (*Job
 					AppImage: "secretflow",
 					Alias:    req.Name,
 					Parties: []kuscia.Party{
-						{Name: "alice", Role: "guest"},
-						{Name: "bob", Role: "host"},
+						{DomainID: "alice", Role: "guest"},
+						{DomainID: "bob", Role: "host"},
 					},
 				},
 			},

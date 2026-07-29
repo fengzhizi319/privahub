@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/google/uuid"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
+	"github.com/google/uuid"
 )
 
 // Graph service errors.
@@ -85,11 +85,11 @@ type GetGraphRequest struct {
 
 // GraphNodeVO represents a graph node in detail response.
 type GraphNodeVO struct {
-	GraphNodeID string `json:"graph_node_id"`
-	CodeName    string `json:"code_name"`
-	Label       string `json:"label"`
-	X           int    `json:"x"`
-	Y           int    `json:"y"`
+	GraphNodeID string          `json:"graph_node_id"`
+	CodeName    string          `json:"code_name"`
+	Label       string          `json:"label"`
+	X           int             `json:"x"`
+	Y           int             `json:"y"`
 	Inputs      []string        `json:"inputs"`
 	Outputs     []string        `json:"outputs"`
 	NodeDef     json.RawMessage `json:"node_def"`
@@ -514,8 +514,8 @@ func (s *GraphService) StartGraph(ctx context.Context, req *StartGraphRequest) (
 			Alias:    n.GraphNodeID,
 			TaskID:   taskID,
 			Parties: []kuscia.Party{
-				{Name: "alice", Role: "guest"},
-				{Name: "bob", Role: "host"},
+				{DomainID: "alice", Role: "guest"},
+				{DomainID: "bob", Role: "host"},
 			},
 		})
 	}

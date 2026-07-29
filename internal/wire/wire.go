@@ -131,10 +131,14 @@ type App struct {
 func NewApp(db *gorm.DB, cfg *config.Config) *App {
 	jwtManager := NewJWTManager(cfg)
 
-	// Kuscia HTTP client
+	// Kuscia HTTP client — prefer http_port, fall back to api_port
+	kusciaPort := cfg.Kuscia.HTTPPort
+	if kusciaPort == 0 {
+		kusciaPort = cfg.Kuscia.APIPort
+	}
 	kusciaClient := kuscia.NewClient(&kuscia.ClientConfig{
 		Host:     cfg.Kuscia.APIAddress,
-		Port:     cfg.Kuscia.HTTPPort,
+		Port:     kusciaPort,
 		Protocol: cfg.Kuscia.Protocol,
 		Timeout:  30 * time.Second,
 	})

@@ -13,7 +13,8 @@ database:
 kuscia:
   namespace: "kuscia-system"
   api_address: "127.0.0.1"
-  api_port: 18083  # Docker mapped port
+  api_port: 18083  # Docker mapped gRPC port
+  http_port: 18082 # Docker mapped HTTP API port (Envoy REST)
   protocol: "notls"
   gateway: "127.0.0.1:18080"
   nodes:

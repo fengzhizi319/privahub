@@ -131,7 +131,7 @@ type DeleteDomainDataResponse struct {
 // CreateDomain registers a new domain in Kuscia.
 func (c *Client) CreateDomain(ctx context.Context, req *CreateDomainRequest) error {
 	var resp CreateDomainResponse
-	if err := c.doRequest(ctx, "/api/v1alpha1/domain/create", req, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/domain/create", req, &resp); err != nil {
 		return err
 	}
 	if !resp.Status.IsSuccess() {
@@ -143,7 +143,7 @@ func (c *Client) CreateDomain(ctx context.Context, req *CreateDomainRequest) err
 // QueryDomain queries a domain's details.
 func (c *Client) QueryDomain(ctx context.Context, domainID string) (*QueryDomainResponse, error) {
 	var resp QueryDomainResponse
-	if err := c.doRequest(ctx, "/api/v1alpha1/domain/query", &QueryDomainRequest{DomainID: domainID}, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/domain/query", &QueryDomainRequest{DomainID: domainID}, &resp); err != nil {
 		return nil, err
 	}
 	if !resp.Status.IsSuccess() {
@@ -155,7 +155,7 @@ func (c *Client) QueryDomain(ctx context.Context, domainID string) (*QueryDomain
 // DeleteDomain removes a domain from Kuscia.
 func (c *Client) DeleteDomain(ctx context.Context, domainID string) error {
 	var resp DeleteDomainResponse
-	if err := c.doRequest(ctx, "/api/v1alpha1/domain/delete", &DeleteDomainRequest{DomainID: domainID}, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/domain/delete", &DeleteDomainRequest{DomainID: domainID}, &resp); err != nil {
 		return err
 	}
 	if !resp.Status.IsSuccess() {
@@ -169,7 +169,7 @@ func (c *Client) DeleteDomain(ctx context.Context, domainID string) error {
 // CreateDomainData registers domain data (datatable) in Kuscia.
 func (c *Client) CreateDomainData(ctx context.Context, req *CreateDomainDataRequest) error {
 	var resp CreateDomainDataResponse
-	if err := c.doRequest(ctx, "/api/v1alpha1/domaindata/create", req, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/domaindata/create", req, &resp); err != nil {
 		return err
 	}
 	if !resp.Status.IsSuccess() {
@@ -182,7 +182,7 @@ func (c *Client) CreateDomainData(ctx context.Context, req *CreateDomainDataRequ
 func (c *Client) QueryDomainData(ctx context.Context, domainID, domainDataID string) (*QueryDomainDataResponse, error) {
 	var resp QueryDomainDataResponse
 	req := &QueryDomainDataRequest{DomainID: domainID, DomainDataID: domainDataID}
-	if err := c.doRequest(ctx, "/api/v1alpha1/domaindata/query", req, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/domaindata/query", req, &resp); err != nil {
 		return nil, err
 	}
 	if !resp.Status.IsSuccess() {
@@ -194,7 +194,7 @@ func (c *Client) QueryDomainData(ctx context.Context, domainID, domainDataID str
 // ListDomainData lists all domain data for a domain.
 func (c *Client) ListDomainData(ctx context.Context, domainID string) ([]DomainDataItem, error) {
 	var resp ListDomainDataResponse
-	if err := c.doRequest(ctx, "/api/v1alpha1/domaindata/list", &ListDomainDataRequest{DomainID: domainID}, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/domaindata/list", &ListDomainDataRequest{DomainID: domainID}, &resp); err != nil {
 		return nil, err
 	}
 	if !resp.Status.IsSuccess() {
@@ -207,7 +207,7 @@ func (c *Client) ListDomainData(ctx context.Context, domainID string) ([]DomainD
 func (c *Client) DeleteDomainData(ctx context.Context, domainID, domainDataID string) error {
 	var resp DeleteDomainDataResponse
 	req := &DeleteDomainDataRequest{DomainID: domainID, DomainDataID: domainDataID}
-	if err := c.doRequest(ctx, "/api/v1alpha1/domaindata/delete", req, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/domaindata/delete", req, &resp); err != nil {
 		return err
 	}
 	if !resp.Status.IsSuccess() {
@@ -233,7 +233,7 @@ type GrantDomainDataResponse struct {
 // GrantDomainData grants access to domain data for another domain.
 func (c *Client) GrantDomainData(ctx context.Context, req *GrantDomainDataRequest) error {
 	var resp GrantDomainDataResponse
-	if err := c.doRequest(ctx, "/api/v1alpha1/domaindata/grant", req, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/domaindatagrant/create", req, &resp); err != nil {
 		return err
 	}
 	if !resp.Status.IsSuccess() {

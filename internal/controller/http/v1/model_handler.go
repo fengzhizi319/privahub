@@ -1,12 +1,12 @@
 package v1
 
 import (
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/fengzhizi319/privahub/internal/service"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
 	"github.com/fengzhizi319/privahub/pkg/response"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 // ModelHandler handles model and serving HTTP requests.
@@ -213,7 +213,7 @@ func (h *ModelHandler) Pack(c *gin.Context) {
 					AppImage: "secretflow",
 					Alias:    "model_pack_" + req.ModelID,
 					Parties: []kuscia.Party{
-						{Name: "alice", Role: "guest"},
+						{DomainID: "alice", Role: "guest"},
 					},
 				},
 			},

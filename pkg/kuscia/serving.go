@@ -129,7 +129,7 @@ func (c *Client) DeleteServing(ctx context.Context, servingID string) error {
 func (c *Client) BatchQueryServingStatus(ctx context.Context, servingIDs []string) ([]ServingStatusEntry, error) {
 	req := &BatchQueryServingStatusRequest{ServingIDs: servingIDs}
 	var resp BatchQueryServingStatusResponse
-	if err := c.doRequest(ctx, "/api/v1/serving/batchQueryStatus", req, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/serving/status/batchQuery", req, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Data == nil {

@@ -30,13 +30,13 @@ func TestToSnakeCase(t *testing.T) {
 
 func TestToCamelCase(t *testing.T) {
 	cases := map[string]string{
-		"project_id":        "projectId",
-		"datatable_id":      "datatableId",
-		"schedule_task_id":  "scheduleTaskId",
-		"name":              "name",
-		"alreadyCamel":      "alreadyCamel",
-		"":                  "",
-		"gmt_create":        "gmtCreate",
+		"project_id":         "projectId",
+		"datatable_id":       "datatableId",
+		"schedule_task_id":   "scheduleTaskId",
+		"name":               "name",
+		"alreadyCamel":       "alreadyCamel",
+		"":                   "",
+		"gmt_create":         "gmtCreate",
 		"push_to_tee_status": "pushToTeeStatus",
 	}
 	for in, want := range cases {
