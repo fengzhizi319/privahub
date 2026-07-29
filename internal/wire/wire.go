@@ -125,6 +125,11 @@ type App struct {
 	SseServer              *service.SseServer
 	EnvService             *service.EnvService
 	DataDirService         *service.DataDirectoryService
+
+	// Background services (for graceful shutdown)
+	ScheduledService    *service.ScheduledService
+	JobSyncService      *service.JobStatusSyncService
+	ServingSyncService  *service.ServingStatusSyncService
 }
 
 // NewApp creates and initializes the application with all dependencies.
@@ -253,6 +258,23 @@ func NewApp(db *gorm.DB, cfg *config.Config) *App {
 		SseServer:              sseServer,
 		EnvService:             envService,
 		DataDirService:         dataDirService,
+
+		ScheduledService:   scheduledService,
+		JobSyncService:     jobSyncService,
+		ServingSyncService: servingSyncService,
+	}
+}
+
+// Shutdown gracefully stops all background services.
+func (a *App) Shutdown() {
+	if a.ScheduledService != nil {
+		a.ScheduledService.Stop()
+	}
+	if a.JobSyncService != nil {
+		a.JobSyncService.Stop()
+	}
+	if a.ServingSyncService != nil {
+		a.ServingSyncService.Stop()
 	}
 }
 

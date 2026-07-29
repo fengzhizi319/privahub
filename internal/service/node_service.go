@@ -114,6 +114,9 @@ func (s *NodeService) CreateNode(ctx context.Context, req *CreateNodeRequest) (*
 			DomainID: req.NodeID,
 			Role:     nodeType,
 		})
+		// DataProxy integration: set access_directly=false for new domain's datasources
+		// Corresponds to Java DataProxyService.updateDataSourceUseDataProxyByDomainId
+		s.updateDataProxyForDomain(ctx, req.NodeID)
 	}
 
 	return s.toNodeVO(node), nil
@@ -511,4 +514,27 @@ func (s *NodeService) GetNodeResultDetail(ctx context.Context, req *GetNodeResul
 	}
 
 	return vo, nil
+}
+
+// updateDataProxyForDomain sets access_directly=false for all datasources of a domain.
+// This forces data access through the DataProxy service (best-effort).
+// Corresponds to Java: DataProxyService.updateDataSourceUseDataProxyByDomainId
+func (s *NodeService) updateDataProxyForDomain(ctx context.Context, domainID string) {
+	if s.kusciaClient == nil {
+		return
+	}
+	dataSources, err := s.kusciaClient.ListDomainDataSource(ctx, domainID)
+	if err != nil {
+		return // best-effort, ignore errors
+	}
+	accessDirectlyFalse := false
+	for _, ds := range dataSources {
+		if ds.AccessDirectly {
+			_ = s.kusciaClient.UpdateDomainDataSource(ctx, &kuscia.UpdateDomainDataSourceRequest{
+				DomainID:       ds.DomainID,
+				DatasourceID:   ds.DatasourceID,
+				AccessDirectly: &accessDirectlyFalse,
+			})
+		}
+	}
 }

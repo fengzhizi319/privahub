@@ -24,12 +24,18 @@ type MiscHandler struct {
 }
 
 // ComponentDef represents a component definition loaded from config.
+// Enhanced to include full attrs/inputs/outputs schema (P1: corresponding to Java ComponentServiceImpl).
 type ComponentDef struct {
-	CodeName    string `json:"code_name"`
-	Name        string `json:"name"`
-	Category    string `json:"category"`
-	Version     string `json:"version"`
-	Description string `json:"description"`
+	CodeName    string            `json:"code_name"`
+	Domain      string            `json:"domain,omitempty"`
+	Name        string            `json:"name"`
+	Category    string            `json:"category"`
+	Version     string            `json:"version"`
+	Description string            `json:"description"`
+	Desc        string            `json:"desc,omitempty"`
+	Attrs       []json.RawMessage `json:"attrs,omitempty"`
+	Inputs      []json.RawMessage `json:"inputs,omitempty"`
+	Outputs     []json.RawMessage `json:"outputs,omitempty"`
 }
 
 // NewMiscHandler creates a new MiscHandler.

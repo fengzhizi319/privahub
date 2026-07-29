@@ -72,6 +72,7 @@ func AllModels() []interface{} {
 		&model.ProjectResultDO{},
 		&model.EdgeDataSyncLogDO{},
 		&model.ProjectScheduleTaskDO{},
+		&model.CertificateDO{},
 	}
 }
 

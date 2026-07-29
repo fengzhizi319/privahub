@@ -1,5 +1,21 @@
 package model
 
+import "time"
+
+// CertificateDO stores TLS certificates for Kuscia domains.
+type CertificateDO struct {
+	BaseDO
+	DomainID   string    `gorm:"index:idx_cert_domain;type:varchar(64);not null" json:"domain_id"`
+	CommonName string    `gorm:"type:varchar(256)" json:"common_name"`
+	CertPEM    string    `gorm:"type:text" json:"cert_pem"`
+	KeyPEM     string    `gorm:"type:text" json:"key_pem"`
+	NotBefore  time.Time `gorm:"not null" json:"not_before"`
+	NotAfter   time.Time `gorm:"not null" json:"not_after"`
+	Status     string    `gorm:"type:varchar(32);default:'valid'" json:"status"`
+}
+
+func (CertificateDO) TableName() string { return "certificate" }
+
 // ProjectRuleDO associates a project with a rule.
 type ProjectRuleDO struct {
 	BaseDO

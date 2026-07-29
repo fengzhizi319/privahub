@@ -125,6 +125,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
+	// Stop background services (cron engine, job/serving sync loops)
+	app.Shutdown()
+
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Error("Server forced to shutdown", zap.Error(err))
 	}

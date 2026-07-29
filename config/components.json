@@ -1,1 +1,316 @@
+[
+  {
+    "code_name": "data_prep/csv_data_import",
+    "domain": "data_prep",
+    "name": "csv_data_import",
+    "category": "data_prep",
+    "version": "1.0.0",
+    "description": "Import CSV format data into privacy computing platform",
+    "desc": "Import CSV format data into privacy computing platform.",
+    "attrs": [
+      {"name": "delimiter", "desc": "Delimiter character for CSV fields.", "type": "AT_STRING", "atomic": {"isOptional": true, "defaultValue": {"s": ","}}},
+      {"name": "header", "desc": "Whether the first row is a header.", "type": "AT_BOOL", "atomic": {"isOptional": true, "defaultValue": {"b": true}}},
+      {"name": "null_str", "desc": "String representation of null values.", "type": "AT_STRING", "atomic": {"isOptional": true, "defaultValue": {"s": "NA"}}}
+    ],
+    "inputs": [],
+    "outputs": [
+      {"name": "output_ds", "desc": "Output vertical table.", "types": ["sf.table.vertical"]}
+    ]
+  },
+  {
+    "code_name": "data_prep/psi",
+    "domain": "data_prep",
+    "name": "psi",
+    "category": "data_prep",
+    "version": "1.0.0",
+    "description": "Private set intersection between multiple parties",
+    "desc": "PSI between two parties.",
+    "attrs": [
+      {"name": "protocol", "desc": "PSI protocol.", "type": "AT_UNION_GROUP", "union": {"defaultSelection": "PROTOCOL_RR22"}},
+      {"prefixes": ["protocol"], "name": "PROTOCOL_ECDH", "desc": "ECDH protocol.", "type": "AT_UNION_GROUP", "union": {"defaultSelection": "CURVE_25519"}},
+      {"prefixes": ["protocol", "PROTOCOL_ECDH"], "name": "CURVE_25519", "desc": "CURVE_25519"},
+      {"prefixes": ["protocol", "PROTOCOL_ECDH"], "name": "CURVE_FOURQ", "desc": "CURVE_FOURQ"},
+      {"prefixes": ["protocol", "PROTOCOL_ECDH"], "name": "CURVE_SM2", "desc": "CURVE_SM2"},
+      {"prefixes": ["protocol", "PROTOCOL_ECDH"], "name": "CURVE_SECP256K1", "desc": "CURVE_SECP256K1"},
+      {"prefixes": ["protocol"], "name": "PROTOCOL_RR22", "desc": "RR22 protocol."},
+      {"prefixes": ["protocol"], "name": "PROTOCOL_KKRT", "desc": "KKRT protocol."},
+      {"name": "sort_result", "desc": "If false, output is not promised to be aligned.", "type": "AT_BOOL", "atomic": {"isOptional": true, "defaultValue": {"b": true}}},
+      {"name": "receiver_parties", "desc": "Party names of receiver for result.", "type": "AT_PARTY", "atomic": {"listMaxLengthInclusive": "2"}},
+      {"name": "allow_empty_result", "desc": "Whether to allow the result to be empty.", "type": "AT_BOOL", "atomic": {"isOptional": true, "defaultValue": {"b": false}}},
+      {"name": "check_hash_digest", "desc": "Check hash digest consistency between parties.", "type": "AT_BOOL", "atomic": {"isOptional": true, "defaultValue": {"b": false}}}
+    ],
+    "inputs": [
+      {"name": "input_ds1", "desc": "Input vertical table for party 1.", "types": ["sf.table.vertical"], "attrs": [{"name": "keys", "desc": "Column(s) used as join keys.", "colMinCntInclusive": "1", "colMaxCntInclusive": "1"}]},
+      {"name": "input_ds2", "desc": "Input vertical table for party 2.", "types": ["sf.table.vertical"], "attrs": [{"name": "keys", "desc": "Column(s) used as join keys.", "colMinCntInclusive": "1", "colMaxCntInclusive": "1"}]}
+    ],
+    "outputs": [
+      {"name": "output_ds", "desc": "Output vertical table after PSI.", "types": ["sf.table.vertical"]}
+    ]
+  },
+  {
+    "code_name": "data_prep/psi_tp",
+    "domain": "data_prep",
+    "name": "psi_tp",
+    "category": "data_prep",
+    "version": "1.0.0",
+    "description": "Three-party private set intersection",
+    "desc": "Three-party PSI protocol.",
+    "attrs": [
+      {"name": "ecdh_curve", "desc": "ECC curve name.", "type": "AT_STRING", "atomic": {"isOptional": true, "defaultValue": {"s": "CURVE_25519"}, "allowedValues": {"ss": ["CURVE_25519", "CURVE_FOURQ", "CURVE_SM2", "CURVE_SECP256K1"]}}}
+    ],
+    "inputs": [
+      {"name": "input_ds1", "desc": "Input table for party 1.", "types": ["sf.table.vertical"], "attrs": [{"name": "keys", "desc": "Join keys.", "colMinCntInclusive": "1", "colMaxCntInclusive": "1"}]},
+      {"name": "input_ds2", "desc": "Input table for party 2.", "types": ["sf.table.vertical"], "attrs": [{"name": "keys", "desc": "Join keys.", "colMinCntInclusive": "1", "colMaxCntInclusive": "1"}]},
+      {"name": "input_ds3", "desc": "Input table for party 3.", "types": ["sf.table.vertical"], "attrs": [{"name": "keys", "desc": "Join keys.", "colMinCntInclusive": "1", "colMaxCntInclusive": "1"}]}
+    ],
+    "outputs": [
+      {"name": "output_ds", "desc": "Output vertical table.", "types": ["sf.table.vertical"]}
+    ]
+  },
+  {
+    "code_name": "feature/vert_woe_binning",
+    "domain": "feature",
+    "name": "vert_woe_binning",
+    "category": "feature",
+    "version": "1.0.0",
+    "description": "Vertical WOE binning for feature engineering",
+    "desc": "Generate Weight of Evidence (WOE) binning rules for vertical partitioning data.",
+    "attrs": [
+      {"name": "secure_device_type", "desc": "Type of secure device.", "type": "AT_STRING", "atomic": {"isOptional": true, "defaultValue": {"s": "heu"}, "allowedValues": {"ss": ["heu", "spu"]}}},
+      {"name": "binning_method", "desc": "Binning method.", "type": "AT_STRING", "atomic": {"isOptional": true, "defaultValue": {"s": "quantile"}, "allowedValues": {"ss": ["quantile", "bucket", "manual"]}}},
+      {"name": "bin_num", "desc": "Number of bins.", "type": "AT_INT", "atomic": {"isOptional": true, "defaultValue": {"i64": "10"}, "lowerBoundEnabled": true, "lowerBound": {"i64": "1"}, "lowerBoundInclusive": true}},
+      {"name": "positive_label", "desc": "Value for positive samples.", "type": "AT_STRING", "atomic": {"isOptional": true, "defaultValue": {"s": "1"}}},
+      {"name": "chimerge_init_bins", "desc": "Initial number of bins for ChiMerge.", "type": "AT_INT", "atomic": {"isOptional": true, "defaultValue": {"i64": "100"}}},
+      {"name": "chimerge_target_bins", "desc": "Target number of bins for ChiMerge.", "type": "AT_INT", "atomic": {"isOptional": true, "defaultValue": {"i64": "10"}}},
+      {"name": "chimerge_target_pvalue", "desc": "Target p-value for ChiMerge.", "type": "AT_FLOAT", "atomic": {"isOptional": true, "defaultValue": {"f": 0.1}}}
+    ],
+    "inputs": [
+      {"name": "input_ds", "desc": "Input vertical table.", "types": ["sf.table.vertical"], "attrs": [{"name": "feature", "desc": "Feature columns to bin.", "colMinCntInclusive": "1", "colMaxCntInclusive": "999"}]}
+    ],
+    "outputs": [
+      {"name": "output_ds", "desc": "Output vertical table.", "types": ["sf.table.vertical"]},
+      {"name": "output_bin_rule", "desc": "Output binning rule model.", "types": ["sf.model.ss_glm"]}
+    ]
+  },
+  {
+    "code_name": "feature/vert_bin_substitution",
+    "domain": "feature",
+    "name": "vert_bin_substitution",
+    "category": "feature",
+    "version": "1.0.0",
+    "description": "Apply binning rules to transform features",
+    "desc": "Apply existing binning rules to substitute feature values.",
+    "attrs": [],
+    "inputs": [
+      {"name": "input_ds", "desc": "Input vertical table.", "types": ["sf.table.vertical"]},
+      {"name": "input_bin_rule", "desc": "Input binning rule model.", "types": ["sf.model.ss_glm"]}
+    ],
+    "outputs": [
+      {"name": "output_ds", "desc": "Output substituted table.", "types": ["sf.table.vertical"]}
+    ]
+  },
+  {
+    "code_name": "feature/feature_filter",
+    "domain": "feature",
+    "name": "feature_filter",
+    "category": "feature",
+    "version": "1.0.0",
+    "description": "Filter features by name or condition",
+    "desc": "Filter features by name or condition.",
+    "attrs": [],
+    "inputs": [
+      {"name": "input_ds", "desc": "Input vertical table.", "types": ["sf.table.vertical"], "attrs": [{"name": "feature", "desc": "Features to keep.", "colMinCntInclusive": "1", "colMaxCntInclusive": "999"}]}
+    ],
+    "outputs": [
+      {"name": "output_ds", "desc": "Output filtered table.", "types": ["sf.table.vertical"]}
+    ]
+  },
+  {
+    "code_name": "ml.train/ss_xgb_train",
+    "domain": "ml.train",
+    "name": "ss_xgb_train",
+    "category": "ml.train",
+    "version": "1.0.0",
+    "description": "Secure XGBoost model training",
+    "desc": "Secret sharing XGBoost for vertical partitioning dataset.",
+    "attrs": [
+      {"name": "num_boost_round", "desc": "Number of boosting iterations.", "type": "AT_INT", "atomic": {"isOptional": true, "defaultValue": {"i64": "10"}, "lowerBoundEnabled": true, "lowerBound": {"i64": "1"}, "lowerBoundInclusive": true}},
+      {"name": "max_depth", "desc": "Maximum depth of a tree.", "type": "AT_INT", "atomic": {"isOptional": true, "defaultValue": {"i64": "5"}, "lowerBoundEnabled": true, "lowerBound": {"i64": "1"}, "lowerBoundInclusive": true, "upperBoundEnabled": true, "upperBound": {"i64": "16"}, "upperBoundInclusive": true}},
+      {"name": "learning_rate", "desc": "Step size shrinkage to prevent overfitting.", "type": "AT_FLOAT", "atomic": {"isOptional": true, "defaultValue": {"f": 0.1}, "lowerBoundEnabled": true, "lowerBound": {}, "upperBoundEnabled": true, "upperBound": {"f": 1.0}}},
+      {"name": "objective", "desc": "Learning objective.", "type": "AT_STRING", "atomic": {"isOptional": true, "defaultValue": {"s": "logistic"}, "allowedValues": {"ss": ["linear", "logistic"]}}},
+      {"name": "reg_lambda", "desc": "L2 regularization term.", "type": "AT_FLOAT", "atomic": {"isOptional": true, "defaultValue": {"f": 0.1}}},
+      {"name": "subsample", "desc": "Subsample ratio of training instances.", "type": "AT_FLOAT", "atomic": {"isOptional": true, "defaultValue": {"f": 1.0}, "lowerBoundEnabled": true, "lowerBound": {}, "upperBoundEnabled": true, "upperBound": {"f": 1.0}}},
+      {"name": "colsample_by_tree", "desc": "Subsample ratio of columns per tree.", "type": "AT_FLOAT", "atomic": {"isOptional": true, "defaultValue": {"f": 1.0}}},
+      {"name": "sketch_eps", "desc": "Sketch accuracy for quantile.", "type": "AT_FLOAT", "atomic": {"isOptional": true, "defaultValue": {"f": 0.1}}},
+      {"name": "base_score", "desc": "Initial prediction score.", "type": "AT_FLOAT", "atomic": {"isOptional": true, "defaultValue": {"f": 0.5}}}
+    ],
+    "inputs": [
+      {"name": "input_ds", "desc": "Input vertical table.", "types": ["sf.table.vertical"], "attrs": [{"name": "feature", "desc": "Feature columns.", "colMinCntInclusive": "1", "colMaxCntInclusive": "999"}]}
+    ],
+    "outputs": [
+      {"name": "output_ds", "desc": "Output table with predictions.", "types": ["sf.table.vertical"]},
+      {"name": "output_model", "desc": "Trained XGBoost model.", "types": ["sf.model.ss_xgb"]}
+    ]
+  },
+  {
+    "code_name": "ml.train/ss_glm_train",
+    "domain": "ml.train",
+    "name": "ss_glm_train",
+    "category": "ml.train",
+    "version": "1.0.0",
+    "description": "Secure generalized linear model training",
+    "desc": "Secret sharing GLM for vertical partitioning dataset.",
+    "attrs": [
+      {"name": "epochs", "desc": "Number of training epochs.", "type": "AT_INT", "atomic": {"isOptional": true, "defaultValue": {"i64": "10"}}},
+      {"name": "learning_rate", "desc": "Learning rate.", "type": "AT_FLOAT", "atomic": {"isOptional": true, "defaultValue": {"f": 0.1}}},
+      {"name": "batch_size", "desc": "Batch size for training.", "type": "AT_INT", "atomic": {"isOptional": true, "defaultValue": {"i64": "1024"}}},
+      {"name": "link_type", "desc": "Link function type.", "type": "AT_STRING", "atomic": {"isOptional": true, "defaultValue": {"s": "Logit"}, "allowedValues": {"ss": ["Logit", "Log", "Reciprocal", "Indentity"]}}},
+      {"name": "label_dist_type", "desc": "Label distribution type.", "type": "AT_STRING", "atomic": {"isOptional": true, "defaultValue": {"s": "Bernoulli"}, "allowedValues": {"ss": ["Bernoulli", "Poisson", "Gamma", "Tweedie"]}}},
+      {"name": "iter_start_irls", "desc": "Start IRLS after this iteration.", "type": "AT_INT", "atomic": {"isOptional": true, "defaultValue": {"i64": "0"}}},
+      {"name": "decay_epoch", "desc": "Epoch to decay learning rate.", "type": "AT_INT", "atomic": {"isOptional": true, "defaultValue": {"i64": "2"}}},
+      {"name": "decay_rate", "desc": "Learning rate decay rate.", "type": "AT_FLOAT", "atomic": {"isOptional": true, "defaultValue": {"f": 0.5}}}
+    ],
+    "inputs": [
+      {"name": "input_ds", "desc": "Input vertical table.", "types": ["sf.table.vertical"], "attrs": [{"name": "feature", "desc": "Feature columns.", "colMinCntInclusive": "1", "colMaxCntInclusive": "999"}]}
+    ],
+    "outputs": [
+      {"name": "output_ds", "desc": "Output table.", "types": ["sf.table.vertical"]},
+      {"name": "output_model", "desc": "Trained GLM model.", "types": ["sf.model.ss_glm"]}
+    ]
+  },
+  {
+    "code_name": "ml.train/ss_sgd_train",
+    "domain": "ml.train",
+    "name": "ss_sgd_train",
+    "category": "ml.train",
+    "version": "1.0.0",
+    "description": "Secure stochastic gradient descent training",
+    "desc": "Secret sharing SGD for vertical partitioning dataset.",
+    "attrs": [
+      {"name": "epochs", "desc": "Number of training epochs.", "type": "AT_INT", "atomic": {"isOptional": true, "defaultValue": {"i64": "10"}}},
+      {"name": "learning_rate", "desc": "Learning rate.", "type": "AT_FLOAT", "atomic": {"isOptional": true, "defaultValue": {"f": 0.1}}},
+      {"name": "batch_size", "desc": "Batch size.", "type": "AT_INT", "atomic": {"isOptional": true, "defaultValue": {"i64": "1024"}}},
+      {"name": "sig_type", "desc": "Sigmoid approximation type.", "type": "AT_STRING", "atomic": {"isOptional": true, "defaultValue": {"s": "real"}, "allowedValues": {"ss": ["real", "min", "t1", "t3", "t5", "t7", "t9", "mix", "seg3"]}}}
+    ],
+    "inputs": [
+      {"name": "input_ds", "desc": "Input vertical table.", "types": ["sf.table.vertical"], "attrs": [{"name": "feature", "desc": "Feature columns.", "colMinCntInclusive": "1", "colMaxCntInclusive": "999"}]}
+    ],
+    "outputs": [
+      {"name": "output_ds", "desc": "Output table.", "types": ["sf.table.vertical"]},
+      {"name": "output_model", "desc": "Trained SGD model.", "types": ["sf.model.ss_sgd"]}
+    ]
+  },
+  {
+    "code_name": "ml.eval/ss_pvalue",
+    "domain": "ml.eval",
+    "name": "ss_pvalue",
+    "category": "ml.eval",
+    "version": "1.0.0",
+    "description": "Secure P-value computation for model evaluation",
+    "desc": "Compute P-value for model evaluation using secret sharing.",
+    "attrs": [],
+    "inputs": [
+      {"name": "input_ds", "desc": "Input vertical table.", "types": ["sf.table.vertical"]},
+      {"name": "input_model", "desc": "Input model.", "types": ["sf.model.ss_xgb", "sf.model.ss_glm", "sf.model.ss_sgd"]}
+    ],
+    "outputs": [
+      {"name": "output_report", "desc": "P-value report.", "types": ["sf.report"]}
+    ]
+  },
+  {
+    "code_name": "ml.eval/biclassification_eval",
+    "domain": "ml.eval",
+    "name": "biclassification_eval",
+    "category": "ml.eval",
+    "version": "1.0.0",
+    "description": "Binary classification evaluation metrics",
+    "desc": "Evaluate binary classification model performance.",
+    "attrs": [
+      {"name": "bucket_size", "desc": "Number of buckets for metrics.", "type": "AT_INT", "atomic": {"isOptional": true, "defaultValue": {"i64": "10"}}},
+      {"name": "min_item_cnt_per_bucket", "desc": "Min item count per bucket.", "type": "AT_INT", "atomic": {"isOptional": true, "defaultValue": {"i64": "5"}}}
+    ],
+    "inputs": [
+      {"name": "input_ds", "desc": "Input table with predictions.", "types": ["sf.table.vertical"], "attrs": [{"name": "label", "desc": "Label column.", "colMinCntInclusive": "1", "colMaxCntInclusive": "1"}, {"name": "prediction", "desc": "Prediction score column.", "colMinCntInclusive": "1", "colMaxCntInclusive": "1"}]}
+    ],
+    "outputs": [
+      {"name": "output_report", "desc": "Evaluation report.", "types": ["sf.report"]}
+    ]
+  },
+  {
+    "code_name": "ml.predict/ss_xgb_predict",
+    "domain": "ml.predict",
+    "name": "ss_xgb_predict",
+    "category": "ml.predict",
+    "version": "1.0.0",
+    "description": "Secure XGBoost model prediction",
+    "desc": "Predict using secret sharing XGBoost model.",
+    "attrs": [
+      {"name": "receiver", "desc": "Party that receives prediction result.", "type": "AT_PARTY", "atomic": {"isOptional": true}},
+      {"name": "save_ids", "desc": "Save row IDs.", "type": "AT_BOOL", "atomic": {"isOptional": true, "defaultValue": {"b": true}}},
+      {"name": "save_label", "desc": "Save label column.", "type": "AT_BOOL", "atomic": {"isOptional": true, "defaultValue": {"b": false}}}
+    ],
+    "inputs": [
+      {"name": "input_ds", "desc": "Input vertical table.", "types": ["sf.table.vertical"]},
+      {"name": "input_model", "desc": "Input XGBoost model.", "types": ["sf.model.ss_xgb"]}
+    ],
+    "outputs": [
+      {"name": "output_ds", "desc": "Output table with predictions.", "types": ["sf.table.vertical"]}
+    ]
+  },
+  {
+    "code_name": "ml.predict/ss_glm_predict",
+    "domain": "ml.predict",
+    "name": "ss_glm_predict",
+    "category": "ml.predict",
+    "version": "1.0.0",
+    "description": "Secure GLM model prediction",
+    "desc": "Predict using secret sharing GLM model.",
+    "attrs": [
+      {"name": "receiver", "desc": "Party that receives prediction result.", "type": "AT_PARTY", "atomic": {"isOptional": true}},
+      {"name": "save_ids", "desc": "Save row IDs.", "type": "AT_BOOL", "atomic": {"isOptional": true, "defaultValue": {"b": true}}},
+      {"name": "save_label", "desc": "Save label column.", "type": "AT_BOOL", "atomic": {"isOptional": true, "defaultValue": {"b": false}}}
+    ],
+    "inputs": [
+      {"name": "input_ds", "desc": "Input vertical table.", "types": ["sf.table.vertical"]},
+      {"name": "input_model", "desc": "Input GLM model.", "types": ["sf.model.ss_glm"]}
+    ],
+    "outputs": [
+      {"name": "output_ds", "desc": "Output table with predictions.", "types": ["sf.table.vertical"]}
+    ]
+  },
+  {
+    "code_name": "stats/secure_aggregation",
+    "domain": "stats",
+    "name": "secure_aggregation",
+    "category": "stats",
+    "version": "1.0.0",
+    "description": "Secure aggregation statistics across parties",
+    "desc": "Compute aggregation statistics securely across parties.",
+    "attrs": [
+      {"name": "aggregation_functions", "desc": "Aggregation functions to apply.", "type": "AT_STRINGS", "atomic": {"isOptional": true, "defaultValue": {"ss": ["sum", "count", "min", "max", "mean"]}}}
+    ],
+    "inputs": [
+      {"name": "input_ds", "desc": "Input vertical table.", "types": ["sf.table.vertical"], "attrs": [{"name": "feature", "desc": "Columns to aggregate.", "colMinCntInclusive": "1", "colMaxCntInclusive": "999"}]}
+    ],
+    "outputs": [
+      {"name": "output_report", "desc": "Aggregation report.", "types": ["sf.report"]}
+    ]
+  },
+  {
+    "code_name": "io/identity",
+    "domain": "io",
+    "name": "identity",
+    "category": "io",
+    "version": "1.0.0",
+    "description": "Pass-through data without transformation",
+    "desc": "Pass-through data without transformation.",
+    "attrs": [],
+    "inputs": [
+      {"name": "input_ds", "desc": "Input table.", "types": ["sf.table.vertical", "sf.table.individual"]}
+    ],
+    "outputs": [
+      {"name": "output_ds", "desc": "Output table (same as input).", "types": ["sf.table.vertical", "sf.table.individual"]}
+    ]
+  }
+]
 [{"code_name": "data_prep/csv_data_import", "name": "CSV Data Import", "category": "data_prep", "version": "1.0.0", "description": "Import CSV format data into privacy computing platform"}, {"code_name": "data_prep/psi", "name": "Private Set Intersection", "category": "data_prep", "version": "1.0.0", "description": "Private set intersection between multiple parties"}, {"code_name": "data_prep/psi_tp", "name": "Three-Party PSI", "category": "data_prep", "version": "1.0.0", "description": "Three-party private set intersection"}, {"code_name": "feature/vert_woe_binning", "name": "WOE Binning", "category": "feature", "version": "1.0.0", "description": "Vertical WOE binning for feature engineering"}, {"code_name": "feature/vert_bin_substitution", "name": "Bin Substitution", "category": "feature", "version": "1.0.0", "description": "Apply binning rules to transform features"}, {"code_name": "feature/feature_filter", "name": "Feature Filter", "category": "feature", "version": "1.0.0", "description": "Filter features by name or condition"}, {"code_name": "ml.train/ss_xgb_train", "name": "SS-XGBoost Train", "category": "ml.train", "version": "1.0.0", "description": "Secure XGBoost model training"}, {"code_name": "ml.train/ss_glm_train", "name": "SS-GLM Train", "category": "ml.train", "version": "1.0.0", "description": "Secure generalized linear model training"}, {"code_name": "ml.train/ss_sgd_train", "name": "SS-SGD Train", "category": "ml.train", "version": "1.0.0", "description": "Secure stochastic gradient descent training"}, {"code_name": "ml.eval/ss_pvalue", "name": "SS-PValue", "category": "ml.eval", "version": "1.0.0", "description": "Secure P-value computation for model evaluation"}, {"code_name": "ml.eval/biclassification_eval", "name": "Biclassification Eval", "category": "ml.eval", "version": "1.0.0", "description": "Binary classification evaluation metrics"}, {"code_name": "ml.predict/ss_xgb_predict", "name": "SS-XGBoost Predict", "category": "ml.predict", "version": "1.0.0", "description": "Secure XGBoost model prediction"}, {"code_name": "ml.predict/ss_glm_predict", "name": "SS-GLM Predict", "category": "ml.predict", "version": "1.0.0", "description": "Secure GLM model prediction"}, {"code_name": "stats/secure_aggregation", "name": "Secure Aggregation", "category": "stats", "version": "1.0.0", "description": "Secure aggregation statistics across parties"}, {"code_name": "io/identity", "name": "Identity", "category": "io", "version": "1.0.0", "description": "Pass-through data without transformation"}]

@@ -55,9 +55,6 @@ func NewRouter(log *zap.Logger, app *wire.App) *gin.Engine {
 	// API v1alpha1 group (matches Java SecretPad route prefix)
 	api := r.Group("/api/v1alpha1")
 	{
-		// Public routes (no auth required)
-		registerAuthRoutes(api, app.AuthHandler)
-
 		// Protected routes (JWT auth required)
 		protected := api.Group("")
 		protected.Use(middleware.JWTAuth(app.JWTManager))
@@ -97,6 +94,10 @@ func NewRouter(log *zap.Logger, app *wire.App) *gin.Engine {
 		registerGraphDatasourceRoutes(aux, app)
 		registerEdgeDataSyncRoutes(aux, app)
 	}
+
+	// Java SecretPad-compatible auth routes (AuthController maps to /api)
+	authGroup := r.Group("/api")
+	registerAuthRoutes(authGroup, app.AuthHandler)
 
 	// Env/platform info (public)
 	r.GET("/api/v1alpha1/env", func(c *gin.Context) {
@@ -229,8 +230,8 @@ func registerDatasourceRoutes(rg *gin.RouterGroup, h *v1.DatasourceHandler) {
 }
 
 func registerAuthRoutes(rg *gin.RouterGroup, h *v1.AuthHandler) {
-	rg.POST("/user/login", h.Login)
-	rg.POST("/user/logout", h.Logout)
+	rg.POST("/login", h.Login)
+	rg.POST("/logout", h.Logout)
 	rg.POST("/user/refresh", h.RefreshToken)
 }
 
