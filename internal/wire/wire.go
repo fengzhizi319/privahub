@@ -171,7 +171,7 @@ func NewApp(db *gorm.DB, cfg *config.Config) *App {
 	// Services
 	authService := service.NewAuthService(userRepo, tokenRepo, jwtManager)
 	nodeService := service.NewNodeService(nodeRepo, routeRepo, kusciaClient)
-	projectService := service.NewProjectService(projectRepo, projectInstRepo, projectNodeRepo, datatableRepo, db)
+	projectService := service.NewProjectService(projectRepo, projectInstRepo, projectNodeRepo, datatableRepo, db, kusciaClient)
 	graphService := service.NewGraphService(graphRepo, graphNodeRepo, jobRepo, taskRepo, taskLogRepo, kusciaClient)
 	jobService := service.NewJobService(jobRepo, taskRepo, taskLogRepo, graphRepo, graphNodeRepo, kusciaClient)
 	datatableService := service.NewDatatableService(datatableRepo, fedTableRepo, db, kusciaClient)

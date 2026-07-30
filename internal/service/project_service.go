@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
+	"github.com/fengzhizi319/privahub/pkg/kuscia"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -36,6 +38,7 @@ type ProjectService struct {
 	projectNodeRepo      repository.ProjectNodeRepository
 	projectDatatableRepo repository.DatatableRepository
 	db                   *gorm.DB
+	kusciaClient         *kuscia.Client
 }
 
 // NewProjectService creates a new ProjectService.
@@ -45,6 +48,7 @@ func NewProjectService(
 	projectNodeRepo repository.ProjectNodeRepository,
 	projectDatatableRepo repository.DatatableRepository,
 	db *gorm.DB,
+	kusciaClient *kuscia.Client,
 ) *ProjectService {
 	return &ProjectService{
 		projectRepo:          projectRepo,
@@ -52,6 +56,7 @@ func NewProjectService(
 		projectNodeRepo:      projectNodeRepo,
 		projectDatatableRepo: projectDatatableRepo,
 		db:                   db,
+		kusciaClient:         kusciaClient,
 	}
 }
 
@@ -340,13 +345,48 @@ func (s *ProjectService) AddDatatable(ctx context.Context, req *AddDatatableRequ
 		return s.projectDatatableRepo.Update(ctx, existing)
 	}
 
-	return s.projectDatatableRepo.Create(ctx, &model.ProjectDatatableDO{
+	if err := s.projectDatatableRepo.Create(ctx, &model.ProjectDatatableDO{
 		ProjectID:    projectID,
 		NodeID:       nodeID,
 		DatatableID:  datatableID,
 		TableConfigs: tableConfigs,
 		Source:       "IMPORTED",
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Authorizing a datatable to a project grants read access to every other
+	// project node, so cross-domain jobs can resolve the DomainData metadata.
+	s.grantDatatableToProjectNodes(ctx, projectID, nodeID, datatableID)
+	return nil
+}
+
+// grantDatatableToProjectNodes grants the datatable's DomainData to all
+// project nodes other than the owner. Best-effort: already-existing grants
+// are ignored and failures do not fail the association itself.
+func (s *ProjectService) grantDatatableToProjectNodes(ctx context.Context, projectID, ownerNodeID, datatableID string) {
+	if s.kusciaClient == nil {
+		return
+	}
+	nodes, err := s.projectNodeRepo.FindByProjectID(ctx, projectID)
+	if err != nil {
+		return
+	}
+	for _, n := range nodes {
+		if n.NodeID == ownerNodeID {
+			continue
+		}
+		err := s.kusciaClient.GrantDomainData(ctx, &kuscia.GrantDomainDataRequest{
+			DomainID:     ownerNodeID,
+			DomainDataID: datatableID,
+			GrantDomain:  n.NodeID,
+		})
+		if err != nil && !strings.Contains(err.Error(), "exist") {
+			// Tolerate duplicate-grant errors; log-worthy failures are surfaced
+			// through job errors if the data actually cannot be read.
+			continue
+		}
+	}
 }
 
 // DeleteDatatable removes a datatable association from a project. It is

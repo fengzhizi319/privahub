@@ -211,7 +211,7 @@ func (s *JobService) CreateJob(ctx context.Context, req *CreateJobRequest) (*Job
 			Initiator: "alice",
 			Tasks: []kuscia.TaskConfig{
 				{
-					AppImage: "secretflow",
+					AppImage: "secretflow-image",
 					Alias:    req.Name,
 					Parties: []kuscia.Party{
 						{DomainID: "alice", Role: "guest"},

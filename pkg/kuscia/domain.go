@@ -72,7 +72,14 @@ type CreateDomainDataResponse struct {
 }
 
 // QueryDomainDataRequest represents a Kuscia QueryDomainData API request.
+// The Kuscia HTTP API expects the fields wrapped in a `data` sub-message
+// (see QueryDomainDataRequest in domaindata.proto).
 type QueryDomainDataRequest struct {
+	Data QueryDomainDataRequestData `json:"data"`
+}
+
+// QueryDomainDataRequestData holds the query keys.
+type QueryDomainDataRequestData struct {
 	DomainID     string `json:"domain_id"`
 	DomainDataID string `json:"domaindata_id"`
 }
@@ -93,7 +100,13 @@ type QueryDomainDataResponse struct {
 }
 
 // ListDomainDataRequest represents a Kuscia ListDomainData API request.
+// Like QueryDomainDataRequest, the fields are wrapped in a `data` sub-message.
 type ListDomainDataRequest struct {
+	Data ListDomainDataRequestData `json:"data"`
+}
+
+// ListDomainDataRequestData holds the list filter.
+type ListDomainDataRequestData struct {
 	DomainID string `json:"domain_id"`
 }
 
@@ -181,7 +194,7 @@ func (c *Client) CreateDomainData(ctx context.Context, req *CreateDomainDataRequ
 // QueryDomainData queries domain data details.
 func (c *Client) QueryDomainData(ctx context.Context, domainID, domainDataID string) (*QueryDomainDataResponse, error) {
 	var resp QueryDomainDataResponse
-	req := &QueryDomainDataRequest{DomainID: domainID, DomainDataID: domainDataID}
+	req := &QueryDomainDataRequest{Data: QueryDomainDataRequestData{DomainID: domainID, DomainDataID: domainDataID}}
 	if err := c.doRequest(ctx, "/api/v1/domaindata/query", req, &resp); err != nil {
 		return nil, err
 	}
@@ -194,7 +207,7 @@ func (c *Client) QueryDomainData(ctx context.Context, domainID, domainDataID str
 // ListDomainData lists all domain data for a domain.
 func (c *Client) ListDomainData(ctx context.Context, domainID string) ([]DomainDataItem, error) {
 	var resp ListDomainDataResponse
-	if err := c.doRequest(ctx, "/api/v1/domaindata/list", &ListDomainDataRequest{DomainID: domainID}, &resp); err != nil {
+	if err := c.doRequest(ctx, "/api/v1/domaindata/list", &ListDomainDataRequest{Data: ListDomainDataRequestData{DomainID: domainID}}, &resp); err != nil {
 		return nil, err
 	}
 	if !resp.Status.IsSuccess() {

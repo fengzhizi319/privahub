@@ -150,6 +150,12 @@ func (h *DataHandler) Download(c *gin.Context) {
 		return
 	}
 
+	// Job outputs are stored by their relative URI (no extension, ORC payload).
+	if _, err := os.Stat(filepath.Join(nodeDir, req.DatatableID)); err == nil {
+		c.File(filepath.Join(nodeDir, req.DatatableID))
+		return
+	}
+
 	// File not found on disk — return metadata reference
 	response.OK(c, gin.H{
 		"datatable_id": req.DatatableID,

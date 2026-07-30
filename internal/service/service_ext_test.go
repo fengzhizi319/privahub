@@ -53,6 +53,7 @@ func TestProjectService_CreateAndGet(t *testing.T) {
 		repository.NewProjectNodeRepo(db),
 		repository.NewDatatableRepo(db),
 		db,
+		nil,
 	)
 
 	vo, err := svc.CreateProject(context.Background(), &CreateProjectRequest{
@@ -90,6 +91,7 @@ func TestProjectService_ListProjects(t *testing.T) {
 		repository.NewProjectNodeRepo(db),
 		repository.NewDatatableRepo(db),
 		db,
+		nil,
 	)
 
 	// Create 3 projects
@@ -120,6 +122,7 @@ func TestProjectService_DeleteProject(t *testing.T) {
 		repository.NewProjectNodeRepo(db),
 		repository.NewDatatableRepo(db),
 		db,
+		nil,
 	)
 
 	vo, _ := svc.CreateProject(context.Background(), &CreateProjectRequest{
@@ -146,6 +149,7 @@ func TestProjectService_AddNode(t *testing.T) {
 		repository.NewProjectNodeRepo(db),
 		repository.NewDatatableRepo(db),
 		db,
+		nil,
 	)
 
 	vo, _ := svc.CreateProject(context.Background(), &CreateProjectRequest{
@@ -172,6 +176,7 @@ func newProjectServiceForTest(db *gorm.DB) *ProjectService {
 		repository.NewProjectNodeRepo(db),
 		repository.NewDatatableRepo(db),
 		db,
+		nil,
 	)
 }
 

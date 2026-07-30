@@ -210,7 +210,7 @@ func (h *ModelHandler) Pack(c *gin.Context) {
 			Initiator: "alice",
 			Tasks: []kuscia.TaskConfig{
 				{
-					AppImage: "secretflow",
+					AppImage: "secretflow-image",
 					Alias:    "model_pack_" + req.ModelID,
 					Parties: []kuscia.Party{
 						{DomainID: "alice", Role: "guest"},

@@ -231,7 +231,7 @@ func (s *ModelService) ExportModel(ctx context.Context, modelID string) (string,
 			Initiator: "alice",
 			Tasks: []kuscia.TaskConfig{
 				{
-					AppImage: "secretflow",
+					AppImage: "secretflow-image",
 					Alias:    "model_export_" + modelID,
 					Parties: []kuscia.Party{
 						{DomainID: "alice", Role: "guest"},
@@ -353,7 +353,7 @@ func (s *ModelService) deriveServingParties(ctx context.Context, pack model.Proj
 	}
 	parties := make([]kuscia.ServingParty, 0, len(domainIDs))
 	for _, d := range domainIDs {
-		parties = append(parties, kuscia.ServingParty{DomainID: d, Role: "guest", AppImage: "secretflow"})
+		parties = append(parties, kuscia.ServingParty{DomainID: d, Role: "guest", AppImage: "secretflow-image"})
 	}
 	b, _ := json.Marshal(parties)
 	return string(b)
@@ -491,7 +491,7 @@ func buildServingParties(partiesJSON string) []kuscia.ServingParty {
 		for _, p := range strings.Split(partiesJSON, ",") {
 			p = strings.TrimSpace(p)
 			if p != "" {
-				parties = append(parties, kuscia.ServingParty{DomainID: p, Role: "guest", AppImage: "secretflow"})
+				parties = append(parties, kuscia.ServingParty{DomainID: p, Role: "guest", AppImage: "secretflow-image"})
 			}
 		}
 	}
