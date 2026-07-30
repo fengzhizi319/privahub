@@ -45,7 +45,11 @@ func NewAuthService(
 // LoginRequest represents a login request.
 type LoginRequest struct {
 	Username string `json:"name" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Password string `json:"password"`
+	// PasswordHash is the SHA-256 hex of the password, as sent by the
+	// frontend (Java SecretPad contract). Either Password or PasswordHash
+	// must be present.
+	PasswordHash string `json:"passwordHash"`
 }
 
 // LoginResponse represents a login response.
@@ -75,8 +79,13 @@ func (s *AuthService) Login(ctx context.Context, req *LoginRequest) (*LoginRespo
 		return nil, ErrUserLocked
 	}
 
-	// Verify password
-	if !s.verifyPassword(req.Password, user.PasswordHash) {
+	// Verify password: accept either the plain password or its SHA-256 hex
+	// (the frontend sends the hash per the Java SecretPad contract).
+	password := req.Password
+	if password == "" {
+		password = req.PasswordHash
+	}
+	if password == "" || !s.verifyPassword(password, user.PasswordHash) {
 		// Increment failed attempts
 		s.incrementFailedAttempts(ctx, user)
 		return nil, ErrInvalidPassword

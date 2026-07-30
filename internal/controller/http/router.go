@@ -55,6 +55,11 @@ func NewRouter(log *zap.Logger, app *wire.App) *gin.Engine {
 	// API v1alpha1 group (matches Java SecretPad route prefix)
 	api := r.Group("/api/v1alpha1")
 	{
+		// Public auth aliases: the frontend calls these Java SecretPad paths
+		// first, keep them working without JWT.
+		api.POST("/user/login", app.AuthHandler.Login)
+		api.POST("/user/logout", app.AuthHandler.Logout)
+
 		// Protected routes (JWT auth required)
 		protected := api.Group("")
 		protected.Use(middleware.JWTAuth(app.JWTManager))
