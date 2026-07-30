@@ -149,16 +149,22 @@ func (s *DatasourceService) CreateDatasource(ctx context.Context, req *CreateDat
 		Description:    req.Description,
 	}
 
-	if err := s.db.WithContext(ctx).Create(ds).Error; err != nil {
+	// Wrap datasource + node associations in a transaction for atomicity
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(ds).Error; err != nil {
+			return err
+		}
+		for _, nodeID := range req.NodeIDs {
+			if err := tx.Create(&model.DatasourceNodeDO{
+				DatasourceID: datasourceID,
+				NodeID:       nodeID,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		return nil, err
-	}
-
-	// Associate nodes
-	for _, nodeID := range req.NodeIDs {
-		_ = s.db.WithContext(ctx).Create(&model.DatasourceNodeDO{
-			DatasourceID: datasourceID,
-			NodeID:       nodeID,
-		}).Error
 	}
 
 	return &CreateDatasourceVO{DatasourceID: datasourceID}, nil
@@ -218,8 +224,11 @@ func (s *DatasourceService) GetDatasourceDetail(ctx context.Context, req *Dataso
 	}
 
 	// Get associated nodes
+	// Bug58 fix: check the DB error instead of silently ignoring it.
 	var nodes []model.DatasourceNodeDO
-	_ = s.db.WithContext(ctx).Where("datasource_id = ?", req.DatasourceID).Find(&nodes).Error
+	if err := s.db.WithContext(ctx).Where("datasource_id = ?", req.DatasourceID).Find(&nodes).Error; err != nil {
+		return nil, err
+	}
 	nodeIDs := make([]string, 0, len(nodes))
 	for _, n := range nodes {
 		nodeIDs = append(nodeIDs, n.NodeID)
@@ -240,15 +249,21 @@ func (s *DatasourceService) GetDatasourceDetail(ctx context.Context, req *Dataso
 
 // DeleteDatasource deletes a datasource.
 func (s *DatasourceService) DeleteDatasource(ctx context.Context, req *DeleteDatasourceRequest) error {
+	if req.DatasourceID == "" {
+		req.DatasourceID = req.DatasourceIDAlt
+	}
 	var ds model.DatasourceDO
 	if err := s.db.WithContext(ctx).Where("datasource_id = ?", req.DatasourceID).First(&ds).Error; err != nil {
 		return ErrDatasourceNotFound
 	}
 
-	// Delete node associations
-	_ = s.db.WithContext(ctx).Where("datasource_id = ?", req.DatasourceID).Delete(&model.DatasourceNodeDO{}).Error
-
-	return s.db.WithContext(ctx).Delete(&ds).Error
+	// Delete datasource and node associations atomically
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("datasource_id = ?", req.DatasourceID).Delete(&model.DatasourceNodeDO{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&ds).Error
+	})
 }
 
 // TestDatasource tests a datasource connection via Kuscia Ping.

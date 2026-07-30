@@ -1,4 +1,6 @@
-// Package wire provides dependency injection setup using Google Wire.
+// Package wire provides manual dependency injection for the Privahub application.
+// All services, repositories, and handlers are constructed in NewApp with explicit
+// wiring, avoiding the complexity of a DI framework while maintaining testability.
 package wire
 
 import (
@@ -12,34 +14,13 @@ import (
 	"github.com/fengzhizi319/privahub/pkg/config"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
-// Providers is a set of all dependency providers.
-var Providers = []interface{}{
-	// Repositories
-	repository.NewUserAccountsRepo,
-	repository.NewUserTokensRepo,
-	repository.NewNodeRepo,
-	repository.NewNodeRouteRepo,
-	repository.NewProjectRepo,
-	repository.NewInstRepo,
-	repository.NewJobRepo,
-	repository.NewTaskRepo,
-	repository.NewTaskLogRepo,
-	repository.NewGraphRepo,
-	repository.NewGraphNodeRepo,
-	repository.NewSysUserPermissionRepo,
-	repository.NewSysUserNodeRepo,
-
-	// Services
-	NewAuthService,
-
-	// Handlers
-	v1.NewAuthHandler,
-}
-
 // NewAuthService creates an AuthService with the required dependencies.
+// It configures JWT token expiry from config with sensible defaults
+// (2h access, 7d refresh) when not explicitly set.
 func NewAuthService(
 	db *gorm.DB,
 	cfg *config.Config,
@@ -61,7 +42,7 @@ func NewAuthService(
 	return service.NewAuthService(userRepo, tokenRepo, jwtManager)
 }
 
-// NewJWTManager creates a JWTManager from config.
+// NewJWTManager creates a JWTManager from config with default expiry values.
 func NewJWTManager(cfg *config.Config) *auth.JWTManager {
 	accessExpiry := cfg.Auth.AccessTokenExpiry
 	if accessExpiry == 0 {
@@ -74,16 +55,9 @@ func NewJWTManager(cfg *config.Config) *auth.JWTManager {
 	return auth.NewJWTManager(cfg.Auth.JWTSecret, accessExpiry, refreshExpiry)
 }
 
-// NewAuthMiddleware creates the JWT auth middleware.
-func NewAuthMiddleware(cfg *config.Config) func(*auth.JWTManager) func(c interface{}) {
-	return func(jwtManager *auth.JWTManager) func(c interface{}) {
-		return func(c interface{}) {
-			// Middleware is created in router via middleware.JWTAuth
-		}
-	}
-}
-
-// App holds all initialized dependencies.
+// App holds all initialized dependencies for the Privahub application.
+// It acts as a poor-man's DI container: all services and handlers are
+// constructed once at startup and shared across the HTTP layer.
 type App struct {
 	DB                *gorm.DB
 	Config            *config.Config
@@ -127,13 +101,14 @@ type App struct {
 	DataDirService         *service.DataDirectoryService
 
 	// Background services (for graceful shutdown)
-	ScheduledService    *service.ScheduledService
-	JobSyncService      *service.JobStatusSyncService
-	ServingSyncService  *service.ServingStatusSyncService
+	ScheduledService   *service.ScheduledService
+	JobSyncService     *service.JobStatusSyncService
+	ServingSyncService *service.ServingStatusSyncService
 }
 
 // NewApp creates and initializes the application with all dependencies.
-func NewApp(db *gorm.DB, cfg *config.Config) *App {
+// The log parameter is passed to background services for operational logging.
+func NewApp(db *gorm.DB, cfg *config.Config, log *zap.Logger) *App {
 	jwtManager := NewJWTManager(cfg)
 
 	// Kuscia HTTP client — prefer http_port, fall back to api_port
@@ -170,13 +145,13 @@ func NewApp(db *gorm.DB, cfg *config.Config) *App {
 
 	// Services
 	authService := service.NewAuthService(userRepo, tokenRepo, jwtManager)
-	nodeService := service.NewNodeService(nodeRepo, routeRepo, kusciaClient)
+	nodeService := service.NewNodeService(nodeRepo, routeRepo, kusciaClient, db)
 	projectService := service.NewProjectService(projectRepo, projectInstRepo, projectNodeRepo, datatableRepo, db, kusciaClient)
-	graphService := service.NewGraphService(graphRepo, graphNodeRepo, jobRepo, taskRepo, taskLogRepo, kusciaClient)
+	graphService := service.NewGraphService(graphRepo, graphNodeRepo, jobRepo, taskRepo, taskLogRepo, kusciaClient, db)
 	jobService := service.NewJobService(jobRepo, taskRepo, taskLogRepo, graphRepo, graphNodeRepo, kusciaClient)
 	datatableService := service.NewDatatableService(datatableRepo, fedTableRepo, db, kusciaClient)
-	voteService := service.NewVoteService(voteRequestRepo, voteInviteRepo)
-	userService := service.NewUserService(userRepo, permRepo, sysUserNodeRepo)
+	voteService := service.NewVoteService(voteRequestRepo, voteInviteRepo, db)
+	userService := service.NewUserService(userRepo, permRepo, sysUserNodeRepo, db)
 	datasourceService := service.NewDatasourceService(db, kusciaClient)
 	modelService := service.NewModelService(db, kusciaClient)
 
@@ -195,11 +170,11 @@ func NewApp(db *gorm.DB, cfg *config.Config) *App {
 	nodeRouteHandler := v1.NewNodeRouteHandler(db, kusciaClient)
 	approvalHandler := v1.NewApprovalHandler(db)
 	messageHandler := v1.NewMessageHandler(db)
-	p2pHandler := v1.NewP2PHandler(db, kusciaClient)
+	p2pHandler := v1.NewP2PHandler(db, kusciaClient, log)
 	dataHandler := v1.NewDataHandler(db, kusciaClient)
 
 	// Scheduled service with cron engine
-	scheduledService := service.NewScheduledService(db, nil, graphService)
+	scheduledService := service.NewScheduledService(db, log, graphService)
 	scheduledHandler := v1.NewScheduledHandler(scheduledService)
 
 	// New services
@@ -207,15 +182,16 @@ func NewApp(db *gorm.DB, cfg *config.Config) *App {
 	featureTableService := service.NewFeatureTableService(db)
 	graphDatasourceService := service.NewGraphDatasourceService(db)
 	edgeDataSyncService := service.NewEdgeDataSyncService(db)
-	sseServer := service.NewSseServer(nil)
+	// Bug78 fix: pass logger to SseServer for operational visibility.
+	sseServer := service.NewSseServer(log)
 	envService := service.NewEnvService(cfg.Server.Mode, cfg.Kuscia.Namespace, "", nil)
 	dataDirService := service.NewDataDirectoryService("")
 
 	// Background job status sync service
-	jobSyncService := service.NewJobStatusSyncService(db, kusciaClient, nil)
+	jobSyncService := service.NewJobStatusSyncService(db, kusciaClient, log)
 	jobSyncService.Start()
 
-	servingSyncService := service.NewServingStatusSyncService(db, kusciaClient, nil)
+	servingSyncService := service.NewServingStatusSyncService(db, kusciaClient, log)
 	servingSyncService.Start()
 
 	return &App{
@@ -275,6 +251,10 @@ func (a *App) Shutdown() {
 	}
 	if a.ServingSyncService != nil {
 		a.ServingSyncService.Stop()
+	}
+	// Bug79 fix: stop SSE heartbeat goroutine and close all sessions.
+	if a.SseServer != nil {
+		a.SseServer.Stop()
 	}
 }
 

@@ -305,7 +305,7 @@ func TestProjectService_UpdateTableConfig(t *testing.T) {
 
 func TestNodeService_ListTeeNodes(t *testing.T) {
 	db := setupExtendedTestDB(t)
-	svc := NewNodeService(repository.NewNodeRepo(db), repository.NewNodeRouteRepo(db), nil)
+	svc := NewNodeService(repository.NewNodeRepo(db), repository.NewNodeRouteRepo(db), nil, db)
 
 	// mode 0 = mpc-only (excluded), mode 1 = tee-only, mode 2 = mpc&tee (both included)
 	for _, n := range []CreateNodeRequest{
@@ -448,6 +448,7 @@ func TestGraphService_CreateAndList(t *testing.T) {
 		repository.NewTaskRepo(db),
 		repository.NewTaskLogRepo(db),
 		nil,
+		db,
 	)
 
 	vo, err := svc.CreateGraph(context.Background(), &CreateGraphRequest{
@@ -482,6 +483,7 @@ func TestGraphService_DeleteGraph(t *testing.T) {
 		repository.NewTaskRepo(db),
 		repository.NewTaskLogRepo(db),
 		nil,
+		db,
 	)
 
 	vo, _ := svc.CreateGraph(context.Background(), &CreateGraphRequest{
@@ -513,6 +515,7 @@ func TestGraphService_UpdateMeta(t *testing.T) {
 		repository.NewTaskRepo(db),
 		repository.NewTaskLogRepo(db),
 		nil,
+		db,
 	)
 
 	vo, _ := svc.CreateGraph(context.Background(), &CreateGraphRequest{

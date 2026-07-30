@@ -1,11 +1,11 @@
 package v1
 
 import (
-	"github.com/gin-gonic/gin"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
 	"github.com/fengzhizi319/privahub/pkg/response"
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
@@ -53,11 +53,18 @@ func (h *NodeRouteHandler) Page(c *gin.Context) {
 		query = query.Where("src_node_id = ? OR dst_node_id = ?", req.NodeID, req.NodeID)
 	}
 
+	// Bug62 fix: check Count and Find errors instead of silently ignoring them.
 	var total int64
-	query.Count(&total)
+	if err := query.Count(&total).Error; err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	var routes []model.NodeRouteDO
-	query.Order("gmt_create DESC").Offset((req.Page - 1) * req.Size).Limit(req.Size).Find(&routes)
+	if err := query.Order("gmt_create DESC").Offset((req.Page - 1) * req.Size).Limit(req.Size).Find(&routes).Error; err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	result := make([]NodeRouterVO, 0, len(routes))
 	for _, r := range routes {
@@ -125,7 +132,10 @@ func (h *NodeRouteHandler) Update(c *gin.Context) {
 	if req.DstNetAddress != "" {
 		route.DstNetAddress = req.DstNetAddress
 	}
-	h.db.Save(&route)
+	if err := h.db.WithContext(c.Request.Context()).Save(&route).Error; err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	response.OK(c, req.RouterID)
 }
@@ -133,7 +143,11 @@ func (h *NodeRouteHandler) Update(c *gin.Context) {
 // ListNode handles listing available nodes for route creation.
 func (h *NodeRouteHandler) ListNode(c *gin.Context) {
 	var nodes []model.NodeDO
-	h.db.WithContext(c.Request.Context()).Find(&nodes)
+	// Bug63 fix: check the DB error instead of silently ignoring it.
+	if err := h.db.WithContext(c.Request.Context()).Find(&nodes).Error; err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	result := make([]gin.H, 0, len(nodes))
 	for _, n := range nodes {
@@ -208,6 +222,10 @@ func (h *NodeRouteHandler) Delete(c *gin.Context) {
 	}
 
 	// Delete locally
-	h.db.WithContext(c.Request.Context()).Delete(&route)
+	// Bug64 fix: check the Delete error instead of silently ignoring it.
+	if err := h.db.WithContext(c.Request.Context()).Delete(&route).Error; err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 	response.OKEmpty(c)
 }

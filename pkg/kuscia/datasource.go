@@ -11,11 +11,11 @@ import (
 
 // DomainDataSource represents a Kuscia DomainDataSource entry.
 type DomainDataSource struct {
-	DomainID      string `json:"domain_id"`
-	DatasourceID  string `json:"datasource_id"`
-	Name          string `json:"name,omitempty"`
-	Type          string `json:"type,omitempty"`
-	AccessDirectly bool  `json:"access_directly"`
+	DomainID       string `json:"domain_id"`
+	DatasourceID   string `json:"datasource_id"`
+	Name           string `json:"name,omitempty"`
+	Type           string `json:"type,omitempty"`
+	AccessDirectly bool   `json:"access_directly"`
 }
 
 // ListDomainDataSourceRequest represents a Kuscia ListDomainDataSource API request.

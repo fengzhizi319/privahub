@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
@@ -219,18 +220,17 @@ func (s *DatatableService) DeleteDatatable(ctx context.Context, req *DeleteDatat
 	return s.datatableRepo.Delete(ctx, dt.ID)
 }
 
-// CreateFedTable creates a federated table.
+// CreateFedTable creates a federated table by persisting the join configuration
+// as a JSON array. Uses json.Marshal to prevent JSON injection from user input.
 func (s *DatatableService) CreateFedTable(ctx context.Context, req *CreateFedTableRequest) (*FedTableVO, error) {
 	fedTableID := uuid.New().String()[:8]
 
-	joinsJSON := "["
-	for i, j := range req.Joins {
-		if i > 0 {
-			joinsJSON += ","
-		}
-		joinsJSON += `{"node_id":"` + j.NodeID + `","datatable_id":"` + j.DatatableID + `"}`
+	// Use json.Marshal to safely serialize join entries (prevents JSON injection)
+	joinsBytes, err := json.Marshal(req.Joins)
+	if err != nil {
+		return nil, errors.New("failed to serialize join configuration")
 	}
-	joinsJSON += "]"
+	joinsJSON := string(joinsBytes)
 
 	fedTable := &model.ProjectFedTableDO{
 		ProjectID:  req.ProjectID,

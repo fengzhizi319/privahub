@@ -53,6 +53,7 @@ type DatatableRepository interface {
 	FindByProjectAndNodeID(ctx context.Context, projectID, nodeID string) ([]model.ProjectDatatableDO, error)
 	FindByProjectNodeDatatable(ctx context.Context, projectID, nodeID, datatableID string) (*model.ProjectDatatableDO, error)
 	FindAll(ctx context.Context) ([]model.ProjectDatatableDO, error)
+	DeleteByProjectID(ctx context.Context, projectID string) error
 }
 
 // FedTableRepository provides access to federated table data.

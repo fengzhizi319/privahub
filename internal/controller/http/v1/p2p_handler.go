@@ -2,6 +2,7 @@ package v1
 
 import (
 	"context"
+	"time"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
@@ -9,6 +10,7 @@ import (
 	"github.com/fengzhizi319/privahub/pkg/response"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -16,11 +18,12 @@ import (
 type P2PHandler struct {
 	db           *gorm.DB
 	kusciaClient *kuscia.Client
+	log          *zap.Logger
 }
 
 // NewP2PHandler creates a new P2PHandler.
-func NewP2PHandler(db *gorm.DB, kusciaClient *kuscia.Client) *P2PHandler {
-	return &P2PHandler{db: db, kusciaClient: kusciaClient}
+func NewP2PHandler(db *gorm.DB, kusciaClient *kuscia.Client, log *zap.Logger) *P2PHandler {
+	return &P2PHandler{db: db, kusciaClient: kusciaClient, log: log}
 }
 
 // ProjectCreate handles P2P project creation.
@@ -52,15 +55,22 @@ func (h *P2PHandler) ProjectCreate(c *gin.Context) {
 	}
 
 	ctx := c.Request.Context()
-	if err := h.db.WithContext(ctx).Create(project).Error; err != nil {
+
+	// Bug44 fix: wrap project + node associations in a transaction for atomicity.
+	if err := h.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(project).Error; err != nil {
+			return err
+		}
+		for _, nodeID := range req.NodeIDs {
+			pn := &model.ProjectNodeDO{ProjectID: projectID, NodeID: nodeID}
+			if err := tx.Create(pn).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		response.Fail(c, errcode.SystemError)
 		return
-	}
-
-	// Associate nodes with the project
-	for _, nodeID := range req.NodeIDs {
-		pn := &model.ProjectNodeDO{ProjectID: projectID, NodeID: nodeID}
-		_ = h.db.WithContext(ctx).Create(pn).Error
 	}
 
 	response.OK(c, gin.H{"project_id": projectID})
@@ -170,7 +180,11 @@ func (h *P2PHandler) ProjectParticipants(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	var projectNodes []model.ProjectNodeDO
-	h.db.WithContext(ctx).Where("project_id = ?", req.ProjectID).Find(&projectNodes)
+	// Bug46 fix: check the DB error instead of silently ignoring it.
+	if err := h.db.WithContext(ctx).Where("project_id = ?", req.ProjectID).Find(&projectNodes).Error; err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	participants := make([]gin.H, 0, len(projectNodes))
 	for _, pn := range projectNodes {
@@ -244,9 +258,16 @@ func (h *P2PHandler) NodeDelete(c *gin.Context) {
 		_ = h.kusciaClient.DeleteDomain(ctx, req.NodeID)
 	}
 
-	// Delete node and associated routes from DB
-	h.db.WithContext(ctx).Where("node_id = ?", req.NodeID).Delete(&model.NodeDO{})
-	h.db.WithContext(ctx).Where("src_node_id = ? OR dst_node_id = ?", req.NodeID, req.NodeID).Delete(&model.NodeRouteDO{})
+	// Delete node and associated routes from DB atomically
+	if err := h.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("node_id = ?", req.NodeID).Delete(&model.NodeDO{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("src_node_id = ? OR dst_node_id = ?", req.NodeID, req.NodeID).Delete(&model.NodeRouteDO{}).Error
+	}); err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	response.OKEmpty(c)
 }
@@ -263,12 +284,16 @@ func (h *P2PHandler) DataSync(c *gin.Context) {
 		return
 	}
 
-	// Log the sync event
+	// Bug45 fix: use actual timestamp instead of hardcoded "now" string,
+	// and propagate the DB error instead of silently ignoring it.
 	syncLog := &model.EdgeDataSyncLogDO{
 		SyncTableName:  req.TableName,
-		LastUpdateTime: "now",
+		LastUpdateTime: time.Now().Format("2006-01-02 15:04:05"),
 	}
-	_ = h.db.WithContext(c.Request.Context()).Save(syncLog).Error
+	if err := h.db.WithContext(c.Request.Context()).Save(syncLog).Error; err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	response.OKEmpty(c)
 }

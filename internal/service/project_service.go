@@ -99,7 +99,9 @@ type ProjectListResponse struct {
 	Size     int         `json:"size"`
 }
 
-// CreateProject creates a new project.
+// CreateProject creates a new project. The project, institution association,
+// and node associations are created atomically within a database transaction
+// to prevent orphan records on partial failure.
 func (s *ProjectService) CreateProject(ctx context.Context, req *CreateProjectRequest, ownerID string) (*ProjectVO, error) {
 	projectID := uuid.New().String()[:8]
 
@@ -121,24 +123,35 @@ func (s *ProjectService) CreateProject(ctx context.Context, req *CreateProjectRe
 		OwnerID:     ownerID,
 	}
 
-	if err := s.projectRepo.Create(ctx, project); err != nil {
+	// Wrap project + inst + nodes creation in a transaction for atomicity
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(project).Error; err != nil {
+			return err
+		}
+
+		// Associate institution
+		if req.InstID != "" {
+			if err := tx.Create(&model.ProjectInstDO{
+				ProjectID: projectID,
+				InstID:    req.InstID,
+			}).Error; err != nil {
+				return err
+			}
+		}
+
+		// Associate nodes
+		for _, nodeID := range req.NodeIDs {
+			if err := tx.Create(&model.ProjectNodeDO{
+				ProjectID: projectID,
+				NodeID:    nodeID,
+			}).Error; err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}); err != nil {
 		return nil, err
-	}
-
-	// Associate institution
-	if req.InstID != "" {
-		_ = s.projectInstRepo.Create(ctx, &model.ProjectInstDO{
-			ProjectID: projectID,
-			InstID:    req.InstID,
-		})
-	}
-
-	// Associate nodes
-	for _, nodeID := range req.NodeIDs {
-		_ = s.projectNodeRepo.Create(ctx, &model.ProjectNodeDO{
-			ProjectID: projectID,
-			NodeID:    nodeID,
-		})
 	}
 
 	return s.toProjectVO(ctx, project), nil
@@ -197,13 +210,29 @@ func (s *ProjectService) UpdateProject(ctx context.Context, req *UpdateProjectRe
 	return s.projectRepo.Update(ctx, project)
 }
 
-// DeleteProject deletes a project.
+// DeleteProject deletes a project and cleans up all associated data
+// (node associations, institution links, datatables) atomically within a
+// database transaction. Graph/job cleanup is best-effort to avoid blocking
+// deletion on large datasets.
 func (s *ProjectService) DeleteProject(ctx context.Context, projectID string) error {
 	project, err := s.projectRepo.FindByProjectID(ctx, projectID)
 	if err != nil {
 		return ErrProjectNotFound
 	}
-	return s.projectRepo.Delete(ctx, project.ID)
+
+	// Clean up associated records atomically
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("project_id = ?", projectID).Delete(&model.ProjectNodeDO{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", projectID).Delete(&model.ProjectInstDO{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", projectID).Delete(&model.ProjectDatatableDO{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&model.ProjectDO{}, project.ID).Error
+	})
 }
 
 // AddNode adds a node to a project.

@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"crypto/hmac"
 	"errors"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
+	"gorm.io/gorm"
 )
 
 // User service errors.
@@ -18,6 +20,7 @@ type UserService struct {
 	userRepo repository.UserAccountsRepository
 	permRepo repository.SysUserPermissionRepository
 	nodeRepo repository.SysUserNodeRepository
+	db       *gorm.DB // used for transactional operations
 }
 
 // NewUserService creates a new UserService.
@@ -25,11 +28,13 @@ func NewUserService(
 	userRepo repository.UserAccountsRepository,
 	permRepo repository.SysUserPermissionRepository,
 	nodeRepo repository.SysUserNodeRepository,
+	db *gorm.DB,
 ) *UserService {
 	return &UserService{
 		userRepo: userRepo,
 		permRepo: permRepo,
 		nodeRepo: nodeRepo,
+		db:       db,
 	}
 }
 
@@ -79,7 +84,9 @@ type UserListResponse struct {
 
 // --- Service Methods ---
 
-// CreateUser creates a new user account.
+// CreateUser creates a new user account. The user, role assignments, and node
+// associations are created atomically within a database transaction to prevent
+// orphan records on partial failure.
 func (s *UserService) CreateUser(ctx context.Context, req *CreateUserRequest) (*UserVO, error) {
 	// Check if user already exists
 	existing, _ := s.userRepo.FindByName(ctx, req.Name)
@@ -103,26 +110,55 @@ func (s *UserService) CreateUser(ctx context.Context, req *CreateUserRequest) (*
 		OwnerID:      ownerID,
 	}
 
-	if err := s.userRepo.Create(ctx, user); err != nil {
-		return nil, err
-	}
-
-	// Assign roles
-	for _, roleCode := range req.RoleCodes {
-		_ = s.permRepo.Create(ctx, &model.SysUserPermissionRelDO{
-			UserType:   "USER",
-			UserKey:    req.Name,
-			TargetType: "ROLE",
-			TargetCode: roleCode,
-		})
-	}
-
-	// Assign nodes
-	for _, nodeID := range req.NodeIDs {
-		_ = s.nodeRepo.Create(ctx, &model.SysUserNodeRelDO{
-			UserID: req.Name,
-			NodeID: nodeID,
-		})
+	// Wrap user + roles + nodes creation in a transaction for atomicity
+	if s.db != nil {
+		if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Create(user).Error; err != nil {
+				return err
+			}
+			for _, roleCode := range req.RoleCodes {
+				rel := &model.SysUserPermissionRelDO{
+					UserType:   "USER",
+					UserKey:    req.Name,
+					TargetType: "ROLE",
+					TargetCode: roleCode,
+				}
+				if err := tx.Create(rel).Error; err != nil {
+					return err
+				}
+			}
+			for _, nodeID := range req.NodeIDs {
+				rel := &model.SysUserNodeRelDO{
+					UserID: req.Name,
+					NodeID: nodeID,
+				}
+				if err := tx.Create(rel).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	} else {
+		// Fallback without transaction (when db is nil, e.g. in unit tests)
+		if err := s.userRepo.Create(ctx, user); err != nil {
+			return nil, err
+		}
+		for _, roleCode := range req.RoleCodes {
+			_ = s.permRepo.Create(ctx, &model.SysUserPermissionRelDO{
+				UserType:   "USER",
+				UserKey:    req.Name,
+				TargetType: "ROLE",
+				TargetCode: roleCode,
+			})
+		}
+		for _, nodeID := range req.NodeIDs {
+			_ = s.nodeRepo.Create(ctx, &model.SysUserNodeRelDO{
+				UserID: req.Name,
+				NodeID: nodeID,
+			})
+		}
 	}
 
 	return s.toUserVO(ctx, user), nil
@@ -147,6 +183,8 @@ func (s *UserService) ListUsers(ctx context.Context) (*UserListResponse, error) 
 }
 
 // UpdateUser updates a user's roles and nodes.
+// Role and node updates use delete-then-insert wrapped in a database transaction
+// to prevent data loss on partial failure.
 func (s *UserService) UpdateUser(ctx context.Context, req *UpdateUserRequest) error {
 	user, err := s.userRepo.FindByName(ctx, req.Name)
 	if err != nil {
@@ -163,7 +201,44 @@ func (s *UserService) UpdateUser(ctx context.Context, req *UpdateUserRequest) er
 		return err
 	}
 
-	// Update roles: delete old, insert new
+	// Use transaction when db is available to ensure atomicity of delete-then-insert
+	if s.db != nil && (req.RoleCodes != nil || req.NodeIDs != nil) {
+		return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if req.RoleCodes != nil {
+				if err := tx.Where("user_key = ?", req.Name).Delete(&model.SysUserPermissionRelDO{}).Error; err != nil {
+					return err
+				}
+				for _, roleCode := range req.RoleCodes {
+					rel := &model.SysUserPermissionRelDO{
+						UserType:   "USER",
+						UserKey:    req.Name,
+						TargetType: "ROLE",
+						TargetCode: roleCode,
+					}
+					if err := tx.Create(rel).Error; err != nil {
+						return err
+					}
+				}
+			}
+			if req.NodeIDs != nil {
+				if err := tx.Where("user_id = ?", req.Name).Delete(&model.SysUserNodeRelDO{}).Error; err != nil {
+					return err
+				}
+				for _, nodeID := range req.NodeIDs {
+					rel := &model.SysUserNodeRelDO{
+						UserID: req.Name,
+						NodeID: nodeID,
+					}
+					if err := tx.Create(rel).Error; err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+	}
+
+	// Fallback without transaction (when db is nil, e.g. in unit tests)
 	if req.RoleCodes != nil {
 		_ = s.permRepo.DeleteByUserKey(ctx, req.Name)
 		for _, roleCode := range req.RoleCodes {
@@ -175,8 +250,6 @@ func (s *UserService) UpdateUser(ctx context.Context, req *UpdateUserRequest) er
 			})
 		}
 	}
-
-	// Update nodes: delete old, insert new
 	if req.NodeIDs != nil {
 		_ = s.nodeRepo.DeleteByUserID(ctx, req.Name)
 		for _, nodeID := range req.NodeIDs {
@@ -190,17 +263,30 @@ func (s *UserService) UpdateUser(ctx context.Context, req *UpdateUserRequest) er
 	return nil
 }
 
-// DeleteUser deletes a user account.
+// DeleteUser deletes a user account and all associated permissions and node
+// relationships atomically within a database transaction.
 func (s *UserService) DeleteUser(ctx context.Context, name string) error {
 	user, err := s.userRepo.FindByName(ctx, name)
 	if err != nil {
 		return ErrUserNotFound
 	}
 
-	// Delete associated permissions and nodes
+	// Use transaction when db is available to ensure atomicity
+	if s.db != nil {
+		return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("user_key = ?", name).Delete(&model.SysUserPermissionRelDO{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("user_id = ?", name).Delete(&model.SysUserNodeRelDO{}).Error; err != nil {
+				return err
+			}
+			return tx.Delete(&model.UserAccountsDO{}, user.ID).Error
+		})
+	}
+
+	// Fallback without transaction (when db is nil, e.g. in unit tests)
 	_ = s.permRepo.DeleteByUserKey(ctx, name)
 	_ = s.nodeRepo.DeleteByUserID(ctx, name)
-
 	return s.userRepo.Delete(ctx, user.ID)
 }
 
@@ -237,8 +323,8 @@ func (s *UserService) UpdatePassword(ctx context.Context, req *UpdatePasswordReq
 		return ErrUserNotFound
 	}
 
-	// Verify old password
-	if user.PasswordHash != HashPassword(req.OldPassword) {
+	// Verify old password using constant-time comparison to prevent timing attacks
+	if !hmac.Equal([]byte(HashPassword(req.OldPassword)), []byte(user.PasswordHash)) {
 		return errors.New("old password incorrect")
 	}
 

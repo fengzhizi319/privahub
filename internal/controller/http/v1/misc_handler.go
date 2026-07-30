@@ -282,7 +282,11 @@ func (h *MiscHandler) GetInst(c *gin.Context) {
 // ListInstNodes handles listing nodes for an inst.
 func (h *MiscHandler) ListInstNodes(c *gin.Context) {
 	var nodes []model.NodeDO
-	h.db.WithContext(c.Request.Context()).Find(&nodes)
+	// Bug47 fix: check the DB error instead of silently ignoring it.
+	if err := h.db.WithContext(c.Request.Context()).Find(&nodes).Error; err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	result := make([]gin.H, 0, len(nodes))
 	for _, n := range nodes {
@@ -349,10 +353,12 @@ func (h *MiscHandler) RegisterInstNode(c *gin.Context) {
 	}
 
 	// Optional multipart file uploads (cert / key / token) — best-effort.
+	// Limit reads to 1 MB to prevent resource exhaustion.
+	const maxFileSize = 1 << 20 // 1 MB
 	certText := payload.CertText
 	if f, err := c.FormFile("certFile"); err == nil {
 		if fh, err := f.Open(); err == nil {
-			if b, err := io.ReadAll(fh); err == nil {
+			if b, err := io.ReadAll(io.LimitReader(fh, maxFileSize)); err == nil {
 				certText = string(b)
 			}
 			_ = fh.Close()
@@ -361,7 +367,7 @@ func (h *MiscHandler) RegisterInstNode(c *gin.Context) {
 	token := payload.Token
 	if f, err := c.FormFile("token"); err == nil {
 		if fh, err := f.Open(); err == nil {
-			if b, err := io.ReadAll(fh); err == nil {
+			if b, err := io.ReadAll(io.LimitReader(fh, maxFileSize)); err == nil {
 				token = strings.TrimSpace(string(b))
 			}
 			_ = fh.Close()
@@ -408,7 +414,11 @@ func (h *MiscHandler) RegisterInstNode(c *gin.Context) {
 			updates["net_address"] = payload.NetAddress
 		}
 		if len(updates) > 0 {
-			_ = h.db.WithContext(ctx).Model(&node).Updates(updates).Error
+			// Bug49 fix: propagate the update error instead of silently ignoring it.
+			if err := h.db.WithContext(ctx).Model(&node).Updates(updates).Error; err != nil {
+				response.Fail(c, errcode.SystemError)
+				return
+			}
 		}
 	}
 
@@ -473,9 +483,16 @@ func (h *MiscHandler) DeleteInstNode(c *gin.Context) {
 		_ = h.kusciaClient.DeleteDomain(ctx, req.NodeID)
 	}
 
-	// Remove node and associated routes from DB
-	h.db.WithContext(ctx).Where("node_id = ?", req.NodeID).Delete(&model.NodeDO{})
-	h.db.WithContext(ctx).Where("src_node_id = ? OR dst_node_id = ?", req.NodeID, req.NodeID).Delete(&model.NodeRouteDO{})
+	// Remove node and associated routes from DB atomically
+	if err := h.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("node_id = ?", req.NodeID).Delete(&model.NodeDO{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("src_node_id = ? OR dst_node_id = ?", req.NodeID, req.NodeID).Delete(&model.NodeRouteDO{}).Error
+	}); err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	response.OKEmpty(c)
 }

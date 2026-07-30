@@ -2,20 +2,21 @@ package service
 
 import (
 	"context"
-	"log"
 
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
+	"go.uber.org/zap"
 )
 
 // DataProxyService manages Kuscia DomainDataSource access_directly flag
 // to route data access through DataProxy.
 // Corresponds to Java: org.secretflow.secretpad.service.dataproxy.DataProxyService
 type DataProxyService struct {
-	kusciaClient   *kuscia.Client
-	nodeRepo       repository.NodeRepository
+	kusciaClient     *kuscia.Client
+	nodeRepo         repository.NodeRepository
 	dataProxyEnabled bool
-	localNodeID    string
+	localNodeID      string
+	log              *zap.Logger
 }
 
 // NewDataProxyService creates a new DataProxyService.
@@ -24,12 +25,17 @@ func NewDataProxyService(
 	nodeRepo repository.NodeRepository,
 	dataProxyEnabled bool,
 	localNodeID string,
+	log *zap.Logger,
 ) *DataProxyService {
+	if log == nil {
+		log = zap.NewNop()
+	}
 	return &DataProxyService{
 		kusciaClient:     kusciaClient,
 		nodeRepo:         nodeRepo,
 		dataProxyEnabled: dataProxyEnabled,
 		localNodeID:      localNodeID,
+		log:              log,
 	}
 }
 
@@ -61,7 +67,10 @@ func (s *DataProxyService) UpdateDataSourceUseDataProxyInP2p(ctx context.Context
 		// Fallback: try all nodes
 		allNodes, err2 := s.nodeRepo.FindAll(ctx)
 		if err2 != nil {
-			log.Printf("[DataProxy] failed to list nodes for inst %s: %v", instID, err)
+			s.log.Error("failed to list nodes for inst",
+				zap.String("inst_id", instID),
+				zap.Error(err),
+			)
 			return
 		}
 		for _, node := range allNodes {
@@ -80,7 +89,10 @@ func (s *DataProxyService) UpdateDataSourceUseDataProxyInP2p(ctx context.Context
 func (s *DataProxyService) updateDataSourceUseDataProxyByDomainID(ctx context.Context, domainID string) {
 	dataSources, err := s.kusciaClient.ListDomainDataSource(ctx, domainID)
 	if err != nil {
-		log.Printf("[DataProxy] failed to list datasources for domain %s: %v", domainID, err)
+		s.log.Error("failed to list datasources for domain",
+			zap.String("domain_id", domainID),
+			zap.Error(err),
+		)
 		return
 	}
 
@@ -93,9 +105,16 @@ func (s *DataProxyService) updateDataSourceUseDataProxyByDomainID(ctx context.Co
 				AccessDirectly: &accessDirectlyFalse,
 			}
 			if err := s.kusciaClient.UpdateDomainDataSource(ctx, updateReq); err != nil {
-				log.Printf("[DataProxy] failed to update datasource %s/%s: %v", domainID, ds.DatasourceID, err)
+				s.log.Error("failed to update datasource to use data proxy",
+					zap.String("domain_id", domainID),
+					zap.String("datasource_id", ds.DatasourceID),
+					zap.Error(err),
+				)
 			} else {
-				log.Printf("[DataProxy] updated datasource %s/%s to use data proxy", domainID, ds.DatasourceID)
+				s.log.Info("updated datasource to use data proxy",
+					zap.String("domain_id", domainID),
+					zap.String("datasource_id", ds.DatasourceID),
+				)
 			}
 		}
 	}

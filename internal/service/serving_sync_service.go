@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
@@ -11,13 +12,15 @@ import (
 )
 
 // ServingStatusSyncService periodically polls Kuscia for serving status updates
-// and synchronizes them to the local database.
+// and synchronizes them to the local database. It runs as a background
+// goroutine started via Start() and gracefully stopped via Stop().
 type ServingStatusSyncService struct {
 	db           *gorm.DB
 	kusciaClient *kuscia.Client
 	log          *zap.Logger
 	interval     time.Duration
 	stopCh       chan struct{}
+	stopOnce     sync.Once // guards against double-close of stopCh
 }
 
 // NewServingStatusSyncService creates a new ServingStatusSyncService.
@@ -39,9 +42,11 @@ func (s *ServingStatusSyncService) Start() {
 	go s.loop()
 }
 
-// Stop gracefully stops the sync loop.
+// Stop gracefully stops the sync loop. It is safe to call multiple times.
 func (s *ServingStatusSyncService) Stop() {
-	close(s.stopCh)
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+	})
 }
 
 func (s *ServingStatusSyncService) loop() {

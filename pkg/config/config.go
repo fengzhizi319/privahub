@@ -164,6 +164,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid http_port %d", c.Server.HTTPPort)
 	}
 
+	// Security: JWT secret must not be empty in production. A default dev
+	// secret is provided for convenience but should be overridden.
+	if c.Auth.JWTSecret == "" {
+		c.Auth.JWTSecret = "privahub-dev-secret-change-in-production"
+	}
+
 	return nil
 }
 

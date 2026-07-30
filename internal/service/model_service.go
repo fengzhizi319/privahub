@@ -319,9 +319,12 @@ func (s *ModelService) CreateServing(ctx context.Context, req *CreateServingRequ
 	}
 
 	// Link the serving back to the model pack so detail/list can resolve it.
+	// Bug53 fix: propagate the update error so callers know the link failed.
 	if req.ModelID != "" {
-		_ = s.db.WithContext(ctx).Model(&model.ProjectModelPackDO{}).
-			Where("model_id = ?", req.ModelID).Update("serving_id", servingID).Error
+		if err := s.db.WithContext(ctx).Model(&model.ProjectModelPackDO{}).
+			Where("model_id = ?", req.ModelID).Update("serving_id", servingID).Error; err != nil {
+			return nil, err
+		}
 	}
 
 	return &ServingVO{
@@ -532,7 +535,10 @@ func (s *ModelService) GetModelPartyPath(ctx context.Context, projectID, graphNo
 		}
 
 		var dss []model.DatasourceDO
-		s.db.WithContext(ctx).Where("owner_id = ?", pn.NodeID).Find(&dss)
+		// Bug52 fix: check the DB error instead of silently ignoring it.
+		if err := s.db.WithContext(ctx).Where("owner_id = ?", pn.NodeID).Find(&dss).Error; err != nil {
+			return result, err
+		}
 		sources := make([]ModelPartySourceVO, 0, len(dss))
 		for _, ds := range dss {
 			sources = append(sources, ModelPartySourceVO{

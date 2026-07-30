@@ -46,20 +46,23 @@ func (s *EdgeDataSyncService) GetSyncLogs(ctx context.Context) ([]SyncLogVO, err
 }
 
 // UpsertSyncLog creates or updates a sync log entry for a table.
+// Uses a transaction to prevent race conditions on concurrent upserts.
 func (s *EdgeDataSyncService) UpsertSyncLog(ctx context.Context, tableName string) error {
 	now := time.Now().Format("2006-01-02 15:04:05")
-	var existing model.EdgeDataSyncLogDO
-	err := s.db.WithContext(ctx).Where("table_name = ?", tableName).First(&existing).Error
-	if err == nil {
-		return s.db.WithContext(ctx).Model(&existing).
-			Update("last_update_time", now).Error
-	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var existing model.EdgeDataSyncLogDO
+		err := tx.Where("table_name = ?", tableName).First(&existing).Error
+		if err == nil {
+			return tx.Model(&existing).
+				Update("last_update_time", now).Error
+		}
 
-	log := &model.EdgeDataSyncLogDO{
-		SyncTableName:  tableName,
-		LastUpdateTime: now,
-	}
-	return s.db.WithContext(ctx).Create(log).Error
+		log := &model.EdgeDataSyncLogDO{
+			SyncTableName:  tableName,
+			LastUpdateTime: now,
+		}
+		return tx.Create(log).Error
+	})
 }
 
 // GetLastSyncTime returns the last sync time for a specific table.

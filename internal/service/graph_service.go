@@ -11,6 +11,7 @@ import (
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // Graph service errors.
@@ -26,6 +27,7 @@ type GraphService struct {
 	taskRepo      repository.TaskRepository
 	taskLogRepo   repository.TaskLogRepository
 	kusciaClient  *kuscia.Client
+	db            *gorm.DB
 }
 
 // NewGraphService creates a new GraphService.
@@ -36,6 +38,7 @@ func NewGraphService(
 	taskRepo repository.TaskRepository,
 	taskLogRepo repository.TaskLogRepository,
 	kusciaClient *kuscia.Client,
+	db *gorm.DB,
 ) *GraphService {
 	return &GraphService{
 		graphRepo:     graphRepo,
@@ -44,6 +47,7 @@ func NewGraphService(
 		taskRepo:      taskRepo,
 		taskLogRepo:   taskLogRepo,
 		kusciaClient:  kusciaClient,
+		db:            db,
 	}
 }
 
@@ -431,7 +435,7 @@ func rawJSONMessage(raw string) json.RawMessage {
 	return json.RawMessage(raw)
 }
 
-// DeleteGraph deletes a graph and all its nodes.
+// DeleteGraph deletes a graph and all its nodes atomically within a transaction.
 func (s *GraphService) DeleteGraph(ctx context.Context, req *DeleteGraphRequest) error {
 	if req.ProjectID == "" {
 		req.ProjectID = req.ProjectIDAlt
@@ -444,15 +448,28 @@ func (s *GraphService) DeleteGraph(ctx context.Context, req *DeleteGraphRequest)
 		return ErrGraphNotFound
 	}
 
-	// Delete all nodes first
+	// Bug50 fix: wrap node + graph deletion in a transaction so a partial
+	// failure does not leave the graph without its nodes.
+	if s.db != nil {
+		return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("project_id = ? AND graph_id = ?", req.ProjectID, req.GraphID).
+				Delete(&model.ProjectGraphNodeDO{}).Error; err != nil {
+				return err
+			}
+			return tx.Delete(&model.ProjectGraphDO{}, graph.ID).Error
+		})
+	}
+
+	// Fallback without transaction (when db is nil, e.g. in unit tests)
 	if err := s.graphNodeRepo.DeleteByGraphID(ctx, req.ProjectID, req.GraphID); err != nil {
 		return err
 	}
-
 	return s.graphRepo.Delete(ctx, graph.ID)
 }
 
 // FullUpdateGraph replaces all nodes and edges in a graph.
+// The node replacement (delete old + insert new) is wrapped in a database
+// transaction to guarantee atomicity: a partial failure leaves the graph unchanged.
 func (s *GraphService) FullUpdateGraph(ctx context.Context, req *FullUpdateGraphRequest) error {
 	if req.ProjectID == "" {
 		req.ProjectID = req.ProjectIDAlt
@@ -474,11 +491,39 @@ func (s *GraphService) FullUpdateGraph(ctx context.Context, req *FullUpdateGraph
 		return err
 	}
 
-	// Delete old nodes and insert new ones
+	// Atomically replace nodes: delete old + insert new within a transaction
+	// so a partial insert failure rolls back the delete.
+	if s.db != nil {
+		return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Where("project_id = ? AND graph_id = ?", req.ProjectID, req.GraphID).
+				Delete(&model.ProjectGraphNodeDO{}).Error; err != nil {
+				return err
+			}
+			for _, n := range req.Nodes {
+				node := &model.ProjectGraphNodeDO{
+					ProjectID:   req.ProjectID,
+					GraphID:     req.GraphID,
+					GraphNodeID: n.GraphNodeID,
+					CodeName:    n.CodeName,
+					Label:       n.Label,
+					X:           n.X,
+					Y:           n.Y,
+					Inputs:      rawJSONString(n.Inputs),
+					Outputs:     rawJSONString(n.Outputs),
+					NodeDef:     rawJSONString(n.NodeDef),
+				}
+				if err := tx.Create(node).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+
+	// Fallback without transaction (when db is nil, e.g. in unit tests)
 	if err := s.graphNodeRepo.DeleteByGraphID(ctx, req.ProjectID, req.GraphID); err != nil {
 		return err
 	}
-
 	for _, n := range req.Nodes {
 		node := &model.ProjectGraphNodeDO{
 			ProjectID:   req.ProjectID,
@@ -496,12 +541,17 @@ func (s *GraphService) FullUpdateGraph(ctx context.Context, req *FullUpdateGraph
 			return err
 		}
 	}
-
 	return nil
 }
 
 // UpdateGraphMeta updates graph name.
 func (s *GraphService) UpdateGraphMeta(ctx context.Context, req *UpdateGraphMetaRequest) error {
+	if req.ProjectID == "" {
+		req.ProjectID = req.ProjectIDAlt
+	}
+	if req.GraphID == "" {
+		req.GraphID = req.GraphIDAlt
+	}
 	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, req.ProjectID, req.GraphID)
 	if err != nil {
 		return ErrGraphNotFound
@@ -699,7 +749,12 @@ func (s *GraphService) StartGraph(ctx context.Context, req *StartGraphRequest) (
 	}
 
 	// Create tasks for each graph node
-	nodes, _ := s.graphNodeRepo.FindByGraphID(ctx, req.ProjectID, req.GraphID)
+	// Bug60 fix: propagate the error instead of silently ignoring it.
+	// A DB failure here would create a job with no tasks.
+	nodes, err := s.graphNodeRepo.FindByGraphID(ctx, req.ProjectID, req.GraphID)
+	if err != nil {
+		return nil, err
+	}
 	nodeByID := make(map[string]model.ProjectGraphNodeDO, len(nodes))
 	for _, n := range nodes {
 		nodeByID[n.GraphNodeID] = n
@@ -732,7 +787,9 @@ func (s *GraphService) StartGraph(ctx context.Context, req *StartGraphRequest) (
 				Status:      "SUCCEEDED",
 				Parties:     "[\"alice\",\"bob\"]",
 			}
-			_ = s.taskRepo.Create(ctx, task)
+			if err := s.taskRepo.Create(ctx, task); err != nil {
+				return nil, err
+			}
 			continue
 		}
 
@@ -744,7 +801,9 @@ func (s *GraphService) StartGraph(ctx context.Context, req *StartGraphRequest) (
 			Status:      "PENDING",
 			Parties:     "[\"alice\",\"bob\"]",
 		}
-		_ = s.taskRepo.Create(ctx, task)
+		if err := s.taskRepo.Create(ctx, task); err != nil {
+			return nil, err
+		}
 
 		// Resolve inputs: an anchor produced by a read_data/datatable node maps
 		// to that datatable's DomainData ID; anything else maps to the upstream
@@ -848,10 +907,16 @@ func (s *GraphService) StopGraph(ctx context.Context, req *StopGraphRequest) err
 	}
 
 	// Stop all running tasks
-	tasks, _ := s.taskRepo.FindByJobID(ctx, req.JobID)
+	// Bug61 fix: propagate task query and update errors instead of ignoring them.
+	tasks, err := s.taskRepo.FindByJobID(ctx, req.JobID)
+	if err != nil {
+		return err
+	}
 	for _, t := range tasks {
 		if t.Status == "RUNNING" || t.Status == "PENDING" {
-			_ = s.taskRepo.UpdateStatus(ctx, t.TaskID, "STOPPED", "stopped by user")
+			if err := s.taskRepo.UpdateStatus(ctx, t.TaskID, "STOPPED", "stopped by user"); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -872,11 +937,20 @@ func (s *GraphService) ListNodeStatus(ctx context.Context, req *ListGraphNodeSta
 	if req.JobID == "" {
 		// Java SecretPad semantics: without an explicit job id, report the
 		// status of the latest job launched for this graph.
-		req.JobID = s.latestJobIDForGraph(ctx, req.ProjectID, req.GraphID)
+		// Bug75 fix: propagate DB error from latestJobIDForGraph.
+		jobID, lookupErr := s.latestJobIDForGraph(ctx, req.ProjectID, req.GraphID)
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		req.JobID = jobID
 	}
 	if req.JobID == "" {
 		// No job running - all nodes idle
-		nodes, _ := s.graphNodeRepo.FindByGraphID(ctx, req.ProjectID, req.GraphID)
+		// Bug73 fix: propagate DB error instead of returning fake IDLE status.
+		nodes, err := s.graphNodeRepo.FindByGraphID(ctx, req.ProjectID, req.GraphID)
+		if err != nil {
+			return nil, err
+		}
 		nodeStatuses := make([]GraphNodeStatusVO, 0, len(nodes))
 		for _, n := range nodes {
 			nodeStatuses = append(nodeStatuses, GraphNodeStatusVO{
@@ -892,7 +966,11 @@ func (s *GraphService) ListNodeStatus(ctx context.Context, req *ListGraphNodeSta
 		return nil, ErrJobNotFound
 	}
 
-	tasks, _ := s.taskRepo.FindByProjectAndJobID(ctx, req.ProjectID, req.JobID)
+	// Bug74 fix: propagate DB error instead of returning empty node statuses.
+	tasks, err := s.taskRepo.FindByProjectAndJobID(ctx, req.ProjectID, req.JobID)
+	if err != nil {
+		return nil, err
+	}
 	nodeStatuses := make([]GraphNodeStatusVO, 0, len(tasks))
 	for _, t := range tasks {
 		nodeStatuses = append(nodeStatuses, GraphNodeStatusVO{
@@ -931,7 +1009,9 @@ func (s *GraphService) GetNodeOutput(ctx context.Context, req *GraphNodeOutputRe
 		req.OutputID = req.OutputIDAlt
 	}
 	if req.JobID == "" {
-		req.JobID = s.latestJobIDForGraph(ctx, req.ProjectID, req.GraphID)
+		// Bug75 fix: best-effort lookup; on error continue without job context.
+		jobID, _ := s.latestJobIDForGraph(ctx, req.ProjectID, req.GraphID)
+		req.JobID = jobID
 	}
 	node, err := s.graphNodeRepo.FindByGraphNodeID(ctx, req.ProjectID, req.GraphID, req.GraphNodeID)
 	if err != nil {
@@ -1001,14 +1081,18 @@ func (s *GraphService) GetNodeOutput(ctx context.Context, req *GraphNodeOutputRe
 
 // latestJobIDForGraph returns the most recent job launched for a graph, or ""
 // when the graph has never run.
-func (s *GraphService) latestJobIDForGraph(ctx context.Context, projectID, graphID string) string {
-	jobs, _ := s.jobRepo.FindByProjectID(ctx, projectID)
+// Bug75 fix: return error so callers can distinguish "no job" from DB failure.
+func (s *GraphService) latestJobIDForGraph(ctx context.Context, projectID, graphID string) (string, error) {
+	jobs, err := s.jobRepo.FindByProjectID(ctx, projectID)
+	if err != nil {
+		return "", err
+	}
 	for _, j := range jobs {
 		if j.GraphID == graphID {
-			return j.JobID
+			return j.JobID, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // GetNodeLogs retrieves logs for a specific graph node.
@@ -1030,7 +1114,11 @@ func (s *GraphService) GetNodeLogs(ctx context.Context, req *GraphNodeLogsReques
 	}
 	if req.TaskID == "" && req.JobID != "" {
 		// Find task by graph node ID
-		tasks, _ := s.taskRepo.FindByJobID(ctx, req.JobID)
+		// Bug76 fix: propagate DB error instead of silently returning empty logs.
+		tasks, err := s.taskRepo.FindByJobID(ctx, req.JobID)
+		if err != nil {
+			return nil, err
+		}
 		for _, t := range tasks {
 			if t.GraphNodeID == req.GraphNodeID {
 				req.TaskID = t.TaskID
@@ -1069,7 +1157,11 @@ func (s *GraphService) RefreshNodeMaxIndex(ctx context.Context, req *RefreshNode
 		return 0, ErrGraphNotFound
 	}
 
-	nodes, _ := s.graphNodeRepo.FindByGraphID(ctx, req.ProjectID, req.GraphID)
+	// Bug77 fix: propagate DB error instead of silently skipping index update.
+	nodes, err := s.graphNodeRepo.FindByGraphID(ctx, req.ProjectID, req.GraphID)
+	if err != nil {
+		return 0, err
+	}
 	if len(nodes) > graph.NodeMaxIndex {
 		graph.NodeMaxIndex = len(nodes)
 		if err := s.graphRepo.Update(ctx, graph); err != nil {

@@ -25,6 +25,7 @@ type SseSession struct {
 	Writer     http.ResponseWriter
 	Flusher    http.Flusher
 	Done       chan struct{}
+	mu         sync.Mutex // guards LastActive against concurrent writes
 	LastActive time.Time
 }
 
@@ -34,17 +35,37 @@ type SseServer struct {
 	sessions map[string]*SseSession
 	log      *zap.Logger
 	interval time.Duration
+	stopCh   chan struct{}
+	stopOnce sync.Once
 }
 
 // NewSseServer creates a new SSE server with heartbeat.
 func NewSseServer(log *zap.Logger) *SseServer {
+	if log == nil {
+		log = zap.NewNop()
+	}
 	s := &SseServer{
 		sessions: make(map[string]*SseSession),
 		log:      log,
 		interval: 15 * time.Second,
+		stopCh:   make(chan struct{}),
 	}
 	go s.heartbeatLoop()
 	return s
+}
+
+// Stop gracefully shuts down the SSE server, closing all sessions and
+// stopping the heartbeat goroutine. Safe to call multiple times.
+func (s *SseServer) Stop() {
+	s.stopOnce.Do(func() {
+		close(s.stopCh)
+	})
+	s.mu.Lock()
+	for id, session := range s.sessions {
+		close(session.Done)
+		delete(s.sessions, id)
+	}
+	s.mu.Unlock()
 }
 
 // Open registers a new SSE client connection for a node.
@@ -96,7 +117,9 @@ func (s *SseServer) Send(nodeID string, data *SyncDataDTO) bool {
 		return false
 	}
 	session.Flusher.Flush()
+	session.mu.Lock()
 	session.LastActive = time.Now()
+	session.mu.Unlock()
 	return true
 }
 
@@ -150,7 +173,9 @@ func (s *SseServer) Ping() {
 			continue
 		}
 		session.Flusher.Flush()
+		session.mu.Lock()
 		session.LastActive = time.Now()
+		session.mu.Unlock()
 	}
 }
 
@@ -162,12 +187,18 @@ func (s *SseServer) ActiveConnections() int {
 }
 
 // heartbeatLoop periodically sends ping to keep connections alive.
+// It terminates when the server's stop channel is closed.
 func (s *SseServer) heartbeatLoop() {
 	ticker := time.NewTicker(s.interval)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		s.Ping()
+	for {
+		select {
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+			s.Ping()
+		}
 	}
 }
 
@@ -199,8 +230,9 @@ func (s *SseServer) HandleSseSync(c *gin.Context) {
 		return
 	}
 
-	// Send initial connection event
-	fmt.Fprintf(session.Writer, "event: connected\ndata: {\"node_id\":\"%s\"}\n\n", nodeID)
+	// Send initial connection event (use json.Marshal to prevent JSON injection)
+	connPayload, _ := json.Marshal(map[string]string{"node_id": nodeID})
+	fmt.Fprintf(session.Writer, "event: connected\ndata: %s\n\n", connPayload)
 	session.Flusher.Flush()
 
 	// Block until client disconnects

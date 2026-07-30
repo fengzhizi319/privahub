@@ -1,4 +1,16 @@
-// Package dao provides database initialization and connection management.
+// Package dao provides database initialization and connection management
+// for the Privahub platform.
+//
+// Supported drivers:
+//   - sqlite: Pure-Go driver (modernc.org/sqlite), zero CGO required.
+//     Ideal for development and single-node deployments.
+//     DSN format: "privahub.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+//   - mysql: Production-grade driver for multi-instance deployments.
+//     DSN format: "user:pass@tcp(host:3306)/dbname?charset=utf8mb4&parseTime=True"
+//
+// Connection pooling is configured via DatabaseConfig.MaxOpenConns and
+// MaxIdleConns. For SQLite, MaxOpenConns should typically be 1 to avoid
+// SQLITE_BUSY errors under concurrent writes.
 package dao
 
 import (
@@ -13,7 +25,11 @@ import (
 )
 
 // NewDB creates a database connection based on configuration.
-// Supports sqlite (pure Go, zero CGO via modernc.org/sqlite) and mysql drivers.
+// It initializes the GORM engine with the appropriate dialector,
+// configures connection pooling, and sets the logger to silent mode
+// (application-level logging is handled by the service layer).
+//
+// Returns an error if the driver is unsupported or the connection fails.
 func NewDB(cfg *config.DatabaseConfig, logger *zap.Logger) (*gorm.DB, error) {
 	var dialector gorm.Dialector
 

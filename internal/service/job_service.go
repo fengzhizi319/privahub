@@ -351,10 +351,16 @@ func (s *JobService) StopJob(ctx context.Context, req *StopJobRequest) error {
 	}
 
 	// Stop all running tasks
-	tasks, _ := s.taskRepo.FindByJobID(ctx, req.JobID)
+	// Bug57 fix: propagate task update errors instead of silently ignoring them.
+	tasks, err := s.taskRepo.FindByJobID(ctx, req.JobID)
+	if err != nil {
+		return err
+	}
 	for _, t := range tasks {
 		if t.Status == "RUNNING" || t.Status == "PENDING" {
-			_ = s.taskRepo.UpdateStatus(ctx, t.TaskID, "STOPPED", "stopped by user")
+			if err := s.taskRepo.UpdateStatus(ctx, t.TaskID, "STOPPED", "stopped by user"); err != nil {
+				return err
+			}
 		}
 	}
 

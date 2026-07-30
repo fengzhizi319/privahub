@@ -1,6 +1,22 @@
 // Package kuscia provides a lightweight HTTP client for the Kuscia API.
-// It communicates with Kuscia's HTTP external API (default port 8082)
-// using JSON-encoded request/response bodies matching the protobuf schema.
+//
+// Kuscia is the Kubernetes-based orchestration engine for privacy-preserving
+// computing jobs. This client communicates with Kuscia's HTTP external API
+// (default port 8082) using JSON-encoded request/response bodies that mirror
+// the protobuf schema defined in kuscia/proto/api/v1alpha1.
+//
+// Usage:
+//
+//	client := kuscia.NewClient(&kuscia.ClientConfig{
+//	    Host:     "127.0.0.1",
+//	    Port:     8082,
+//	    Protocol: "notls", // or "tls" for production mTLS
+//	    Timeout:  30 * time.Second,
+//	})
+//	err := client.Ping(ctx)
+//
+// The client is safe for concurrent use. All methods accept a context.Context
+// for cancellation and timeout propagation.
 package kuscia
 
 import (
@@ -36,9 +52,11 @@ func DefaultClientConfig() *ClientConfig {
 }
 
 // Client is a lightweight HTTP client for the Kuscia API.
+// It maintains a persistent HTTP connection pool via the underlying
+// http.Client and is safe for concurrent use by multiple goroutines.
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL    string       // e.g. "http://127.0.0.1:8082"
+	httpClient *http.Client // shared HTTP client with connection pooling
 }
 
 // NewClient creates a new Kuscia API client.
@@ -69,7 +87,9 @@ func (s *Status) IsSuccess() bool {
 	return s.Code == 0
 }
 
-// doRequest performs an HTTP POST to the Kuscia API and decodes the response.
+// doRequest performs an HTTP POST to the Kuscia API and decodes the JSON response.
+// It handles request marshaling, response unmarshaling, and HTTP error detection.
+// Returns a wrapped error with the API path for debugging on failure.
 func (c *Client) doRequest(ctx context.Context, path string, reqBody interface{}, respBody interface{}) error {
 	url := c.baseURL + path
 
@@ -94,7 +114,10 @@ func (c *Client) doRequest(ctx context.Context, path string, reqBody interface{}
 	}
 	defer resp.Body.Close()
 
-	respData, err := io.ReadAll(resp.Body)
+	// Limit response body to 10 MB to prevent memory exhaustion from
+	// a misbehaving or malicious server.
+	const maxResponseSize = 10 << 20 // 10 MB
+	respData, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return fmt.Errorf("kuscia: read response: %w", err)
 	}

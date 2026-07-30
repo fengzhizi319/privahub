@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
+	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
@@ -108,8 +108,11 @@ func loadUserResources(db *gorm.DB, userKey string) map[string]bool {
 	}
 
 	if len(permissions) == 0 {
-		// No explicit permissions — grant all (admin default)
-		result["*"] = true
+		// No explicit permissions. Only the built-in admin user gets full access;
+		// all other users are denied by default (principle of least privilege).
+		if userKey == "admin" {
+			result["*"] = true
+		}
 		return result
 	}
 

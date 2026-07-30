@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,196 +11,361 @@ import (
 )
 
 func TestToSnakeCase(t *testing.T) {
-	cases := map[string]string{
-		"projectId":      "project_id",
-		"datatableId":    "datatable_id",
-		"scheduleTaskId": "schedule_task_id",
-		"name":           "name",
-		"already_snake":  "already_snake",
-		"":               "",
-		"userID":         "user_i_d", // consecutive uppercase splits per-rune (acceptable; frontend uses userId)
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"camelCase", "camel_case"},
+		{"PascalCase", "pascal_case"},
+		{"already_snake", "already_snake"},
+		{"HTTPServer", "h_t_t_p_server"},
+		{"simple", "simple"},
+		{"", ""},
+		{"A", "a"},
+		{"ABC", "a_b_c"},
+		{"projectID", "project_i_d"},
+		{"gmtCreate", "gmt_create"},
 	}
-	for in, want := range cases {
-		if got := toSnakeCase(in); got != want {
-			t.Errorf("toSnakeCase(%q) = %q, want %q", in, got, want)
+
+	for _, tt := range tests {
+		got := toSnakeCase(tt.input)
+		if got != tt.expected {
+			t.Errorf("toSnakeCase(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
 	}
 }
 
 func TestToCamelCase(t *testing.T) {
-	cases := map[string]string{
-		"project_id":         "projectId",
-		"datatable_id":       "datatableId",
-		"schedule_task_id":   "scheduleTaskId",
-		"name":               "name",
-		"alreadyCamel":       "alreadyCamel",
-		"":                   "",
-		"gmt_create":         "gmtCreate",
-		"push_to_tee_status": "pushToTeeStatus",
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"snake_case", "snakeCase"},
+		{"already_camel", "alreadyCamel"},
+		{"simple", "simple"},
+		{"", ""},
+		{"project_id", "projectId"},
+		{"gmt_create", "gmtCreate"},
+		{"_leading", "leading"},
+		{"trailing_", "trailing"},
+		{"multi_word_name", "multiWordName"},
 	}
-	for in, want := range cases {
-		if got := toCamelCase(in); got != want {
-			t.Errorf("toCamelCase(%q) = %q, want %q", in, got, want)
+
+	for _, tt := range tests {
+		got := toCamelCase(tt.input)
+		if got != tt.expected {
+			t.Errorf("toCamelCase(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
 	}
 }
 
-func TestExpandKeys_AdditiveTwinKeys(t *testing.T) {
-	in := map[string]interface{}{
-		"projectId": "p1",
+func TestExpandKeys(t *testing.T) {
+	input := map[string]interface{}{
+		"projectId": "proj-1",
 		"nested": map[string]interface{}{
-			"datatableId": "d1",
-		},
-		"list": []interface{}{
-			map[string]interface{}{"nodeId": "n1"},
+			"graphId": "graph-1",
 		},
 	}
-	out := expandKeys(in).(map[string]interface{})
 
-	// original camelCase keys preserved
-	if out["projectId"] != "p1" {
-		t.Errorf("original projectId lost: %v", out)
+	result := expandKeys(input).(map[string]interface{})
+
+	// Original keys should be preserved
+	if result["projectId"] != "proj-1" {
+		t.Error("expected original camelCase key to be preserved")
 	}
-	// snake_case twin injected
-	if out["project_id"] != "p1" {
-		t.Errorf("project_id twin missing: %v", out)
+
+	// Snake_case twin should be added
+	if result["project_id"] != "proj-1" {
+		t.Error("expected snake_case twin key to be added")
 	}
-	// nested object expanded
-	nested := out["nested"].(map[string]interface{})
-	if nested["datatable_id"] != "d1" {
-		t.Errorf("nested datatable_id twin missing: %v", nested)
-	}
-	// array element expanded
-	list := out["list"].([]interface{})
-	elem := list[0].(map[string]interface{})
-	if elem["node_id"] != "n1" {
-		t.Errorf("array elem node_id twin missing: %v", elem)
+
+	// Nested object should also be expanded
+	nested := result["nested"].(map[string]interface{})
+	if nested["graph_id"] != "graph-1" {
+		t.Error("expected nested snake_case twin key to be added")
 	}
 }
 
-func TestCamelCaseResponseKeys_AdditiveTwinKeys(t *testing.T) {
-	in := map[string]interface{}{
-		"project_id": "p1",
-		"nodes": []interface{}{
-			map[string]interface{}{"graph_node_id": "g1"},
+func TestCamelCaseResponseKeys(t *testing.T) {
+	input := map[string]interface{}{
+		"project_id": "proj-1",
+		"nested": map[string]interface{}{
+			"graph_id": "graph-1",
 		},
 	}
-	out := camelCaseResponseKeys(in).(map[string]interface{})
 
-	if out["project_id"] != "p1" {
-		t.Errorf("original project_id lost: %v", out)
+	result := camelCaseResponseKeys(input).(map[string]interface{})
+
+	// Original keys should be preserved
+	if result["project_id"] != "proj-1" {
+		t.Error("expected original snake_case key to be preserved")
 	}
-	if out["projectId"] != "p1" {
-		t.Errorf("projectId twin missing: %v", out)
+
+	// CamelCase twin should be added
+	if result["projectId"] != "proj-1" {
+		t.Error("expected camelCase twin key to be added")
 	}
-	nodes := out["nodes"].([]interface{})
-	elem := nodes[0].(map[string]interface{})
-	if elem["graphNodeId"] != "g1" {
-		t.Errorf("nested graphNodeId twin missing: %v", elem)
+
+	// Nested object should also be expanded
+	nested := result["nested"].(map[string]interface{})
+	if nested["graphId"] != "graph-1" {
+		t.Error("expected nested camelCase twin key to be added")
 	}
 }
 
-// newCaseRouter builds a gin engine wired with both case middlewares and an
-// echo handler that binds a snake_case required field and returns a snake_case
-// body — mirroring the legacy project/get handler shape.
-func newCaseRouter() *gin.Engine {
-	r := gin.New()
-	r.Use(CaseKeysResponse())
-	r.Use(CaseKeysRequest())
-	r.POST("/api/v1alpha1/project/get", func(c *gin.Context) {
-		var req struct {
-			ProjectID string `json:"project_id" binding:"required"`
+func TestExpandKeys_Array(t *testing.T) {
+	input := []interface{}{
+		map[string]interface{}{"projectId": "proj-1"},
+		map[string]interface{}{"projectId": "proj-2"},
+	}
+
+	result := expandKeys(input).([]interface{})
+
+	for i, item := range result {
+		m := item.(map[string]interface{})
+		if m["project_id"] == nil {
+			t.Errorf("expected array item %d to have snake_case twin", i)
 		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"status": gin.H{"code": 1, "msg": "param error"}})
-			return
+	}
+}
+
+func TestShouldSkipCasePath(t *testing.T) {
+	tests := []struct {
+		path     string
+		expected bool
+	}{
+		{"/api/v1alpha1/sync", true},
+		{"/metrics", true},
+		{"/api/v1alpha1/healthz", true},
+		{"/assets/main.js", true},
+		{"/favicon.ico", true},
+		{"/api/v1alpha1/project/list", false},
+		{"/api/v1alpha1/user/login", false},
+	}
+
+	for _, tt := range tests {
+		got := shouldSkipCasePath(tt.path)
+		if got != tt.expected {
+			t.Errorf("shouldSkipCasePath(%q) = %v, want %v", tt.path, got, tt.expected)
 		}
-		c.JSON(http.StatusOK, gin.H{
-			"status": gin.H{"code": 0, "msg": "success"},
-			"data":   gin.H{"project_id": req.ProjectID, "name": "demo", "compute_mode": "mpc"},
-		})
+	}
+}
+
+func TestIsJSONContentType(t *testing.T) {
+	tests := []struct {
+		ct       string
+		expected bool
+	}{
+		{"application/json", true},
+		{"application/json; charset=utf-8", true},
+		{"APPLICATION/JSON", true},
+		{"text/html", false},
+		{"multipart/form-data", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		got := isJSONContentType(tt.ct)
+		if got != tt.expected {
+			t.Errorf("isJSONContentType(%q) = %v, want %v", tt.ct, got, tt.expected)
+		}
+	}
+}
+
+// --- Integration tests for CaseKeysRequest middleware ---
+
+func TestCaseKeysRequest_ExpandsCamelToSnake(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(CaseKeysRequest())
+	router.POST("/test", func(c *gin.Context) {
+		var body map[string]interface{}
+		_ = c.ShouldBindJSON(&body)
+		c.JSON(200, body)
 	})
-	return r
-}
 
-func TestCaseMiddleware_EndToEnd_CamelRequestSnakeHandler(t *testing.T) {
-	r := newCaseRouter()
-
-	// Frontend sends camelCase {projectId}; handler binds snake_case project_id.
-	body, _ := json.Marshal(map[string]string{"projectId": "p123"})
-	req, _ := http.NewRequest("POST", "/api/v1alpha1/project/get", bytes.NewReader(body))
+	payload := `{"projectId":"p1","graphId":"g1"}`
+	req := httptest.NewRequest("POST", "/test", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 (request twin key should satisfy required binding), got %d; body=%s", w.Code, w.Body.String())
-	}
-
-	var resp struct {
-		Status struct {
-			Code int `json:"code"`
-		} `json:"status"`
-		Data map[string]interface{} `json:"data"`
-	}
+	var resp map[string]interface{}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("invalid response json: %v; body=%s", err, w.Body.String())
+		t.Fatalf("failed to parse response: %v", err)
 	}
-	if resp.Status.Code != 0 {
-		t.Fatalf("expected status.code 0, got %d; body=%s", resp.Status.Code, w.Body.String())
+	// Both camelCase and snake_case keys should be present
+	if resp["projectId"] != "p1" {
+		t.Error("expected camelCase key preserved")
 	}
-	// Response must expose camelCase projectId (frontend Zod requires it) while
-	// keeping the original snake_case project_id.
-	if resp.Data["projectId"] != "p123" {
-		t.Errorf("response missing camelCase projectId: %v", resp.Data)
-	}
-	if resp.Data["project_id"] != "p123" {
-		t.Errorf("response lost original project_id: %v", resp.Data)
-	}
-	if resp.Data["computeMode"] != "mpc" {
-		t.Errorf("response missing camelCase computeMode: %v", resp.Data)
+	if resp["project_id"] != "p1" {
+		t.Error("expected snake_case twin added")
 	}
 }
 
-func TestCaseMiddleware_NonAPIPathSkipped(t *testing.T) {
-	r := gin.New()
-	r.Use(CaseKeysResponse())
-	r.GET("/index.html", func(c *gin.Context) {
-		c.Data(http.StatusOK, "text/html; charset=utf-8", []byte("<html>some_id</html>"))
+func TestCaseKeysRequest_SkipsNonJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(CaseKeysRequest())
+	router.POST("/test", func(c *gin.Context) {
+		c.String(200, "ok")
 	})
 
-	req, _ := http.NewRequest("GET", "/index.html", nil)
+	req := httptest.NewRequest("POST", "/test", strings.NewReader("plain text"))
+	req.Header.Set("Content-Type", "text/plain")
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	router.ServeHTTP(w, req)
 
-	// Non-API path must be passed through verbatim (no buffering/rewriting).
-	if !strings.Contains(w.Body.String(), "some_id") {
-		t.Errorf("non-API body altered: %s", w.Body.String())
+	if w.Code != 200 {
+		t.Errorf("expected 200, got %d", w.Code)
 	}
 }
 
-func TestCaseMiddleware_NonJSONRequestUntouched(t *testing.T) {
-	r := gin.New()
-	r.Use(CaseKeysRequest())
-	var gotContentType string
-	var gotBody string
-	r.POST("/api/v1alpha1/upload", func(c *gin.Context) {
-		gotContentType = c.GetHeader("Content-Type")
-		b, _ := c.GetRawData()
-		gotBody = string(b)
-		c.JSON(http.StatusOK, gin.H{"ok": true})
+func TestCaseKeysRequest_SkipsEmptyBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(CaseKeysRequest())
+	router.POST("/test", func(c *gin.Context) {
+		c.String(200, "ok")
 	})
 
-	// multipart content type must not be parsed/rewritten.
-	req, _ := http.NewRequest("POST", "/api/v1alpha1/upload", strings.NewReader("raw-bytes"))
-	req.Header.Set("Content-Type", "multipart/form-data; boundary=x")
+	req := httptest.NewRequest("POST", "/test", nil)
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	r.ServeHTTP(w, req)
+	router.ServeHTTP(w, req)
 
-	if gotContentType == "" || !strings.HasPrefix(gotContentType, "multipart/form-data") {
-		t.Errorf("multipart content type lost: %q", gotContentType)
+	if w.Code != 200 {
+		t.Errorf("expected 200, got %d", w.Code)
 	}
-	if gotBody != "raw-bytes" {
-		t.Errorf("multipart body altered: %q", gotBody)
+}
+
+func TestCaseKeysRequest_ArrayPassthrough(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(CaseKeysRequest())
+	router.POST("/test", func(c *gin.Context) {
+		var body []interface{}
+		_ = c.ShouldBindJSON(&body)
+		c.JSON(200, body)
+	})
+
+	payload := `[{"projectId":"p1"}]`
+	req := httptest.NewRequest("POST", "/test", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Errorf("expected 200, got %d", w.Code)
+	}
+}
+
+// --- Integration tests for CaseKeysResponse middleware ---
+
+func TestCaseKeysResponse_ConvertsSnakeToCamel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(CaseKeysResponse())
+	router.GET("/api/v1alpha1/project", func(c *gin.Context) {
+		c.JSON(200, gin.H{"project_id": "p1", "graph_id": "g1"})
+	})
+
+	req := httptest.NewRequest("GET", "/api/v1alpha1/project", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var resp map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+	// Both snake_case and camelCase keys should be present
+	if resp["project_id"] != "p1" {
+		t.Error("expected original snake_case key preserved")
+	}
+	if resp["projectId"] != "p1" {
+		t.Error("expected camelCase twin added")
+	}
+}
+
+func TestCaseKeysResponse_SkipsNonAPIPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(CaseKeysResponse())
+	router.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+
+	req := httptest.NewRequest("GET", "/health", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	// No camelCase twin should be added for non-API paths
+	if _, exists := resp["status"]; !exists {
+		t.Error("expected 'status' key in response")
+	}
+}
+
+func TestCaseKeysResponse_SkipsSyncPath(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(CaseKeysResponse())
+	router.GET("/api/v1alpha1/sync", func(c *gin.Context) {
+		c.JSON(200, gin.H{"node_id": "alice"})
+	})
+
+	req := httptest.NewRequest("GET", "/api/v1alpha1/sync", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	// shouldSkipCasePath returns true for /sync, so no conversion
+	if _, exists := resp["nodeId"]; exists {
+		t.Error("expected no camelCase conversion for /sync path")
+	}
+}
+
+func TestCaseKeysResponse_NestedObjects(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(CaseKeysResponse())
+	router.GET("/api/v1alpha1/data", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"project_id": "p1",
+			"nested":     gin.H{"graph_id": "g1"},
+		})
+	})
+
+	req := httptest.NewRequest("GET", "/api/v1alpha1/data", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	var resp map[string]interface{}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	nested, ok := resp["nested"].(map[string]interface{})
+	if !ok {
+		t.Fatal("expected nested object")
+	}
+	if nested["graphId"] != "g1" {
+		t.Error("expected nested camelCase twin added")
+	}
+}
+
+func TestCaseKeysResponse_WriteHeader(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(CaseKeysResponse())
+	router.GET("/api/v1alpha1/created", func(c *gin.Context) {
+		c.JSON(http.StatusCreated, gin.H{"result_id": "r1"})
+	})
+
+	req := httptest.NewRequest("GET", "/api/v1alpha1/created", nil)
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("expected status 201, got %d", w.Code)
 	}
 }

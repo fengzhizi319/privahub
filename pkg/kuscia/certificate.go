@@ -1,6 +1,9 @@
 package kuscia
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // --- Certificate Types ---
 
@@ -31,6 +34,10 @@ func (c *Client) GenerateKeyCerts(ctx context.Context, req *GenerateKeyCertsRequ
 	var resp GenerateKeyCertsResponse
 	if err := c.doRequest(ctx, "/api/v1/certificate/generate", req, &resp); err != nil {
 		return nil, err
+	}
+	// Bug69 fix: check response status for consistency with all other client methods.
+	if !resp.Status.IsSuccess() {
+		return nil, fmt.Errorf("kuscia: generate key certs for %s failed: [%d] %s", req.CommonName, resp.Status.Code, resp.Status.Message)
 	}
 	return &resp, nil
 }

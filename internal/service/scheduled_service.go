@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
@@ -27,10 +28,12 @@ type ScheduledService struct {
 	cron         *cron.Cron
 	log          *zap.Logger
 	graphService *GraphService
+	mu           sync.Mutex              // guards entries map against concurrent access
 	entries      map[string]cron.EntryID // scheduleTaskID -> cron entry ID
 }
 
 // NewScheduledService creates a new ScheduledService and starts the cron engine.
+// After creation, call RestoreActiveTasks to re-register persisted tasks.
 func NewScheduledService(db *gorm.DB, log *zap.Logger, graphService *GraphService) *ScheduledService {
 	c := cron.New(cron.WithSeconds())
 	s := &ScheduledService{
@@ -41,13 +44,40 @@ func NewScheduledService(db *gorm.DB, log *zap.Logger, graphService *GraphServic
 		entries:      make(map[string]cron.EntryID),
 	}
 	c.Start()
+	// Restore active scheduled tasks from the database so they survive restarts.
+	s.RestoreActiveTasks()
 	return s
 }
 
-// Stop gracefully stops the cron engine.
+// Stop gracefully stops the cron engine and waits for running jobs to finish.
 func (s *ScheduledService) Stop() {
 	ctx := s.cron.Stop()
 	<-ctx.Done()
+}
+
+// RestoreActiveTasks re-registers all non-terminal scheduled tasks from the
+// database into the cron engine. This is called during initialization to
+// ensure scheduled tasks survive service restarts.
+func (s *ScheduledService) RestoreActiveTasks() {
+	var tasks []model.ProjectScheduleTaskDO
+	err := s.db.Where("status IN ?", []string{
+		model.ScheduledStatusToBeRun,
+		model.ScheduledStatusRunning,
+	}).Find(&tasks).Error
+	if err != nil {
+		if s.log != nil {
+			s.log.Error("Failed to restore scheduled tasks", zap.Error(err))
+		}
+		return
+	}
+
+	for i := range tasks {
+		s.registerCron(&tasks[i])
+	}
+
+	if s.log != nil && len(tasks) > 0 {
+		s.log.Info("Restored scheduled tasks from database", zap.Int("count", len(tasks)))
+	}
 }
 
 // --- DTOs ---
@@ -139,10 +169,12 @@ func (s *ScheduledService) Delete(ctx context.Context, taskID string) error {
 	}
 
 	// Unregister from cron
+	s.mu.Lock()
 	if entryID, ok := s.entries[taskID]; ok {
 		s.cron.Remove(entryID)
 		delete(s.entries, taskID)
 	}
+	s.mu.Unlock()
 
 	return s.db.WithContext(ctx).Delete(&task).Error
 }
@@ -155,10 +187,12 @@ func (s *ScheduledService) Pause(ctx context.Context, taskID string) error {
 	}
 
 	// Remove from cron engine
+	s.mu.Lock()
 	if entryID, ok := s.entries[taskID]; ok {
 		s.cron.Remove(entryID)
 		delete(s.entries, taskID)
 	}
+	s.mu.Unlock()
 
 	task.Status = model.ScheduledStatusPaused
 	return s.db.WithContext(ctx).Save(&task).Error
@@ -187,16 +221,21 @@ func (s *ScheduledService) Offline(ctx context.Context, taskID string) error {
 		return ErrScheduledNotFound
 	}
 
+	s.mu.Lock()
 	if entryID, ok := s.entries[taskID]; ok {
 		s.cron.Remove(entryID)
 		delete(s.entries, taskID)
 	}
+	s.mu.Unlock()
 
 	task.Status = model.ScheduledStatusOffline
 	return s.db.WithContext(ctx).Save(&task).Error
 }
 
 // registerCron adds a task to the cron engine.
+// The cron callback updates the task status in the database and triggers graph
+// execution via GraphService. All logging is nil-safe because the service may
+// be constructed without a logger in minimal deployments.
 func (s *ScheduledService) registerCron(task *model.ProjectScheduleTaskDO) {
 	taskID := task.ScheduleTaskID
 	graphID := task.GraphID
@@ -205,11 +244,13 @@ func (s *ScheduledService) registerCron(task *model.ProjectScheduleTaskDO) {
 	log := s.log
 
 	entryID, err := s.cron.AddFunc(task.Cron, func() {
-		log.Info("Scheduled task triggered",
-			zap.String("task_id", taskID),
-			zap.String("graph_id", graphID),
-			zap.String("project_id", projectID),
-		)
+		if log != nil {
+			log.Info("Scheduled task triggered",
+				zap.String("task_id", taskID),
+				zap.String("graph_id", graphID),
+				zap.String("project_id", projectID),
+			)
+		}
 
 		ctx := context.Background()
 		now := time.Now()
@@ -229,10 +270,12 @@ func (s *ScheduledService) registerCron(task *model.ProjectScheduleTaskDO) {
 				GraphID:   graphID,
 			})
 			if startErr != nil {
-				s.log.Error("Scheduled graph execution failed",
-					zap.String("task_id", taskID),
-					zap.Error(startErr),
-				)
+				if s.log != nil {
+					s.log.Error("Scheduled graph execution failed",
+						zap.String("task_id", taskID),
+						zap.Error(startErr),
+					)
+				}
 				db.WithContext(ctx).Model(&model.ProjectScheduleTaskDO{}).
 					Where("schedule_task_id = ?", taskID).
 					Updates(map[string]interface{}{
@@ -243,25 +286,33 @@ func (s *ScheduledService) registerCron(task *model.ProjectScheduleTaskDO) {
 			}
 		}
 
-		// Mark as SUCCESS after execution
-		db.WithContext(ctx).Model(&model.ProjectScheduleTaskDO{}).
-			Where("schedule_task_id = ?", taskID).
-			Updates(map[string]interface{}{
-				"status":                 model.ScheduledStatusSuccess,
-				"schedule_task_end_time": time.Now(),
-			})
+		// Graph execution is asynchronous (Kuscia job submitted). Leave status
+		// as RUNNING; the JobStatusSyncService will update terminal states.
+		// Only mark end_time if no graph service is configured (synchronous no-op).
+		if s.graphService == nil {
+			db.WithContext(ctx).Model(&model.ProjectScheduleTaskDO{}).
+				Where("schedule_task_id = ?", taskID).
+				Updates(map[string]interface{}{
+					"status":                 model.ScheduledStatusSuccess,
+					"schedule_task_end_time": time.Now(),
+				})
+		}
 	})
 
 	if err != nil {
-		s.log.Error("Failed to register cron job",
-			zap.String("task_id", taskID),
-			zap.String("cron", task.Cron),
-			zap.Error(err),
-		)
+		if s.log != nil {
+			s.log.Error("Failed to register cron job",
+				zap.String("task_id", taskID),
+				zap.String("cron", task.Cron),
+				zap.Error(err),
+			)
+		}
 		return
 	}
 
+	s.mu.Lock()
 	s.entries[taskID] = entryID
+	s.mu.Unlock()
 }
 
 func (s *ScheduledService) toVO(task *model.ProjectScheduleTaskDO) *ScheduledVO {
@@ -524,6 +575,10 @@ func (s *ScheduledService) ReRunScheduledTask(ctx context.Context, req *TaskReRu
 			_ = s.db.WithContext(ctx).Save(&task).Error
 			return nil // degrade: request accepted
 		}
+		// Bug54 fix: graph execution is asynchronous (Kuscia job submitted).
+		// Leave status as RUNNING; the JobStatusSyncService will update terminal
+		// states. Do NOT mark SUCCESS immediately.
+		return nil
 	}
 
 	end := time.Now()
@@ -540,10 +595,12 @@ func (s *ScheduledService) StopScheduledTask(ctx context.Context, req *TaskStopS
 		return ErrScheduledNotFound
 	}
 
+	s.mu.Lock()
 	if entryID, ok := s.entries[task.ScheduleTaskID]; ok {
 		s.cron.Remove(entryID)
 		delete(s.entries, task.ScheduleTaskID)
 	}
+	s.mu.Unlock()
 
 	task.Status = model.ScheduledStatusOffline
 	return s.db.WithContext(ctx).Save(&task).Error
@@ -552,9 +609,12 @@ func (s *ScheduledService) StopScheduledTask(ctx context.Context, req *TaskStopS
 // GetScheduledOnceSuccess reports whether a graph has at least one successful run.
 func (s *ScheduledService) GetScheduledOnceSuccess(ctx context.Context, req *ScheduledGraphOnceSuccessRequest) (bool, error) {
 	var count int64
-	_ = s.db.WithContext(ctx).Model(&model.ProjectScheduleTaskDO{}).
+	// Bug55 fix: propagate DB error instead of silently returning false.
+	if err := s.db.WithContext(ctx).Model(&model.ProjectScheduleTaskDO{}).
 		Where("project_id = ? AND graph_id = ? AND status = ?", req.ProjectID, req.GraphID, model.ScheduledStatusSuccess).
-		Count(&count).Error
+		Count(&count).Error; err != nil {
+		return false, err
+	}
 	return count > 0, nil
 }
 

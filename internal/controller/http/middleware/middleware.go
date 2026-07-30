@@ -4,14 +4,15 @@ package middleware
 import (
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/fengzhizi319/privahub/pkg/logger"
 	"github.com/fengzhizi319/privahub/pkg/metrics"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 )
 
@@ -53,7 +54,9 @@ func Metrics() gin.HandlerFunc {
 		start := time.Now()
 		path := c.FullPath()
 		if path == "" {
-			path = c.Request.URL.Path
+			// Bug51 fix: use a fixed label for unmatched routes to prevent
+			// unbounded Prometheus label cardinality from arbitrary 404 paths.
+			path = "__unmatched__"
 		}
 
 		c.Next()
@@ -62,7 +65,7 @@ func Metrics() gin.HandlerFunc {
 		status := c.Writer.Status()
 
 		metrics.HTTPRequestsTotal.WithLabelValues(
-			c.Request.Method, path, string(rune(status)),
+			c.Request.Method, path, strconv.Itoa(status),
 		).Inc()
 		metrics.HTTPRequestDuration.WithLabelValues(
 			c.Request.Method, path,
@@ -87,7 +90,7 @@ func CORS(allowedOrigins ...string) gin.HandlerFunc {
 			c.Header("Access-Control-Allow-Credentials", "true")
 		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization, X-Trace-ID")
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization, X-Trace-ID, User-Token, token")
 		c.Header("Access-Control-Max-Age", "86400")
 
 		if c.Request.Method == "OPTIONS" {
@@ -124,9 +127,9 @@ func AuditLog(log *zap.Logger) gin.HandlerFunc {
 		start := time.Now()
 		c.Next()
 
-		userID, _ := c.Get("userID")
+		userID, _ := c.Get("user_id")
 		log.Info("audit",
-			zap.Any("userID", userID),
+			zap.Any("user_id", userID),
 			zap.String("method", c.Request.Method),
 			zap.String("path", c.Request.URL.Path),
 			zap.Int("status", c.Writer.Status()),

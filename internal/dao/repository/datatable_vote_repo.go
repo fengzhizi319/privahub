@@ -57,6 +57,11 @@ func (r *DatatableRepo) FindAll(ctx context.Context) ([]model.ProjectDatatableDO
 	return datatables, err
 }
 
+// DeleteByProjectID deletes all datatable associations for a project.
+func (r *DatatableRepo) DeleteByProjectID(ctx context.Context, projectID string) error {
+	return r.DB().WithContext(ctx).Where("project_id = ?", projectID).Delete(&model.ProjectDatatableDO{}).Error
+}
+
 // FedTableRepo is the GORM implementation of FedTableRepository.
 type FedTableRepo struct {
 	*BaseRepo[model.ProjectFedTableDO]

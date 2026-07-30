@@ -1,8 +1,20 @@
-// Package service provides business logic services for SecretPad-Go.
+// Package service provides business logic services for Privahub.
+//
+// This package implements the core domain logic including:
+//   - Authentication & session management (AuthService)
+//   - Project/graph/job lifecycle management
+//   - Node and route management with Kuscia integration
+//   - Datatable and datasource operations
+//   - Vote/approval workflows for cross-institution collaboration
+//   - Background sync services for Kuscia state reconciliation
+//
+// All services follow the constructor injection pattern and accept
+// repository interfaces for testability.
 package service
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -23,6 +35,11 @@ var (
 )
 
 // AuthService handles user authentication and session management.
+// It implements the Java SecretPad authentication contract:
+//   - Password verification via SHA-256 hash comparison
+//   - Account lockout after 5 failed attempts (30-minute cooldown)
+//   - JWT token pair generation with database-backed session tracking
+//   - Token refresh flow for seamless session renewal
 type AuthService struct {
 	userRepo   repository.UserAccountsRepository
 	tokenRepo  repository.UserTokensRepository
@@ -134,15 +151,23 @@ func (s *AuthService) ValidateSession(ctx context.Context, token string) (*model
 	return s.tokenRepo.FindByToken(ctx, token)
 }
 
-// verifyPassword checks if the plain password matches the hash.
+// verifyPassword checks if the plain password matches the stored hash.
+// It supports two verification paths for backward compatibility:
+//  1. Direct comparison: the frontend may send the pre-hashed value
+//     (Java SecretPad contract sends SHA-256 hex from the client).
+//  2. Hash-then-compare: if the raw password is sent, compute its
+//     SHA-256 and compare against the stored hash.
+//
+// Uses hmac.Equal for constant-time comparison to prevent timing attacks.
 func (s *AuthService) verifyPassword(plainPassword, hashedPassword string) bool {
-	if plainPassword == hashedPassword {
+	// Constant-time comparison for the direct (pre-hashed) path
+	if hmac.Equal([]byte(plainPassword), []byte(hashedPassword)) {
 		return true
 	}
 	// Java backend uses SHA-256 for password hashing
 	hash := sha256.Sum256([]byte(plainPassword))
 	computedHash := hex.EncodeToString(hash[:])
-	return computedHash == hashedPassword
+	return hmac.Equal([]byte(computedHash), []byte(hashedPassword))
 }
 
 // HashPassword creates a SHA-256 hash of a password.

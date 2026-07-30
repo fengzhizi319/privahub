@@ -75,7 +75,7 @@ func main() {
 	}
 
 	// Initialize application dependencies
-	app := wire.NewApp(db, cfg)
+	app := wire.NewApp(db, cfg, log)
 	log.Info("Application dependencies initialized")
 
 	// Create HTTP router

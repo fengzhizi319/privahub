@@ -9,6 +9,7 @@ import (
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // Node service errors.
@@ -24,11 +25,12 @@ type NodeService struct {
 	nodeRepo     repository.NodeRepository
 	routeRepo    repository.NodeRouteRepository
 	kusciaClient *kuscia.Client
+	db           *gorm.DB
 }
 
 // NewNodeService creates a new NodeService.
-func NewNodeService(nodeRepo repository.NodeRepository, routeRepo repository.NodeRouteRepository, kusciaClient *kuscia.Client) *NodeService {
-	return &NodeService{nodeRepo: nodeRepo, routeRepo: routeRepo, kusciaClient: kusciaClient}
+func NewNodeService(nodeRepo repository.NodeRepository, routeRepo repository.NodeRouteRepository, kusciaClient *kuscia.Client, db *gorm.DB) *NodeService {
+	return &NodeService{nodeRepo: nodeRepo, routeRepo: routeRepo, kusciaClient: kusciaClient, db: db}
 }
 
 // CreateNodeRequest represents a node creation request.
@@ -186,13 +188,20 @@ func (s *NodeService) ListTeeNodes(ctx context.Context) ([]NodeVO, error) {
 	return result, nil
 }
 
-// DeleteNode deletes a node by ID.
+// DeleteNode deletes a node by ID and removes all associated routes atomically.
 func (s *NodeService) DeleteNode(ctx context.Context, nodeID string) error {
 	node, err := s.nodeRepo.FindByNodeID(ctx, nodeID)
 	if err != nil {
 		return ErrNodeNotFound
 	}
-	return s.nodeRepo.Delete(ctx, node.ID)
+
+	// Delete node and associated routes atomically to avoid orphan records.
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("src_node_id = ? OR dst_node_id = ?", nodeID, nodeID).Delete(&model.NodeRouteDO{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&model.NodeDO{}, node.ID).Error
+	})
 }
 
 // GenerateToken generates a deployment token for a node.
@@ -259,6 +268,8 @@ func (s *NodeService) CreateRoute(ctx context.Context, req *CreateRouteRequest) 
 		DstNetAddress: req.SrcNetAddress,
 	}
 	if err := s.routeRepo.Create(ctx, reverse); err != nil {
+		// Rollback the forward route to avoid leaving an orphan record
+		_ = s.routeRepo.Delete(ctx, forward.ID)
 		return err
 	}
 
@@ -296,24 +307,23 @@ func (s *NodeService) ListRoutes(ctx context.Context, nodeID string) ([]RouteVO,
 }
 
 // DeleteRoute deletes a route between two nodes.
+// Bug56 fix: wrap forward + reverse route deletion in a transaction to prevent
+// orphan records when the reverse deletion fails.
 func (s *NodeService) DeleteRoute(ctx context.Context, srcNodeID, dstNodeID string) error {
 	route, err := s.routeRepo.FindByPair(ctx, srcNodeID, dstNodeID)
 	if err != nil {
 		return ErrRouteNotFound
 	}
 
-	// Delete forward route
-	if err := s.routeRepo.Delete(ctx, route.ID); err != nil {
-		return err
-	}
-
-	// Delete reverse route
-	reverse, err := s.routeRepo.FindByPair(ctx, dstNodeID, srcNodeID)
-	if err == nil && reverse != nil {
-		_ = s.routeRepo.Delete(ctx, reverse.ID)
-	}
-
-	return nil
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Delete forward route
+		if err := tx.Delete(&model.NodeRouteDO{}, route.ID).Error; err != nil {
+			return err
+		}
+		// Delete reverse route (if exists)
+		return tx.Where("src_node_id = ? AND dst_node_id = ?", dstNodeID, srcNodeID).
+			Delete(&model.NodeRouteDO{}).Error
+	})
 }
 
 // RefreshNode returns the refreshed status of a node.

@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 
-	"github.com/google/uuid"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -49,7 +49,9 @@ type FeatureDataSourceVO struct {
 
 // --- Service Methods ---
 
-// CreateFeatureTable creates a new feature datasource.
+// CreateFeatureTable creates a new feature datasource. The feature table and
+// its optional project association are created atomically within a database
+// transaction to prevent orphan records on partial failure.
 func (s *FeatureTableService) CreateFeatureTable(ctx context.Context, req *CreateFeatureDatasourceRequest) error {
 	featureTableID := uuid.New().String()[:8]
 	ftType := req.Type
@@ -68,23 +70,27 @@ func (s *FeatureTableService) CreateFeatureTable(ctx context.Context, req *Creat
 		Status:           "Available",
 	}
 
-	if err := s.db.WithContext(ctx).Create(ft).Error; err != nil {
-		return err
-	}
-
-	// If project_id is provided, also create project-feature association
-	if req.ProjectID != "" {
-		pft := &model.ProjectFeatureTableDO{
-			ProjectID:      req.ProjectID,
-			NodeID:         req.NodeID,
-			FeatureTableID: featureTableID,
-			TableConfigs:   req.Columns,
-			Source:         "manual",
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(ft).Error; err != nil {
+			return err
 		}
-		_ = s.db.WithContext(ctx).Create(pft).Error
-	}
 
-	return nil
+		// If project_id is provided, also create project-feature association
+		if req.ProjectID != "" {
+			pft := &model.ProjectFeatureTableDO{
+				ProjectID:      req.ProjectID,
+				NodeID:         req.NodeID,
+				FeatureTableID: featureTableID,
+				TableConfigs:   req.Columns,
+				Source:         "manual",
+			}
+			if err := tx.Create(pft).Error; err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
 }
 
 // FeatureDatasourceList lists feature datasources for a node.

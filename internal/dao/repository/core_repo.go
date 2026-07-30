@@ -165,6 +165,11 @@ func (r *ProjectInstRepo) FindByInstID(ctx context.Context, instID string) ([]mo
 	return insts, err
 }
 
+// DeleteByProjectID deletes all inst associations for a project.
+func (r *ProjectInstRepo) DeleteByProjectID(ctx context.Context, projectID string) error {
+	return r.DB().WithContext(ctx).Where("project_id = ?", projectID).Delete(&model.ProjectInstDO{}).Error
+}
+
 // ProjectNodeRepo is the GORM implementation of ProjectNodeRepository.
 type ProjectNodeRepo struct {
 	*BaseRepo[model.ProjectNodeDO]
@@ -187,4 +192,9 @@ func (r *ProjectNodeRepo) FindByNodeID(ctx context.Context, nodeID string) ([]mo
 	var nodes []model.ProjectNodeDO
 	err := r.DB().WithContext(ctx).Where("node_id = ?", nodeID).Find(&nodes).Error
 	return nodes, err
+}
+
+// DeleteByProjectID deletes all node associations for a project.
+func (r *ProjectNodeRepo) DeleteByProjectID(ctx context.Context, projectID string) error {
+	return r.DB().WithContext(ctx).Where("project_id = ?", projectID).Delete(&model.ProjectNodeDO{}).Error
 }

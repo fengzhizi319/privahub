@@ -143,7 +143,10 @@ func seedInstitutions(ctx context.Context, db *gorm.DB) error {
 
 	for _, inst := range insts {
 		var count int64
-		db.WithContext(ctx).Model(&model.InstDO{}).Where("inst_id = ?", inst.InstID).Count(&count)
+		// Bug72 fix: check error on Count query.
+		if err := db.WithContext(ctx).Model(&model.InstDO{}).Where("inst_id = ?", inst.InstID).Count(&count).Error; err != nil {
+			return err
+		}
 		if count == 0 {
 			if err := db.WithContext(ctx).Create(&inst).Error; err != nil {
 				return err
@@ -181,7 +184,10 @@ func seedNodes(ctx context.Context, db *gorm.DB) error {
 
 	for _, node := range nodes {
 		var count int64
-		db.WithContext(ctx).Model(&model.NodeDO{}).Where("node_id = ?", node.NodeID).Count(&count)
+		// Bug72 fix: check error on Count query.
+		if err := db.WithContext(ctx).Model(&model.NodeDO{}).Where("node_id = ?", node.NodeID).Count(&count).Error; err != nil {
+			return err
+		}
 		if count == 0 {
 			if err := db.WithContext(ctx).Create(&node).Error; err != nil {
 				return err
@@ -197,7 +203,10 @@ func seedNodes(ctx context.Context, db *gorm.DB) error {
 
 	for _, route := range routes {
 		var count int64
-		db.WithContext(ctx).Model(&model.NodeRouteDO{}).Where("src_node_id = ? AND dst_node_id = ?", route.SrcNodeID, route.DstNodeID).Count(&count)
+		// Bug72 fix: check error on Count query.
+		if err := db.WithContext(ctx).Model(&model.NodeRouteDO{}).Where("src_node_id = ? AND dst_node_id = ?", route.SrcNodeID, route.DstNodeID).Count(&count).Error; err != nil {
+			return err
+		}
 		if count == 0 {
 			if err := db.WithContext(ctx).Create(&route).Error; err != nil {
 				return err
@@ -210,7 +219,10 @@ func seedNodes(ctx context.Context, db *gorm.DB) error {
 
 func seedAdminUser(ctx context.Context, db *gorm.DB) error {
 	var count int64
-	db.WithContext(ctx).Model(&model.UserAccountsDO{}).Where("name = ?", "admin").Count(&count)
+	// Bug72 fix: check error on Count query.
+	if err := db.WithContext(ctx).Model(&model.UserAccountsDO{}).Where("name = ?", "admin").Count(&count).Error; err != nil {
+		return err
+	}
 	if count > 0 {
 		return nil
 	}
@@ -231,7 +243,10 @@ func seedAdminUser(ctx context.Context, db *gorm.DB) error {
 func seedRBAC(ctx context.Context, db *gorm.DB) error {
 	// Seed default role
 	var roleCount int64
-	db.WithContext(ctx).Model(&model.SysRoleDO{}).Where("role_code = ?", "ADMIN").Count(&roleCount)
+	// Bug72 fix: check error on Count query.
+	if err := db.WithContext(ctx).Model(&model.SysRoleDO{}).Where("role_code = ?", "ADMIN").Count(&roleCount).Error; err != nil {
+		return err
+	}
 	if roleCount == 0 {
 		role := &model.SysRoleDO{
 			RoleCode: "ADMIN",
@@ -244,7 +259,10 @@ func seedRBAC(ctx context.Context, db *gorm.DB) error {
 
 	// Seed ALL_INTERFACE_RESOURCE
 	var resCount int64
-	db.WithContext(ctx).Model(&model.SysResourceDO{}).Where("resource_code = ?", "ALL_INTERFACE_RESOURCE").Count(&resCount)
+	// Bug72 fix: check error on Count query.
+	if err := db.WithContext(ctx).Model(&model.SysResourceDO{}).Where("resource_code = ?", "ALL_INTERFACE_RESOURCE").Count(&resCount).Error; err != nil {
+		return err
+	}
 	if resCount == 0 {
 		resource := &model.SysResourceDO{
 			ResourceType: "API",
@@ -258,7 +276,10 @@ func seedRBAC(ctx context.Context, db *gorm.DB) error {
 
 	// Assign admin role to admin user
 	var permCount int64
-	db.WithContext(ctx).Model(&model.SysUserPermissionRelDO{}).Where("user_key = ? AND target_code = ?", "admin", "ADMIN").Count(&permCount)
+	// Bug72 fix: check error on Count query.
+	if err := db.WithContext(ctx).Model(&model.SysUserPermissionRelDO{}).Where("user_key = ? AND target_code = ?", "admin", "ADMIN").Count(&permCount).Error; err != nil {
+		return err
+	}
 	if permCount == 0 {
 		perm := &model.SysUserPermissionRelDO{
 			UserType:   "USER",
@@ -303,15 +324,20 @@ func seedDatasources(ctx context.Context, db *gorm.DB) error {
 
 	for _, ds := range datasources {
 		var count int64
-		db.WithContext(ctx).Model(&model.DatasourceDO{}).Where("datasource_id = ?", ds.DatasourceID).Count(&count)
+		if err := db.WithContext(ctx).Model(&model.DatasourceDO{}).Where("datasource_id = ?", ds.DatasourceID).Count(&count).Error; err != nil {
+			return err
+		}
 		if count == 0 {
 			if err := db.WithContext(ctx).Create(&ds).Error; err != nil {
 				return err
 			}
-			db.WithContext(ctx).Create(&model.DatasourceNodeDO{
+			// Bug72 fix: check error on DatasourceNodeDO creation.
+			if err := db.WithContext(ctx).Create(&model.DatasourceNodeDO{
 				DatasourceID: ds.DatasourceID,
 				NodeID:       ds.OwnerID,
-			})
+			}).Error; err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -319,7 +345,10 @@ func seedDatasources(ctx context.Context, db *gorm.DB) error {
 
 func seedProjects(ctx context.Context, db *gorm.DB) error {
 	var count int64
-	db.WithContext(ctx).Model(&model.ProjectDO{}).Where("project_id = ?", "p-default").Count(&count)
+	// Bug72 fix: check error on Count query.
+	if err := db.WithContext(ctx).Model(&model.ProjectDO{}).Where("project_id = ?", "p-default").Count(&count).Error; err != nil {
+		return err
+	}
 	if count == 0 {
 		project := &model.ProjectDO{
 			ProjectID:   "p-default",
@@ -333,10 +362,13 @@ func seedProjects(ctx context.Context, db *gorm.DB) error {
 		}
 		nodes := []string{"alice", "bob"}
 		for _, nodeID := range nodes {
-			db.WithContext(ctx).Create(&model.ProjectNodeDO{
+			// Bug72 fix: check error on ProjectNodeDO creation.
+			if err := db.WithContext(ctx).Create(&model.ProjectNodeDO{
 				ProjectID: "p-default",
 				NodeID:    nodeID,
-			})
+			}).Error; err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -362,9 +394,12 @@ func seedDatatables(ctx context.Context, db *gorm.DB) error {
 
 	for _, dt := range datatables {
 		var count int64
-		db.WithContext(ctx).Model(&model.ProjectDatatableDO{}).
+		// Bug72 fix: check error on Count query.
+		if err := db.WithContext(ctx).Model(&model.ProjectDatatableDO{}).
 			Where("project_id = ? AND node_id = ? AND datatable_id = ?", dt.ProjectID, dt.NodeID, dt.DatatableID).
-			Count(&count)
+			Count(&count).Error; err != nil {
+			return err
+		}
 		if count == 0 {
 			if err := db.WithContext(ctx).Create(&dt).Error; err != nil {
 				return err
@@ -376,7 +411,10 @@ func seedDatatables(ctx context.Context, db *gorm.DB) error {
 
 func seedGraphs(ctx context.Context, db *gorm.DB) error {
 	var count int64
-	db.WithContext(ctx).Model(&model.ProjectGraphDO{}).Where("graph_id = ?", "g-demo").Count(&count)
+	// Bug72 fix: check error on Count query.
+	if err := db.WithContext(ctx).Model(&model.ProjectGraphDO{}).Where("graph_id = ?", "g-demo").Count(&count).Error; err != nil {
+		return err
+	}
 	if count == 0 {
 		graph := &model.ProjectGraphDO{
 			ProjectID:      "p-default",
@@ -416,7 +454,10 @@ func seedGraphs(ctx context.Context, db *gorm.DB) error {
 			},
 		}
 		for _, node := range nodes {
-			db.WithContext(ctx).Create(&node)
+			// Bug72 fix: check error on graph node creation.
+			if err := db.WithContext(ctx).Create(&node).Error; err != nil {
+				return err
+			}
 		}
 	}
 	return nil

@@ -191,3 +191,64 @@ func TestClient_GrantDomainData_Success(t *testing.T) {
 		t.Fatalf("GrantDomainData failed: %v", err)
 	}
 }
+
+// TestClient_ResponseSizeLimit verifies that the client handles large responses
+// gracefully via io.LimitReader (Bug 31). A response larger than 10 MB is
+// truncated, which will cause a JSON unmarshal error rather than OOM.
+func TestClient_ResponseSizeLimit(t *testing.T) {
+	server, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		// Write a valid JSON prefix then pad with >10MB of garbage
+		w.Write([]byte(`{"status":{"code":0,"message":"`))
+		// Write 11 MB of 'A' to exceed the limit
+		chunk := make([]byte, 1<<20) // 1 MB
+		for i := range chunk {
+			chunk[i] = 'A'
+		}
+		for i := 0; i < 11; i++ {
+			w.Write(chunk)
+		}
+		w.Write([]byte(`"}}`))
+	})
+	defer server.Close()
+
+	// The response exceeds 10 MB so it will be truncated and JSON parsing fails
+	err := client.Ping(context.Background())
+	if err == nil {
+		t.Fatal("expected error for oversized response")
+	}
+}
+
+// TestClient_ContextCancellation verifies that the client respects context
+// cancellation.
+func TestClient_ContextCancellation(t *testing.T) {
+	server, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate a slow server
+		time.Sleep(2 * time.Second)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": map[string]interface{}{"code": 0},
+		})
+	})
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	err := client.Ping(ctx)
+	if err == nil {
+		t.Fatal("expected error due to context timeout")
+	}
+}
+
+// TestClient_HTTPError verifies that non-200 HTTP status codes produce errors.
+func TestClient_HTTPError(t *testing.T) {
+	server, client := newTestServer(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		w.Write([]byte("internal error"))
+	})
+	defer server.Close()
+
+	err := client.Ping(context.Background())
+	if err == nil {
+		t.Fatal("expected error for HTTP 500")
+	}
+}

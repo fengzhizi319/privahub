@@ -60,6 +60,8 @@ type NodeUserVO struct {
 // --- Service Methods ---
 
 // Create creates a new node user account.
+// The user account and user-node relationship are created atomically within a
+// database transaction to prevent orphan records on partial failure.
 func (s *NodeUserService) Create(ctx context.Context, req *NodeUserCreateRequest) error {
 	if req.NodeID == "" {
 		req.NodeID = req.NodeIDAlt
@@ -68,31 +70,37 @@ func (s *NodeUserService) Create(ctx context.Context, req *NodeUserCreateRequest
 		req.UserName = req.UserNameAlt
 	}
 	// Check if user already exists for this node
+	// Bug59 fix: check the Count error instead of silently ignoring it.
+	// A DB failure here could let a duplicate user slip through.
 	var count int64
-	s.db.WithContext(ctx).Model(&model.UserAccountsDO{}).
+	if err := s.db.WithContext(ctx).Model(&model.UserAccountsDO{}).
 		Where("name = ? AND owner_type = ? AND owner_id = ?", req.UserName, "EDGE", req.NodeID).
-		Count(&count)
+		Count(&count).Error; err != nil {
+		return err
+	}
 	if count > 0 {
 		return ErrNodeUserExists
 	}
 
-	user := &model.UserAccountsDO{
-		Name:         req.UserName,
-		PasswordHash: HashPassword(req.Password),
-		OwnerType:    "EDGE",
-		OwnerID:      req.NodeID,
-	}
+	// Wrap user + relationship creation in a transaction for atomicity
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		user := &model.UserAccountsDO{
+			Name:         req.UserName,
+			PasswordHash: HashPassword(req.Password),
+			OwnerType:    "EDGE",
+			OwnerID:      req.NodeID,
+		}
+		if err := tx.Create(user).Error; err != nil {
+			return err
+		}
 
-	if err := s.db.WithContext(ctx).Create(user).Error; err != nil {
-		return err
-	}
-
-	// Create user-node relationship
-	rel := &model.SysUserNodeRelDO{
-		UserID: req.UserName,
-		NodeID: req.NodeID,
-	}
-	return s.db.WithContext(ctx).Create(rel).Error
+		// Create user-node relationship
+		rel := &model.SysUserNodeRelDO{
+			UserID: req.UserName,
+			NodeID: req.NodeID,
+		}
+		return tx.Create(rel).Error
+	})
 }
 
 // ResetPassword resets a node user's password.

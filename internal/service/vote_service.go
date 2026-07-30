@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
-	"github.com/google/uuid"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // Vote service errors.
@@ -18,16 +20,19 @@ var (
 type VoteService struct {
 	voteRequestRepo repository.VoteRequestRepository
 	voteInviteRepo  repository.VoteInviteRepository
+	db              *gorm.DB
 }
 
 // NewVoteService creates a new VoteService.
 func NewVoteService(
 	voteRequestRepo repository.VoteRequestRepository,
 	voteInviteRepo repository.VoteInviteRepository,
+	db *gorm.DB,
 ) *VoteService {
 	return &VoteService{
 		voteRequestRepo: voteRequestRepo,
 		voteInviteRepo:  voteInviteRepo,
+		db:              db,
 	}
 }
 
@@ -92,27 +97,22 @@ type ReplyVoteRequest struct {
 
 // --- Service Methods ---
 
-// CreateVote creates a new vote request.
+// CreateVote creates a new vote request with invites atomically.
 func (s *VoteService) CreateVote(ctx context.Context, req *CreateVoteRequest) (*VoteVO, error) {
 	voteID := uuid.New().String()[:8]
 
-	votersJSON := "["
-	for i, v := range req.Voters {
-		if i > 0 {
-			votersJSON += ","
-		}
-		votersJSON += `"` + v + `"`
+	// Use json.Marshal to safely serialize voter/executor arrays (prevents JSON injection)
+	votersBytes, err := json.Marshal(req.Voters)
+	if err != nil {
+		return nil, errors.New("failed to serialize voters")
 	}
-	votersJSON += "]"
+	votersJSON := string(votersBytes)
 
-	executorsJSON := "["
-	for i, e := range req.Executors {
-		if i > 0 {
-			executorsJSON += ","
-		}
-		executorsJSON += `"` + e + `"`
+	executorsBytes, err := json.Marshal(req.Executors)
+	if err != nil {
+		return nil, errors.New("failed to serialize executors")
 	}
-	executorsJSON += "]"
+	executorsJSON := string(executorsBytes)
 
 	threshold := req.ApprovedThreshold
 	if threshold == 0 {
@@ -133,21 +133,27 @@ func (s *VoteService) CreateVote(ctx context.Context, req *CreateVoteRequest) (*
 		Description:       req.Description,
 	}
 
-	if err := s.voteRequestRepo.Create(ctx, vote); err != nil {
-		return nil, err
-	}
-
-	// Create vote invites for each voter
-	for _, voter := range req.Voters {
-		invite := &model.VoteInviteDO{
-			VoteID:            voteID,
-			Initiator:         req.Initiator,
-			VoteParticipantID: voter,
-			Type:              req.Type,
-			Action:            "REVIEWING",
-			Description:       req.Description,
+	// Create vote and invites atomically in a transaction.
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(vote).Error; err != nil {
+			return err
 		}
-		_ = s.voteInviteRepo.Create(ctx, invite)
+		for _, voter := range req.Voters {
+			invite := &model.VoteInviteDO{
+				VoteID:            voteID,
+				Initiator:         req.Initiator,
+				VoteParticipantID: voter,
+				Type:              req.Type,
+				Action:            "REVIEWING",
+				Description:       req.Description,
+			}
+			if err := tx.Create(invite).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	return &VoteVO{
@@ -244,45 +250,50 @@ func (s *VoteService) GetVoteDetail(ctx context.Context, req *GetVoteRequest) (*
 	return vo, inviteVOs, nil
 }
 
-// ReplyVote processes a vote reply (AGREE/REJECT).
+// ReplyVote processes a vote reply (AGREE/REJECT) atomically to prevent race conditions.
 func (s *VoteService) ReplyVote(ctx context.Context, req *ReplyVoteRequest) error {
-	invite, err := s.voteInviteRepo.FindByVoteAndParticipant(ctx, req.VoteID, req.VoteParticipantID)
-	if err != nil {
-		return ErrVoteNotFound
-	}
-
-	// Update invite action
-	invite.Action = req.Action
-	invite.Reason = req.Reason
-	if err := s.voteInviteRepo.Update(ctx, invite); err != nil {
-		return err
-	}
-
-	// Check if vote threshold reached
-	vote, err := s.voteRequestRepo.FindByVoteID(ctx, req.VoteID)
-	if err != nil {
-		return nil // non-fatal
-	}
-
-	invites, _ := s.voteInviteRepo.FindByVoteID(ctx, req.VoteID)
-	agreeCount := 0
-	rejectCount := 0
-	for _, inv := range invites {
-		if inv.Action == "AGREE" {
-			agreeCount++
-		} else if inv.Action == "REJECT" {
-			rejectCount++
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// Find and update the invite within the transaction.
+		var invite model.VoteInviteDO
+		if err := tx.Where("vote_id = ? AND vote_participant_id = ?", req.VoteID, req.VoteParticipantID).First(&invite).Error; err != nil {
+			return ErrVoteNotFound
 		}
-	}
 
-	// Update vote status if threshold reached
-	if agreeCount >= vote.ApprovedThreshold {
-		vote.Status = 1 // APPROVED
-		_ = s.voteRequestRepo.Update(ctx, vote)
-	} else if rejectCount > len(invites)-vote.ApprovedThreshold {
-		vote.Status = 2 // REJECTED
-		_ = s.voteRequestRepo.Update(ctx, vote)
-	}
+		invite.Action = req.Action
+		invite.Reason = req.Reason
+		if err := tx.Save(&invite).Error; err != nil {
+			return err
+		}
 
-	return nil
+		// Count votes within the same transaction for consistency.
+		var invites []model.VoteInviteDO
+		if err := tx.Where("vote_id = ?", req.VoteID).Find(&invites).Error; err != nil {
+			return nil // non-fatal: invite updated, skip threshold check
+		}
+
+		agreeCount := 0
+		rejectCount := 0
+		for _, inv := range invites {
+			if inv.Action == "AGREE" {
+				agreeCount++
+			} else if inv.Action == "REJECT" {
+				rejectCount++
+			}
+		}
+
+		var vote model.VoteRequestDO
+		if err := tx.Where("vote_id = ?", req.VoteID).First(&vote).Error; err != nil {
+			return nil // non-fatal
+		}
+
+		if agreeCount >= vote.ApprovedThreshold {
+			vote.Status = 1 // APPROVED
+			return tx.Save(&vote).Error
+		} else if rejectCount > len(invites)-vote.ApprovedThreshold {
+			vote.Status = 2 // REJECTED
+			return tx.Save(&vote).Error
+		}
+
+		return nil
+	})
 }

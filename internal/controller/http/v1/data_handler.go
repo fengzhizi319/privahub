@@ -3,8 +3,10 @@ package v1
 import (
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
@@ -34,7 +36,12 @@ func NewDataHandler(db *gorm.DB, kusciaClient *kuscia.Client) *DataHandler {
 // --- Data Endpoints ---
 
 // Upload handles data file upload and saves to data directory.
+// Filenames are sanitized to prevent path traversal attacks.
 func (h *DataHandler) Upload(c *gin.Context) {
+	// Limit upload size to 512 MB to prevent resource exhaustion.
+	const maxUploadSize = 512 << 20 // 512 MB
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUploadSize)
+
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		response.Fail(c, errcode.ParamError)
@@ -51,10 +58,18 @@ func (h *DataHandler) Upload(c *gin.Context) {
 	}
 	datasourceID := c.PostForm("datasource_id")
 
+	// Sanitize nodeID and filename to prevent path traversal attacks (e.g. ../../etc/passwd)
+	safeNodeID := sanitizePathSegment(nodeID)
+	safeFilename := sanitizePathSegment(header.Filename)
+	if safeNodeID == "" || safeFilename == "" {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
 	// Save file to data directory
-	nodeDir := filepath.Join(h.dataDir, nodeID)
+	nodeDir := filepath.Join(h.dataDir, safeNodeID)
 	_ = os.MkdirAll(nodeDir, 0o755)
-	dstPath := filepath.Join(nodeDir, header.Filename)
+	dstPath := filepath.Join(nodeDir, safeFilename)
 
 	out, err := os.Create(dstPath)
 	if err != nil {
@@ -141,9 +156,17 @@ func (h *DataHandler) Download(c *gin.Context) {
 		return
 	}
 
+	// Sanitize inputs to prevent path traversal attacks
+	safeNodeID := sanitizePathSegment(req.NodeID)
+	safeDatatableID := sanitizePathSegment(req.DatatableID)
+	if safeDatatableID == "" {
+		response.Fail(c, errcode.ParamError)
+		return
+	}
+
 	// Look up file in data directory
-	nodeDir := filepath.Join(h.dataDir, req.NodeID)
-	filePath := filepath.Join(nodeDir, req.DatatableID+".csv")
+	nodeDir := filepath.Join(h.dataDir, safeNodeID)
+	filePath := filepath.Join(nodeDir, safeDatatableID+".csv")
 
 	if _, err := os.Stat(filePath); err == nil {
 		c.File(filePath)
@@ -151,8 +174,8 @@ func (h *DataHandler) Download(c *gin.Context) {
 	}
 
 	// Job outputs are stored by their relative URI (no extension, ORC payload).
-	if _, err := os.Stat(filepath.Join(nodeDir, req.DatatableID)); err == nil {
-		c.File(filepath.Join(nodeDir, req.DatatableID))
+	if _, err := os.Stat(filepath.Join(nodeDir, safeDatatableID)); err == nil {
+		c.File(filepath.Join(nodeDir, safeDatatableID))
 		return
 	}
 
@@ -282,6 +305,27 @@ func (h *DataHandler) CloudLogSls(c *gin.Context) {
 }
 
 // --- Vote Sync Endpoint ---
+
+// sanitizePathSegment strips directory components and rejects path traversal
+// sequences from user-supplied path segments. Returns only the base filename
+// with any leading dots/dashes removed to prevent hidden files or option injection.
+func sanitizePathSegment(s string) string {
+	if s == "" {
+		return ""
+	}
+	// Take only the base name to strip any directory components
+	base := filepath.Base(s)
+	// Reject traversal patterns that survive Base (e.g. ".." on some platforms)
+	if base == "." || base == ".." || base == string(filepath.Separator) {
+		return ""
+	}
+	// Remove leading dots and dashes to prevent hidden files / CLI option injection
+	base = strings.TrimLeft(base, ".-")
+	if base == "" {
+		return ""
+	}
+	return base
+}
 
 // VoteSyncCreate handles vote sync creation (P2P vote synchronization via Kuscia).
 func (h *DataHandler) VoteSyncCreate(c *gin.Context) {

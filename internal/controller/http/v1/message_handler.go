@@ -1,12 +1,18 @@
 package v1
 
 import (
+	"errors"
+
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/response"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
+
+// errVoteInviteNotFound is a sentinel error used within the Reply transaction
+// to distinguish "no matching invite row" from real DB failures.
+var errVoteInviteNotFound = errors.New("vote invite not found")
 
 // MessageHandler handles message center HTTP requests.
 type MessageHandler struct {
@@ -52,11 +58,18 @@ func (h *MessageHandler) List(c *gin.Context) {
 		query = query.Where("type = ?", req.Type)
 	}
 
+	// Bug66 fix: check Count and Find errors instead of silently ignoring them.
 	var total int64
-	query.Count(&total)
+	if err := query.Count(&total).Error; err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	var votes []model.VoteRequestDO
-	query.Order("gmt_create DESC").Offset((req.Page - 1) * req.Size).Limit(req.Size).Find(&votes)
+	if err := query.Order("gmt_create DESC").Offset((req.Page - 1) * req.Size).Limit(req.Size).Find(&votes).Error; err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	result := make([]MessageVO, 0, len(votes))
 	for _, v := range votes {
@@ -102,7 +115,11 @@ func (h *MessageHandler) Detail(c *gin.Context) {
 	}
 
 	var invites []model.VoteInviteDO
-	h.db.Where("vote_id = ?", req.VoteID).Find(&invites)
+	// Bug67 fix: check the DB error instead of silently ignoring it.
+	if err := h.db.WithContext(c.Request.Context()).Where("vote_id = ?", req.VoteID).Find(&invites).Error; err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	inviteVOs := make([]gin.H, 0, len(invites))
 	for _, inv := range invites {
@@ -151,40 +168,58 @@ func (h *MessageHandler) Reply(c *gin.Context) {
 		return
 	}
 
-	// Update the vote invite
-	result := h.db.WithContext(c.Request.Context()).
-		Model(&model.VoteInviteDO{}).
-		Where("vote_id = ? AND vote_participant_id = ?", req.VoteID, req.Voter).
-		Updates(map[string]interface{}{
-			"action": req.Action,
-			"reason": req.Reason,
-		})
-
-	if result.RowsAffected == 0 {
-		response.Fail(c, errcode.NotFound)
-		return
-	}
-
-	// Check if all voters have responded - update vote status
-	var pendingCount int64
-	h.db.Model(&model.VoteInviteDO{}).
-		Where("vote_id = ? AND action = ?", req.VoteID, "REVIEWING").
-		Count(&pendingCount)
-
-	if pendingCount == 0 {
-		// All voted - check if any rejected
-		var rejectCount int64
-		h.db.Model(&model.VoteInviteDO{}).
-			Where("vote_id = ? AND action = ?", req.VoteID, "REJECT").
-			Count(&rejectCount)
-
-		newStatus := int8(1) // APPROVED
-		if rejectCount > 0 {
-			newStatus = 2 // REJECTED
+	// Bug48 fix: wrap the vote reply + status finalization in a transaction
+	// to prevent inconsistent state if the process crashes mid-way.
+	if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		// Update the vote invite
+		result := tx.Model(&model.VoteInviteDO{}).
+			Where("vote_id = ? AND vote_participant_id = ?", req.VoteID, req.Voter).
+			Updates(map[string]interface{}{
+				"action": req.Action,
+				"reason": req.Reason,
+			})
+		if result.Error != nil {
+			return result.Error
 		}
-		h.db.Model(&model.VoteRequestDO{}).
-			Where("vote_id = ?", req.VoteID).
-			Update("status", newStatus)
+		if result.RowsAffected == 0 {
+			return errVoteInviteNotFound
+		}
+
+		// Check if all voters have responded
+		var pendingCount int64
+		if err := tx.Model(&model.VoteInviteDO{}).
+			Where("vote_id = ? AND action = ?", req.VoteID, "REVIEWING").
+			Count(&pendingCount).Error; err != nil {
+			return err
+		}
+
+		if pendingCount == 0 {
+			// All voted - check if any rejected
+			var rejectCount int64
+			if err := tx.Model(&model.VoteInviteDO{}).
+				Where("vote_id = ? AND action = ?", req.VoteID, "REJECT").
+				Count(&rejectCount).Error; err != nil {
+				return err
+			}
+
+			newStatus := int8(1) // APPROVED
+			if rejectCount > 0 {
+				newStatus = 2 // REJECTED
+			}
+			if err := tx.Model(&model.VoteRequestDO{}).
+				Where("vote_id = ?", req.VoteID).
+				Update("status", newStatus).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		if err == errVoteInviteNotFound {
+			response.Fail(c, errcode.NotFound)
+			return
+		}
+		response.Fail(c, errcode.SystemError)
+		return
 	}
 
 	response.OKEmpty(c)
@@ -202,7 +237,11 @@ func (h *MessageHandler) Pending(c *gin.Context) {
 	if req.Voter != "" {
 		query = query.Where("vote_participant_id = ?", req.Voter)
 	}
-	query.Count(&count)
+	// Bug68 fix: check the Count error instead of silently ignoring it.
+	if err := query.Count(&count).Error; err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	// Frontend reads the response data as a bare number (Number(unwrap(data))).
 	response.OK(c, count)

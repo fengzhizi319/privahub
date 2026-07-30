@@ -3,11 +3,11 @@ package v1
 import (
 	"strings"
 
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/response"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -48,22 +48,28 @@ func (h *ApprovalHandler) Create(c *gin.Context) {
 		Description:       req.Description,
 	}
 
-	if err := h.db.WithContext(c.Request.Context()).Create(vote).Error; err != nil {
+	// Create vote and invites atomically in a transaction.
+	if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(vote).Error; err != nil {
+			return err
+		}
+		for _, voter := range req.Voters {
+			invite := &model.VoteInviteDO{
+				VoteID:            voteID,
+				Initiator:         req.Initiator,
+				VoteParticipantID: voter,
+				Type:              req.Type,
+				Action:            "REVIEWING",
+				Description:       req.Description,
+			}
+			if err := tx.Create(invite).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		response.Fail(c, errcode.SystemError)
 		return
-	}
-
-	// Create vote invites for each voter
-	for _, voter := range req.Voters {
-		invite := &model.VoteInviteDO{
-			VoteID:            voteID,
-			Initiator:         req.Initiator,
-			VoteParticipantID: voter,
-			Type:              req.Type,
-			Action:            "REVIEWING",
-			Description:       req.Description,
-		}
-		h.db.Create(invite)
 	}
 
 	response.OK(c, gin.H{"vote_id": voteID})
@@ -86,7 +92,11 @@ func (h *ApprovalHandler) PullStatus(c *gin.Context) {
 	}
 
 	var invites []model.VoteInviteDO
-	h.db.Where("vote_id = ?", req.VoteID).Find(&invites)
+	// Bug65 fix: check the DB error instead of silently ignoring it.
+	if err := h.db.WithContext(c.Request.Context()).Where("vote_id = ?", req.VoteID).Find(&invites).Error; err != nil {
+		response.Fail(c, errcode.SystemError)
+		return
+	}
 
 	inviteVOs := make([]gin.H, 0, len(invites))
 	for _, inv := range invites {

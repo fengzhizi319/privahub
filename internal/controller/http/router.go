@@ -58,12 +58,14 @@ func NewRouter(log *zap.Logger, app *wire.App) *gin.Engine {
 		// Public auth aliases: the frontend calls these Java SecretPad paths
 		// first, keep them working without JWT.
 		api.POST("/user/login", app.AuthHandler.Login)
-		api.POST("/user/logout", app.AuthHandler.Logout)
 
 		// Protected routes (JWT auth required)
 		protected := api.Group("")
 		protected.Use(middleware.JWTAuth(app.JWTManager))
 		{
+			// Logout requires JWT to identify the user whose session is invalidated.
+			protected.POST("/user/logout", app.AuthHandler.Logout)
+
 			registerProjectRoutes(protected, app.ProjectHandler)
 			registerGraphRoutes(protected, app.GraphHandler)
 			registerJobRoutes(protected, app.JobHandler)
@@ -83,8 +85,9 @@ func NewRouter(log *zap.Logger, app *wire.App) *gin.Engine {
 		}
 	}
 
-	// P2P mode routes
+	// P2P mode routes (JWT auth required — these are frontend-facing management APIs)
 	p2p := api.Group("/p2p")
+	p2p.Use(middleware.JWTAuth(app.JWTManager))
 	{
 		registerP2PRoutes(p2p, app.P2PHandler)
 	}

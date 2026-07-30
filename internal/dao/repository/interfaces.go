@@ -52,6 +52,7 @@ type ProjectInstRepository interface {
 	BaseRepository[model.ProjectInstDO]
 	FindByProjectID(ctx context.Context, projectID string) ([]model.ProjectInstDO, error)
 	FindByInstID(ctx context.Context, instID string) ([]model.ProjectInstDO, error)
+	DeleteByProjectID(ctx context.Context, projectID string) error
 }
 
 // ProjectNodeRepository provides access to project-node associations.
@@ -59,4 +60,5 @@ type ProjectNodeRepository interface {
 	BaseRepository[model.ProjectNodeDO]
 	FindByProjectID(ctx context.Context, projectID string) ([]model.ProjectNodeDO, error)
 	FindByNodeID(ctx context.Context, nodeID string) ([]model.ProjectNodeDO, error)
+	DeleteByProjectID(ctx context.Context, projectID string) error
 }

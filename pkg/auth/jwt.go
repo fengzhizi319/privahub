@@ -1,4 +1,16 @@
-// Package auth provides JWT-based authentication and authorization services.
+// Package auth provides JWT-based authentication and authorization services
+// for the Privahub platform.
+//
+// Architecture:
+//   - JWTManager handles token generation, validation, and refresh using HMAC-SHA256.
+//   - TokenPair implements the access/refresh token pattern: short-lived access tokens
+//     (default 2h) for API calls, long-lived refresh tokens (default 7d) for renewal.
+//   - Context helpers propagate authenticated user identity through the request chain.
+//
+// Security considerations:
+//   - The signing secret must be configured via auth.jwt_secret in production.
+//   - Token type (access vs refresh) is embedded in claims to prevent token misuse.
+//   - Each token carries a unique JTI (JWT ID) for potential revocation tracking.
 package auth
 
 import (
@@ -27,14 +39,16 @@ const (
 	RefreshToken TokenType = "refresh"
 )
 
-// Claims represents the JWT claims for SecretPad-Go.
+// Claims represents the JWT claims for Privahub.
+// It extends the standard RegisteredClaims with user identity fields
+// required by the SecretPad-compatible API contract.
 type Claims struct {
 	jwt.RegisteredClaims
-	UserID    string    `json:"user_id"`
-	Username  string    `json:"username"`
-	OwnerType string    `json:"owner_type"`
-	OwnerID   string    `json:"owner_id"`
-	TokenType TokenType `json:"token_type"`
+	UserID    string    `json:"user_id"`    // Numeric user ID as string
+	Username  string    `json:"username"`   // Login name (e.g. "admin")
+	OwnerType string    `json:"owner_type"` // CENTER | EDGE | PARTNER
+	OwnerID   string    `json:"owner_id"`   // Owning node/institution ID
+	TokenType TokenType `json:"token_type"` // access | refresh
 }
 
 // TokenPair contains both access and refresh tokens.
@@ -46,10 +60,11 @@ type TokenPair struct {
 }
 
 // JWTManager handles JWT token generation and validation.
+// It is safe for concurrent use by multiple goroutines.
 type JWTManager struct {
-	secretKey          []byte
-	accessTokenExpiry  time.Duration
-	refreshTokenExpiry time.Duration
+	secretKey          []byte        // HMAC-SHA256 signing key
+	accessTokenExpiry  time.Duration // TTL for access tokens (default 2h)
+	refreshTokenExpiry time.Duration // TTL for refresh tokens (default 7d)
 }
 
 // NewJWTManager creates a new JWT manager.
@@ -106,7 +121,11 @@ func (m *JWTManager) generateToken(userID, username, ownerType, ownerID string, 
 	return token.SignedString(m.secretKey)
 }
 
-// ValidateToken validates a JWT token and returns its claims.
+// ValidateToken validates a JWT token string and returns its claims.
+// It verifies the HMAC signature, checks expiration, and ensures the
+// signing method is HMAC (preventing algorithm confusion attacks).
+// Returns ErrExpiredToken for expired tokens, ErrInvalidToken for
+// malformed/tampered tokens, and ErrInvalidClaims for type assertion failures.
 func (m *JWTManager) ValidateToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -130,7 +149,9 @@ func (m *JWTManager) ValidateToken(tokenString string) (*Claims, error) {
 	return claims, nil
 }
 
-// RefreshAccessToken validates a refresh token and generates a new access token.
+// RefreshAccessToken validates a refresh token and generates a new token pair.
+// It enforces that the provided token is actually a refresh token (not an access
+// token) to prevent privilege escalation via token type confusion.
 func (m *JWTManager) RefreshAccessToken(refreshTokenString string) (*TokenPair, error) {
 	claims, err := m.ValidateToken(refreshTokenString)
 	if err != nil {
