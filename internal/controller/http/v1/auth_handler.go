@@ -2,13 +2,13 @@
 package v1
 
 import (
-	"net/http"
+	"errors"
 
-	"github.com/gin-gonic/gin"
+	"github.com/fengzhizi319/privahub/internal/controller/http/middleware"
 	"github.com/fengzhizi319/privahub/internal/service"
-	"github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/response"
+	"github.com/gin-gonic/gin"
 )
 
 // AuthHandler handles authentication-related HTTP requests.
@@ -21,62 +21,74 @@ func NewAuthHandler(authService *service.AuthService) *AuthHandler {
 	return &AuthHandler{authService: authService}
 }
 
-// Login handles user login.
+// failAuthErr renders a service error with its Java code/args.
+func failAuthErr(c *gin.Context, err error) {
+	var ae *service.AuthError
+	if errors.As(err, &ae) && ae.Code != nil {
+		response.FailArgs(c, ae.Code, ae.Args...)
+		return
+	}
+	response.FailWithMsg(c, errcode.SystemUnknownError, err.Error())
+}
+
+// Login handles user login (POST /api/login and /api/v1alpha1/user/login).
+//
+// Request:  {name, passwordHash, passwordHashSm3?}   (see service.AuthService doc)
+// Response: Java UserContextDTO {token, name, platformType, platformNodeId,
+// ownerType, ownerId, ownerName, projectIds, apiResources, deployMode} plus
+// access_token/refresh_token/expires_at/token_type and a legacy `user` object.
+// Failures use HTTP 200 with AUTH USER_PASSWORD_ERROR (202011601, uniform for
+// unknown users) or USER_IS_LOCKED (202011603).
+//
 // @Summary User login
 // @Tags Auth
 // @Accept json
 // @Produce json
 // @Param request body service.LoginRequest true "Login request"
 // @Success 200 {object} response.Body{data=service.LoginResponse}
-// @Router /api/v1alpha1/user/login [post]
+// @Router /api/login [post]
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req service.LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+		response.FailArgs(c, errcode.SystemValidationError, "name is required")
 		return
 	}
 
 	resp, err := h.authService.Login(c.Request.Context(), &req)
 	if err != nil {
-		switch err {
-		case service.ErrUserNotFound:
-			response.FailWithMsg(c, errcode.NotFound, "user not found")
-		case service.ErrInvalidPassword:
-			response.FailWithMsg(c, errcode.Unauthorized, "invalid password")
-		case service.ErrUserLocked:
-			response.FailWithMsg(c, errcode.Forbidden, "account locked, please try again later")
-		default:
-			response.Fail(c, errcode.SystemError)
-		}
+		failAuthErr(c, err)
 		return
 	}
-
 	response.OK(c, resp)
 }
 
-// Logout handles user logout.
+// Logout deletes the current session only (Java deleteByNameAndToken) and
+// returns the user name. Requires authentication.
+//
 // @Summary User logout
 // @Tags Auth
 // @Produce json
 // @Security BearerAuth
 // @Success 200 {object} response.Body
-// @Router /api/v1alpha1/user/logout [post]
+// @Router /api/logout [post]
 func (h *AuthHandler) Logout(c *gin.Context) {
-	username, exists := c.Get("username")
-	if !exists {
-		response.Fail(c, errcode.Unauthorized)
+	u := middleware.CurrentUser(c)
+	if u == nil {
+		response.FailHTTP(c, 401, errcode.AuthFailed, "login is required")
 		return
 	}
-
-	if err := h.authService.Logout(c.Request.Context(), username.(string)); err != nil {
-		response.Fail(c, errcode.SystemError)
+	token := c.GetString(middleware.CtxToken)
+	if token == "" {
+		token = middleware.ExtractToken(c)
+	}
+	if err := h.authService.Logout(c.Request.Context(), u.Name, token); err != nil {
+		response.FailWithMsg(c, errcode.SystemUnknownError, err.Error())
 		return
 	}
-
-	response.OKEmpty(c)
+	response.OK(c, u.Name)
 }
 
-// RefreshToken handles token refresh.
+// RefreshToken handles token refresh for a still-existing session.
 // @Summary Refresh access token
 // @Tags Auth
 // @Accept json
@@ -89,39 +101,30 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		RefreshToken string `json:"refresh_token" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+		response.FailArgs(c, errcode.SystemValidationError, "refresh_token is required")
 		return
 	}
 
 	tokenPair, err := h.authService.RefreshToken(c.Request.Context(), req.RefreshToken)
 	if err != nil {
-		response.FailWithMsg(c, errcode.Unauthorized, "invalid refresh token")
+		response.FailArgs(c, errcode.AuthFailed, "invalid refresh token")
 		return
 	}
-
 	response.OK(c, tokenPair)
 }
 
-// GetCurrentUser returns the current authenticated user's information.
+// GetCurrentUser returns the current session UserContext.
 // @Summary Get current user info
 // @Tags Auth
 // @Produce json
 // @Security BearerAuth
-// @Success 200 {object} response.Body{data=service.UserInfo}
+// @Success 200 {object} response.Body{data=auth.UserContext}
 // @Router /api/v1alpha1/user/current [get]
 func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
-	claims, ok := auth.ClaimsFromContext(c.Request.Context())
-	if !ok {
-		response.Fail(c, errcode.Unauthorized)
+	u := middleware.CurrentUser(c)
+	if u == nil {
+		response.FailHTTP(c, 401, errcode.AuthFailed, "login is required")
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"status": gin.H{"code": 0, "msg": "success"},
-		"data": gin.H{
-			"name":       claims.Username,
-			"owner_type": claims.OwnerType,
-			"owner_id":   claims.OwnerID,
-		},
-	})
+	response.OK(c, u.Normalize())
 }

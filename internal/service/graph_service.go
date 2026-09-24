@@ -5,12 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
+	"github.com/fengzhizi319/privahub/internal/graphjob"
+	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -19,15 +23,26 @@ var (
 	ErrGraphNotFound = errors.New("graph not found")
 )
 
-// GraphService handles DAG graph management.
+// DefaultGraphNodeMaxIndex mirrors GraphServiceImpl.DEFAULT_INITIAL_INDEX.
+const DefaultGraphNodeMaxIndex = 32
+
+// GraphService handles DAG graph management and execution (Java GraphServiceImpl).
 type GraphService struct {
 	graphRepo     repository.GraphRepository
 	graphNodeRepo repository.GraphNodeRepository
 	jobRepo       repository.JobRepository
 	taskRepo      repository.TaskRepository
 	taskLogRepo   repository.TaskLogRepository
-	kusciaClient  *kuscia.Client
+	kuscia        GraphKusciaAPI
 	db            *gorm.DB
+	partitionRule *PartitionRuleService
+
+	// Optional collaborators configured after construction via
+	// SetTeeConfig / SetTeeSigner / WithKusciaPool (guarded by extMu).
+	extMu  sync.RWMutex
+	tee    TeeGraphConfig
+	signer TeeTaskSigner
+	pool   *kuscia.ClientPool
 }
 
 // NewGraphService creates a new GraphService.
@@ -46,388 +61,237 @@ func NewGraphService(
 		jobRepo:       jobRepo,
 		taskRepo:      taskRepo,
 		taskLogRepo:   taskLogRepo,
-		kusciaClient:  kusciaClient,
+		kuscia:        toGraphKuscia(kusciaClient),
 		db:            db,
+		partitionRule: NewPartitionRuleService(),
+		tee:           TeeGraphConfig{}.withDefaults(),
 	}
 }
 
-// --- Request / Response DTOs ---
+// SetKuscia overrides the Kuscia API (tests / alternative transports).
+func (s *GraphService) SetKuscia(k GraphKusciaAPI) { s.kuscia = k }
 
-// CreateGraphRequest represents a graph creation request.
+func (s *GraphService) settings() *graphjob.Settings { return graphjob.GetSettings() }
+
+// --- Request / Response DTOs (Java camelCase contract) ---
+
+// CreateGraphRequest mirrors Java CreateGraphRequest.
 type CreateGraphRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
-	Name         string `json:"name"`
+	ProjectID  string                   `json:"projectId"`
+	Name       string                   `json:"name"`
+	TemplateID string                   `json:"templateId,omitempty"`
+	Nodes      []graphjob.GraphNodeInfo `json:"nodes"`
+	Edges      []graphjob.GraphEdge     `json:"edges"`
 }
 
-// CreateGraphVO is the response for graph creation.
+// CreateGraphVO mirrors Java CreateGraphVO.
 type CreateGraphVO struct {
-	GraphID   string `json:"graph_id"`
-	ProjectID string `json:"project_id"`
-	Name      string `json:"name"`
+	GraphID string `json:"graphId"`
 }
 
-// ListGraphRequest represents a graph list request.
+// ListGraphRequest mirrors Java ListGraphRequest.
 type ListGraphRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
+	ProjectID string `json:"projectId"`
 }
 
-// GraphMetaVO is a graph summary.
+// GraphMetaVO mirrors Java GraphMetaVO.
 type GraphMetaVO struct {
-	GraphID   string `json:"graph_id"`
-	ProjectID string `json:"project_id"`
+	ProjectID string `json:"projectId"`
+	GraphID   string `json:"graphId"`
 	Name      string `json:"name"`
-	GmtCreate string `json:"gmt_create"`
+	OwnerID   string `json:"ownerId"`
+	GmtCreate string `json:"gmtCreate,omitempty"`
 }
 
-// GetGraphRequest represents a graph detail request.
+// GetGraphRequest mirrors Java GetGraphRequest.
 type GetGraphRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
-	GraphID      string `json:"graph_id"`
-	GraphIDAlt   string `json:"graphId"`
+	ProjectID string `json:"projectId"`
+	GraphID   string `json:"graphId"`
 }
 
-// GraphNodeVO represents a graph node in detail response.
-type GraphNodeVO struct {
-	GraphNodeID string          `json:"graph_node_id"`
-	CodeName    string          `json:"code_name"`
-	Label       string          `json:"label"`
-	X           int             `json:"x"`
-	Y           int             `json:"y"`
-	Inputs      []string        `json:"inputs"`
-	Outputs     []string        `json:"outputs"`
-	NodeDef     json.RawMessage `json:"node_def"`
+// NodeSimpleInfo mirrors Java NodeSimpleInfo.
+type NodeSimpleInfo struct {
+	NodeID   string `json:"nodeId"`
+	NodeName string `json:"nodeName"`
 }
 
-// GraphDetailVO is the full graph detail.
+// ProjectResultBaseVO mirrors Java ProjectResultBaseVO.
+type ProjectResultBaseVO struct {
+	Kind  string `json:"kind"`
+	RefID string `json:"refId"`
+}
+
+// GraphNodeDetail mirrors Java GraphNodeDetail (GraphNodeInfo + runtime info).
+type GraphNodeDetail struct {
+	graphjob.GraphNodeInfo
+	Status   string                `json:"status"`
+	JobID    string                `json:"jobId,omitempty"`
+	TaskID   string                `json:"taskId,omitempty"`
+	Results  []ProjectResultBaseVO `json:"results,omitempty"`
+	Parties  []NodeSimpleInfo      `json:"parties,omitempty"`
+	Progress *float64              `json:"progress,omitempty"`
+}
+
+// GraphDataSourceConfigVO mirrors GraphDetailVO.DataSourceConfig.
+type GraphDataSourceConfigVO struct {
+	EditEnable     bool   `json:"editEnable"`
+	NodeID         string `json:"nodeId"`
+	NodeName       string `json:"nodeName"`
+	DataSourceName string `json:"dataSourceName"`
+	DataSourceID   string `json:"dataSourceId"`
+}
+
+// GraphDetailVO mirrors Java GraphDetailVO.
 type GraphDetailVO struct {
-	GraphID        string          `json:"graph_id"`
-	ProjectID      string          `json:"project_id"`
-	Name           string          `json:"name"`
-	Edges          json.RawMessage `json:"edges"`
-	Nodes          []GraphNodeVO   `json:"nodes"`
-	NodeMaxIndex   int             `json:"node_max_index"`
-	MaxParallelism int             `json:"max_parallelism"`
+	ProjectID        string                    `json:"projectId"`
+	GraphID          string                    `json:"graphId"`
+	Name             string                    `json:"name"`
+	Nodes            []GraphNodeDetail         `json:"nodes"`
+	Edges            []graphjob.GraphEdge      `json:"edges"`
+	MaxParallelism   int                       `json:"maxParallelism"`
+	DataSourceConfig []GraphDataSourceConfigVO `json:"dataSourceConfig,omitempty"`
+	// NodeMaxIndex is a Go extension kept for backward compatibility.
+	NodeMaxIndex int `json:"nodeMaxIndex"`
 }
 
-// DeleteGraphRequest represents a graph deletion request.
+// DeleteGraphRequest mirrors Java DeleteGraphRequest.
 type DeleteGraphRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
-	GraphID      string `json:"graph_id"`
-	GraphIDAlt   string `json:"graphId"`
+	ProjectID string `json:"projectId"`
+	GraphID   string `json:"graphId"`
 }
 
-// FullUpdateGraphRequest represents a full graph update (nodes + edges).
+// GraphDataSourceConfig mirrors FullUpdateGraphRequest.GraphDataSourceConfig.
+type GraphDataSourceConfig struct {
+	NodeID       string `json:"nodeId"`
+	DataSourceID string `json:"dataSourceId"`
+}
+
+// FullUpdateGraphRequest mirrors Java FullUpdateGraphRequest. Nodes / Edges
+// are only replaced when present (non-nil) in the request.
 type FullUpdateGraphRequest struct {
-	ProjectID    string          `json:"project_id"`
-	ProjectIDAlt string          `json:"projectId"`
-	GraphID      string          `json:"graph_id"`
-	GraphIDAlt   string          `json:"graphId"`
-	Edges        json.RawMessage `json:"edges"`
-	Nodes        []GraphNodeReq  `json:"nodes"`
+	ProjectID        string                   `json:"projectId"`
+	GraphID          string                   `json:"graphId"`
+	Nodes            []graphjob.GraphNodeInfo `json:"nodes"`
+	Edges            []graphjob.GraphEdge     `json:"edges"`
+	MaxParallelism   *int                     `json:"maxParallelism"`
+	DataSourceConfig []GraphDataSourceConfig  `json:"dataSourceConfig"`
 }
 
-// GraphNodeReq represents a node in a full update request.
-// Inputs/Outputs/NodeDef arrive as JSON array/object from the frontend (and as
-// JSON-encoded strings from legacy clients); they are normalized to strings
-// before storage via rawJSONString.
-type GraphNodeReq struct {
-	GraphNodeID    string          `json:"graph_node_id"`
-	GraphNodeIDAlt string          `json:"graphNodeId"`
-	CodeName       string          `json:"code_name"`
-	Label          string          `json:"label"`
-	X              int             `json:"x"`
-	Y              int             `json:"y"`
-	Inputs         json.RawMessage `json:"inputs"`
-	Outputs        json.RawMessage `json:"outputs"`
-	NodeDef        json.RawMessage `json:"node_def"`
+// UpdateGraphMetaRequest mirrors Java UpdateGraphMetaRequest.
+type UpdateGraphMetaRequest struct {
+	ProjectID string `json:"projectId"`
+	GraphID   string `json:"graphId"`
+	Name      string `json:"name"`
 }
 
-// rawJSONString normalizes a raw JSON value to the string form stored in the
-// database: a JSON string is used verbatim, anything else is compact-marshaled.
-func rawJSONString(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
-	}
-	var buf bytes.Buffer
-	if err := json.Compact(&buf, raw); err != nil {
-		return string(raw)
-	}
-	return buf.String()
+// UpdateGraphNodeRequest mirrors Java UpdateGraphNodeRequest.
+type UpdateGraphNodeRequest struct {
+	ProjectID string                  `json:"projectId"`
+	GraphID   string                  `json:"graphId"`
+	Node      *graphjob.GraphNodeInfo `json:"node"`
 }
 
-// storedNodeDef mirrors the nodeDef JSON kept on each graph node.
-type storedNodeDef struct {
-	Domain    string            `json:"domain"`
-	Name      string            `json:"name"`
-	Version   string            `json:"version"`
-	AttrPaths []string          `json:"attrPaths"`
-	Attrs     []json.RawMessage `json:"attrs"`
+// StartGraphRequest mirrors Java StartGraphRequest. An empty Nodes list runs
+// every node of the graph (Go extension used by the scheduler).
+type StartGraphRequest struct {
+	ProjectID  string   `json:"projectId"`
+	GraphID    string   `json:"graphId"`
+	Nodes      []string `json:"nodes"`
+	Breakpoint bool     `json:"breakpoint"`
 }
 
-func parseStoredNodeDef(raw string) *storedNodeDef {
+// StartGraphVO mirrors Java StartGraphVO.
+type StartGraphVO struct {
+	JobID string `json:"jobId"`
+}
+
+// StopGraphRequest mirrors Java StopGraphNodeRequest (jobId is a Go extension).
+type StopGraphRequest struct {
+	ProjectID   string `json:"projectId"`
+	GraphID     string `json:"graphId"`
+	GraphNodeID string `json:"graphNodeId"`
+	JobID       string `json:"jobId,omitempty"`
+}
+
+// ListGraphNodeStatusRequest mirrors Java ListGraphNodeStatusRequest.
+type ListGraphNodeStatusRequest struct {
+	ProjectID string `json:"projectId"`
+	GraphID   string `json:"graphId"`
+}
+
+// GraphNodeStatusVO mirrors Java GraphNodeStatusVO.
+type GraphNodeStatusVO struct {
+	GraphNodeID string           `json:"graphNodeId"`
+	TaskID      string           `json:"taskId,omitempty"`
+	JobID       string           `json:"jobId,omitempty"`
+	Status      string           `json:"status"`
+	Progress    *float64         `json:"progress,omitempty"`
+	Parties     []NodeSimpleInfo `json:"parties,omitempty"`
+}
+
+// GraphStatusVO mirrors Java GraphStatus.
+type GraphStatusVO struct {
+	Finished bool                `json:"finished"`
+	Nodes    []GraphNodeStatusVO `json:"nodes"`
+}
+
+// GraphNodeOutputRequest mirrors Java GraphNodeOutputRequest.
+type GraphNodeOutputRequest struct {
+	ProjectID   string `json:"projectId"`
+	GraphID     string `json:"graphId"`
+	GraphNodeID string `json:"graphNodeId"`
+	OutputID    string `json:"outputId"`
+}
+
+// GraphNodeLogsRequest mirrors Java GraphNodeLogsRequest.
+type GraphNodeLogsRequest struct {
+	ProjectID   string `json:"projectId"`
+	GraphID     string `json:"graphId"`
+	GraphNodeID string `json:"graphNodeId"`
+}
+
+// GraphNodeTaskLogsVO mirrors Java GraphNodeTaskLogsVO.
+type GraphNodeTaskLogsVO struct {
+	Status string   `json:"status"`
+	Logs   []string `json:"logs"`
+}
+
+// RefreshNodeMaxIndexRequest mirrors Java GraphNodeMaxIndexRefreshRequest.
+type RefreshNodeMaxIndexRequest struct {
+	ProjectID    string `json:"projectId"`
+	GraphID      string `json:"graphId"`
+	CurrentIndex *int   `json:"currentIndex"`
+}
+
+// GraphNodeMaxIndexVO mirrors Java GraphNodeMaxIndexRefreshVO.
+type GraphNodeMaxIndexVO struct {
+	MaxIndex int `json:"maxIndex"`
+}
+
+// --- conversions ---
+
+// splitOutputs parses a stored JSON string array.
+func splitOutputs(raw string) []string {
 	if raw == "" {
 		return nil
 	}
-	var nd storedNodeDef
-	if json.Unmarshal([]byte(raw), &nd) != nil {
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return nil
 	}
-	return &nd
+	return out
 }
 
-// datatableIDFromNodeDef extracts the DomainData ID referenced by a
-// read_data/datatable node's datatable_selected attribute.
-func datatableIDFromNodeDef(raw string) string {
-	nd := parseStoredNodeDef(raw)
-	if nd == nil {
-		return ""
+func jsonStrings(v []string) string {
+	if v == nil {
+		v = []string{}
 	}
-	for i, p := range nd.AttrPaths {
-		if p == "datatable_selected" && i < len(nd.Attrs) {
-			var attr struct {
-				S string `json:"s"`
-			}
-			if json.Unmarshal(nd.Attrs[i], &attr) == nil {
-				return attr.S
-			}
-		}
-	}
-	return ""
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
-// upstreamNodeID strips the -output-{i} anchor suffix from an edge endpoint.
-func upstreamNodeID(anchor string) string {
-	if i := strings.LastIndex(anchor, "-output-"); i > 0 {
-		return anchor[:i]
-	}
-	return anchor
-}
-
-// nodeStatusString maps internal task statuses to the Java SecretPad-style
-// graph node status strings expected by the frontend and API clients.
-func nodeStatusString(status string) string {
-	if status == "SUCCEEDED" {
-		return "SUCCEED"
-	}
-	return status
-}
-
-// --- SecretFlow task_input_config structures ---
-
-type sfDatasourceRef struct {
-	ID string `json:"id"`
-}
-
-type sfDeviceDesc struct {
-	Name    string   `json:"name"`
-	Type    string   `json:"type"`
-	Parties []string `json:"parties"`
-	Config  string   `json:"config"`
-}
-
-type sfClusterDesc struct {
-	Parties      []string          `json:"parties"`
-	Devices      []sfDeviceDesc    `json:"devices"`
-	RayFedConfig map[string]string `json:"ray_fed_config"`
-}
-
-type sfNodeEvalParam struct {
-	Version       string            `json:"version"`
-	CompID        string            `json:"comp_id"`
-	AttrPaths     []string          `json:"attr_paths"`
-	Attrs         []json.RawMessage `json:"attrs"`
-	CheckpointURI string            `json:"checkpoint_uri,omitempty"`
-}
-
-type sfTaskInputConfig struct {
-	DatasourceConfig map[string]sfDatasourceRef `json:"sf_datasource_config"`
-	ClusterDesc      sfClusterDesc              `json:"sf_cluster_desc"`
-	NodeEvalParam    sfNodeEvalParam            `json:"sf_node_eval_param"`
-	InputIDs         []string                   `json:"sf_input_ids,omitempty"`
-	OutputIDs        []string                   `json:"sf_output_ids,omitempty"`
-	OutputURIs       []string                   `json:"sf_output_uris,omitempty"`
-}
-
-// buildSFTaskInputConfig renders the task_input_config JSON consumed by
-// `python -m secretflow.kuscia.entry` inside the SecretFlow container.
-func buildSFTaskInputConfig(nodeDefRaw string, inputIDs, outputIDs, outputURIs []string) string {
-	nd := parseStoredNodeDef(nodeDefRaw)
-	if nd == nil {
-		nd = &storedNodeDef{}
-	}
-	parties := []string{"alice", "bob"}
-	checkpointURI := ""
-	if len(outputIDs) > 0 {
-		checkpointURI = "ck" + outputIDs[0]
-	}
-	cfg := sfTaskInputConfig{
-		DatasourceConfig: map[string]sfDatasourceRef{
-			"alice": {ID: "default-data-source"},
-			"bob":   {ID: "default-data-source"},
-		},
-		ClusterDesc: sfClusterDesc{
-			Parties: parties,
-			Devices: []sfDeviceDesc{
-				{
-					Name:    "spu",
-					Type:    "spu",
-					Parties: parties,
-					Config:  `{"runtime_config":{"protocol":"SEMI2K","field":"FM128"},"link_desc":{"connect_retry_times":60,"connect_retry_interval_ms":1000,"brpc_channel_protocol":"http","brpc_channel_connection_type":"pooled","recv_timeout_ms":1200000,"http_timeout_ms":1200000}}`,
-				},
-				{
-					Name:    "heu",
-					Type:    "heu",
-					Parties: parties,
-					Config:  `{"mode":"PHEU","schema":"paillier","key_size":2048}`,
-				},
-			},
-			RayFedConfig: map[string]string{"cross_silo_comm_backend": "brpc_link"},
-		},
-		NodeEvalParam: sfNodeEvalParam{
-			Version:       "1.0.0",
-			CompID:        nd.Domain + "/" + nd.Name + ":" + nd.Version,
-			AttrPaths:     nd.AttrPaths,
-			Attrs:         nd.Attrs,
-			CheckpointURI: checkpointURI,
-		},
-		InputIDs:   inputIDs,
-		OutputIDs:  outputIDs,
-		OutputURIs: outputURIs,
-	}
-	raw, err := json.Marshal(cfg)
-	if err != nil {
-		return ""
-	}
-	return string(raw)
-}
-
-// UpdateGraphMetaRequest updates graph name only.
-type UpdateGraphMetaRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
-	GraphID      string `json:"graph_id"`
-	GraphIDAlt   string `json:"graphId"`
-	Name         string `json:"name"`
-}
-
-// UpdateGraphNodeRequest updates a single graph node.
-type UpdateGraphNodeRequest struct {
-	ProjectID      string          `json:"project_id"`
-	ProjectIDAlt   string          `json:"projectId"`
-	GraphID        string          `json:"graph_id"`
-	GraphIDAlt     string          `json:"graphId"`
-	GraphNodeID    string          `json:"graph_node_id"`
-	GraphNodeIDAlt string          `json:"graphNodeId"`
-	NodeDef        json.RawMessage `json:"node_def"`
-	// Node carries the Java SecretPad / frontend shape:
-	// {projectId, graphId, node: {graphNodeId, codeName, ..., nodeDef}}.
-	Node *GraphNodeReq `json:"node"`
-}
-
-// --- Service Methods ---
-
-// CreateGraph creates a new DAG graph.
-func (s *GraphService) CreateGraph(ctx context.Context, req *CreateGraphRequest) (*CreateGraphVO, error) {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
-	}
-	graphID := uuid.New().String()[:8]
-
-	graph := &model.ProjectGraphDO{
-		ProjectID:      req.ProjectID,
-		GraphID:        graphID,
-		Name:           req.Name,
-		Edges:          "[]",
-		NodeMaxIndex:   0,
-		MaxParallelism: 1,
-	}
-
-	if err := s.graphRepo.Create(ctx, graph); err != nil {
-		return nil, err
-	}
-
-	return &CreateGraphVO{
-		GraphID:   graphID,
-		ProjectID: req.ProjectID,
-		Name:      req.Name,
-	}, nil
-}
-
-// ListGraph lists all graphs for a project.
-func (s *GraphService) ListGraph(ctx context.Context, req *ListGraphRequest) ([]GraphMetaVO, error) {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
-	}
-	graphs, err := s.graphRepo.FindByProjectID(ctx, req.ProjectID)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make([]GraphMetaVO, 0, len(graphs))
-	for _, g := range graphs {
-		result = append(result, GraphMetaVO{
-			GraphID:   g.GraphID,
-			ProjectID: g.ProjectID,
-			Name:      g.Name,
-			GmtCreate: g.GmtCreate.Format("2006-01-02 15:04:05"),
-		})
-	}
-	return result, nil
-}
-
-// GetGraphDetail retrieves full graph detail including nodes.
-func (s *GraphService) GetGraphDetail(ctx context.Context, req *GetGraphRequest) (*GraphDetailVO, error) {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
-	}
-	if req.GraphID == "" {
-		req.GraphID = req.GraphIDAlt
-	}
-	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, req.ProjectID, req.GraphID)
-	if err != nil {
-		return nil, ErrGraphNotFound
-	}
-
-	nodes, err := s.graphNodeRepo.FindByGraphID(ctx, req.ProjectID, req.GraphID)
-	if err != nil {
-		return nil, err
-	}
-
-	nodeVOs := make([]GraphNodeVO, 0, len(nodes))
-	for _, n := range nodes {
-		nodeVOs = append(nodeVOs, GraphNodeVO{
-			GraphNodeID: n.GraphNodeID,
-			CodeName:    n.CodeName,
-			Label:       n.Label,
-			X:           n.X,
-			Y:           n.Y,
-			Inputs:      splitOutputs(n.Inputs),
-			Outputs:     splitOutputs(n.Outputs),
-			NodeDef:     rawJSONMessage(n.NodeDef),
-		})
-	}
-
-	return &GraphDetailVO{
-		GraphID:        graph.GraphID,
-		ProjectID:      graph.ProjectID,
-		Name:           graph.Name,
-		Edges:          json.RawMessage(graph.Edges),
-		Nodes:          nodeVOs,
-		NodeMaxIndex:   graph.NodeMaxIndex,
-		MaxParallelism: graph.MaxParallelism,
-	}, nil
-}
-
-// rawJSONMessage converts a stored JSON string to json.RawMessage so it is embedded
-// as a parsed object/array in the response. Empty or invalid input yields null.
+// rawJSONMessage converts a stored JSON string to json.RawMessage; empty or
+// invalid input yields null.
 func rawJSONMessage(raw string) json.RawMessage {
 	if raw == "" || !json.Valid([]byte(raw)) {
 		return json.RawMessage("null")
@@ -435,749 +299,785 @@ func rawJSONMessage(raw string) json.RawMessage {
 	return json.RawMessage(raw)
 }
 
-// DeleteGraph deletes a graph and all its nodes atomically within a transaction.
-func (s *GraphService) DeleteGraph(ctx context.Context, req *DeleteGraphRequest) error {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
+// canonicalNodeDef compacts a nodeDef and drops the snake_case twins injected
+// by the case-normalization middleware (attr_paths / checkpoint_uri).
+func canonicalNodeDef(raw json.RawMessage) string {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
 	}
-	if req.GraphID == "" {
-		req.GraphID = req.GraphIDAlt
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		raw = json.RawMessage(s)
 	}
-	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, req.ProjectID, req.GraphID)
-	if err != nil {
-		return ErrGraphNotFound
+	var m map[string]json.RawMessage
+	if json.Unmarshal(raw, &m) == nil {
+		if _, ok := m["attrPaths"]; ok {
+			delete(m, "attr_paths")
+		}
+		if _, ok := m["checkpointUri"]; ok {
+			delete(m, "checkpoint_uri")
+		}
+		b, _ := json.Marshal(m)
+		return string(b)
 	}
-
-	// Bug50 fix: wrap node + graph deletion in a transaction so a partial
-	// failure does not leave the graph without its nodes.
-	if s.db != nil {
-		return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			if err := tx.Where("project_id = ? AND graph_id = ?", req.ProjectID, req.GraphID).
-				Delete(&model.ProjectGraphNodeDO{}).Error; err != nil {
-				return err
-			}
-			return tx.Delete(&model.ProjectGraphDO{}, graph.ID).Error
-		})
+	var buf bytes.Buffer
+	if json.Compact(&buf, raw) != nil {
+		return string(raw)
 	}
-
-	// Fallback without transaction (when db is nil, e.g. in unit tests)
-	if err := s.graphNodeRepo.DeleteByGraphID(ctx, req.ProjectID, req.GraphID); err != nil {
-		return err
-	}
-	return s.graphRepo.Delete(ctx, graph.ID)
+	return buf.String()
 }
 
-// FullUpdateGraph replaces all nodes and edges in a graph.
-// The node replacement (delete old + insert new) is wrapped in a database
-// transaction to guarantee atomicity: a partial failure leaves the graph unchanged.
-func (s *GraphService) FullUpdateGraph(ctx context.Context, req *FullUpdateGraphRequest) error {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
+func nodeInfoFromDO(n *model.ProjectGraphNodeDO) graphjob.GraphNodeInfo {
+	info := graphjob.GraphNodeInfo{
+		CodeName:    n.CodeName,
+		GraphNodeID: n.GraphNodeID,
+		Label:       n.Label,
+		X:           n.X,
+		Y:           n.Y,
+		Inputs:      splitOutputs(n.Inputs),
+		Outputs:     splitOutputs(n.Outputs),
+		NodeDef:     rawJSONMessage(n.NodeDef),
 	}
-	if req.GraphID == "" {
-		req.GraphID = req.GraphIDAlt
+	if string(info.NodeDef) == "null" {
+		info.NodeDef = json.RawMessage("{}")
 	}
-	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, req.ProjectID, req.GraphID)
-	if err != nil {
-		return ErrGraphNotFound
+	if info.Inputs == nil {
+		info.Inputs = []string{}
 	}
+	if info.Outputs == nil {
+		info.Outputs = []string{}
+	}
+	return info
+}
 
-	// Update edges
-	graph.Edges = string(req.Edges)
-	if len(req.Nodes) > graph.NodeMaxIndex {
-		graph.NodeMaxIndex = len(req.Nodes)
+func nodeDOFromInfo(projectID, graphID string, n *graphjob.GraphNodeInfo) *model.ProjectGraphNodeDO {
+	return &model.ProjectGraphNodeDO{
+		ProjectID:   projectID,
+		GraphID:     graphID,
+		GraphNodeID: n.GraphNodeID,
+		CodeName:    n.CodeName,
+		Label:       n.Label,
+		X:           n.X,
+		Y:           n.Y,
+		Inputs:      jsonStrings(n.Inputs),
+		Outputs:     jsonStrings(n.Outputs),
+		NodeDef:     canonicalNodeDef(n.NodeDef),
 	}
-	if err := s.graphRepo.Update(ctx, graph); err != nil {
+}
+
+// taskNodeInfo returns the task's graph node snapshot, falling back to the
+// current graph node for legacy tasks created without a snapshot.
+func (s *GraphService) taskNodeInfo(ctx context.Context, t *model.ProjectJobTaskDO, graphID string) graphjob.GraphNodeInfo {
+	return loadTaskNodeInfo(ctx, s.db, t, graphID)
+}
+
+func loadTaskNodeInfo(ctx context.Context, db *gorm.DB, t *model.ProjectJobTaskDO, graphID string) graphjob.GraphNodeInfo {
+	var info graphjob.GraphNodeInfo
+	if t.GraphNode != "" && json.Unmarshal([]byte(t.GraphNode), &info) == nil && info.GraphNodeID != "" {
+		return info
+	}
+	if db != nil {
+		q := db.WithContext(ctx).Where("project_id = ? AND graph_node_id = ?", t.ProjectID, t.GraphNodeID)
+		if graphID != "" {
+			q = q.Where("graph_id = ?", graphID)
+		}
+		var n model.ProjectGraphNodeDO
+		if q.First(&n).Error == nil {
+			return nodeInfoFromDO(&n)
+		}
+	}
+	return graphjob.GraphNodeInfo{GraphNodeID: t.GraphNodeID, Inputs: []string{}, Outputs: []string{}}
+}
+
+func taskProgress(t *model.ProjectJobTaskDO) *float64 {
+	if t.ExtraInfo == "" {
+		return nil
+	}
+	var ei struct {
+		Progress *float64 `json:"progress"`
+	}
+	if json.Unmarshal([]byte(t.ExtraInfo), &ei) != nil {
+		return nil
+	}
+	return ei.Progress
+}
+
+func taskParties(t *model.ProjectJobTaskDO) []string {
+	var p []string
+	_ = json.Unmarshal([]byte(t.Parties), &p)
+	return p
+}
+
+// nodeSimpleInfos resolves node names (Java nodeRepository.findByNodeIdIn).
+func nodeSimpleInfos(ctx context.Context, db *gorm.DB, nodeIDs []string) []NodeSimpleInfo {
+	out := make([]NodeSimpleInfo, 0, len(nodeIDs))
+	if len(nodeIDs) == 0 {
+		return out
+	}
+	names := map[string]string{}
+	if db != nil {
+		var nodes []model.NodeDO
+		db.WithContext(ctx).Where("node_id IN ?", nodeIDs).Find(&nodes)
+		for _, n := range nodes {
+			names[n.NodeID] = n.Name
+		}
+	}
+	for _, id := range nodeIDs {
+		name, ok := names[id]
+		if !ok {
+			continue
+		}
+		out = append(out, NodeSimpleInfo{NodeID: id, NodeName: name})
+	}
+	return out
+}
+
+func nodeName(ctx context.Context, db *gorm.DB, nodeID string) string {
+	if db == nil {
+		return nodeID
+	}
+	var n model.NodeDO
+	if db.WithContext(ctx).Where("node_id = ?", nodeID).First(&n).Error == nil && n.Name != "" {
+		return n.Name
+	}
+	return nodeID
+}
+
+// --- lookups ---
+
+func (s *GraphService) loadGraph(ctx context.Context, projectID, graphID string) (*model.ProjectGraphDO, error) {
+	g, err := s.graphRepo.FindByProjectAndGraphID(ctx, projectID, graphID)
+	if err != nil || g == nil {
+		return nil, padErrBase(ErrGraphNotFound, errcode.GraphNotExists)
+	}
+	return g, nil
+}
+
+// ownerCheck mirrors GraphServiceImpl.ownerCheck. Graphs created before
+// ownership was tracked (empty owner) and anonymous operators are allowed.
+func ownerCheck(ctx context.Context, g *model.ProjectGraphDO) error {
+	op := OperatorFrom(ctx)
+	if op.OwnerID == "" || g.OwnerID == "" {
+		return nil
+	}
+	if op.OwnerID != g.OwnerID {
+		return padErr(errcode.GraphNonOurCreationCanViewed)
+	}
+	return nil
+}
+
+func (s *GraphService) loadGraphNodes(ctx context.Context, projectID, graphID string) ([]model.ProjectGraphNodeDO, error) {
+	return s.graphNodeRepo.FindByGraphID(ctx, projectID, graphID)
+}
+
+// latestTask mirrors ProjectJobTaskRepository.findLatestTasks (joins project_job).
+func latestTask(ctx context.Context, db *gorm.DB, projectID, graphNodeID string) (*model.ProjectJobTaskDO, error) {
+	var t model.ProjectJobTaskDO
+	err := db.WithContext(ctx).Model(&model.ProjectJobTaskDO{}).
+		Select("project_job_task.*").
+		Joins("JOIN project_job ON project_job.job_id = project_job_task.job_id AND project_job.deleted_at IS NULL").
+		Where("project_job_task.project_id = ? AND project_job_task.graph_node_id = ?", projectID, graphNodeID).
+		Order("project_job_task.id DESC").
+		Limit(1).
+		Take(&t).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &t, nil
+}
+
+// lastTwoTasks mirrors findLastTimeTasks (no join).
+func lastTwoTasks(ctx context.Context, db *gorm.DB, projectID, graphNodeID string) []model.ProjectJobTaskDO {
+	var ts []model.ProjectJobTaskDO
+	db.WithContext(ctx).Where("project_id = ? AND graph_node_id = ?", projectID, graphNodeID).
+		Order("id DESC").Limit(2).Find(&ts)
+	return ts
+}
+
+// --- Graph CRUD ---
+
+// CreateGraph mirrors GraphServiceImpl.createGraph.
+func (s *GraphService) CreateGraph(ctx context.Context, req *CreateGraphRequest) (*CreateGraphVO, error) {
+	if req.ProjectID == "" {
+		return nil, padErr(errcode.ProjectNotExists)
+	}
+	var cnt int64
+	s.db.WithContext(ctx).Model(&model.ProjectDO{}).Where("project_id = ?", req.ProjectID).Count(&cnt)
+	if cnt == 0 {
+		return nil, padErrBase(ErrProjectNotFound, errcode.ProjectNotExists)
+	}
+	graphID := graphjob.RandomLetters(8)
+	g := &model.ProjectGraphDO{
+		ProjectID:      req.ProjectID,
+		GraphID:        graphID,
+		Name:           req.Name,
+		Edges:          graphjob.EdgesJSON(req.Edges),
+		OwnerID:        OperatorFrom(ctx).OwnerID,
+		NodeMaxIndex:   DefaultGraphNodeMaxIndex,
+		MaxParallelism: 1,
+	}
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(g).Error; err != nil {
+			return err
+		}
+		for i := range req.Nodes {
+			if err := tx.Create(nodeDOFromInfo(req.ProjectID, graphID, &req.Nodes[i])).Error; err != nil {
+				return err
+			}
+		}
+		return s.initDefaultDataSources(ctx, tx, req.ProjectID, graphID)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &CreateGraphVO{GraphID: graphID}, nil
+}
+
+// ListGraph mirrors GraphServiceImpl.listGraph.
+func (s *GraphService) ListGraph(ctx context.Context, req *ListGraphRequest) ([]GraphMetaVO, error) {
+	graphs, err := s.graphRepo.FindByProjectID(ctx, req.ProjectID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]GraphMetaVO, 0, len(graphs))
+	for _, g := range graphs {
+		result = append(result, GraphMetaVO{
+			ProjectID: g.ProjectID,
+			GraphID:   g.GraphID,
+			Name:      g.Name,
+			OwnerID:   g.OwnerID,
+			GmtCreate: rfc3339(g.GmtCreate),
+		})
+	}
+	return result, nil
+}
+
+// GetGraphDetail mirrors GraphServiceImpl.getGraphDetail.
+func (s *GraphService) GetGraphDetail(ctx context.Context, req *GetGraphRequest) (*GraphDetailVO, error) {
+	g, err := s.loadGraph(ctx, req.ProjectID, req.GraphID)
+	if err != nil {
+		return nil, err
+	}
+	nodes, err := s.loadGraphNodes(ctx, req.ProjectID, req.GraphID)
+	if err != nil {
+		return nil, err
+	}
+	status, err := s.latestTaskStatus(ctx, req.ProjectID, nodes)
+	if err != nil {
+		return nil, err
+	}
+	statusByNode := make(map[string]GraphNodeStatusVO, len(status.Nodes))
+	for _, st := range status.Nodes {
+		statusByNode[st.GraphNodeID] = st
+	}
+	details := make([]GraphNodeDetail, 0, len(nodes))
+	for i := range nodes {
+		st := statusByNode[nodes[i].GraphNodeID]
+		if st.Status == "" {
+			st.Status = graphjob.TaskStaging
+		}
+		details = append(details, GraphNodeDetail{
+			GraphNodeInfo: nodeInfoFromDO(&nodes[i]),
+			Status:        st.Status,
+			JobID:         st.JobID,
+			TaskID:        st.TaskID,
+			Parties:       st.Parties,
+			Progress:      st.Progress,
+		})
+	}
+	edges := graphjob.ParseEdges(g.Edges)
+	if edges == nil {
+		edges = []graphjob.GraphEdge{}
+	}
+	return &GraphDetailVO{
+		ProjectID:        g.ProjectID,
+		GraphID:          g.GraphID,
+		Name:             g.Name,
+		Nodes:            details,
+		Edges:            edges,
+		MaxParallelism:   g.MaxParallelism,
+		DataSourceConfig: s.graphDataSourceConfig(ctx, g.ProjectID, g.GraphID),
+		NodeMaxIndex:     g.NodeMaxIndex,
+	}, nil
+}
+
+// DeleteGraph mirrors GraphServiceImpl.deleteGraph (owner check + cascade).
+func (s *GraphService) DeleteGraph(ctx context.Context, req *DeleteGraphRequest) error {
+	g, err := s.loadGraph(ctx, req.ProjectID, req.GraphID)
+	if err != nil {
 		return err
 	}
+	if err := ownerCheck(ctx, g); err != nil {
+		return err
+	}
+	if s.db == nil {
+		if err := s.graphNodeRepo.DeleteByGraphID(ctx, req.ProjectID, req.GraphID); err != nil {
+			return err
+		}
+		return s.graphRepo.Delete(ctx, g.ID)
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		where := "project_id = ? AND graph_id = ?"
+		if err := tx.Unscoped().Where(where, req.ProjectID, req.GraphID).Delete(&model.ProjectGraphNodeDO{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where(where, req.ProjectID, req.GraphID).Delete(&model.ProjectGraphDomainDatasourceDO{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Unscoped().Where(where, req.ProjectID, req.GraphID).Delete(&model.ProjectGraphNodeKusciaParamsDO{}).Error; err != nil {
+			return err
+		}
+		return tx.Unscoped().Delete(&model.ProjectGraphDO{}, g.ID).Error
+	})
+}
 
-	// Atomically replace nodes: delete old + insert new within a transaction
-	// so a partial insert failure rolls back the delete.
-	if s.db != nil {
-		return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			if err := tx.Where("project_id = ? AND graph_id = ?", req.ProjectID, req.GraphID).
+// FullUpdateGraph mirrors GraphServiceImpl.fullUpdateGraph: nodes / edges are
+// replaced only when present, maxParallelism and the datasource config are
+// persisted when supplied.
+func (s *GraphService) FullUpdateGraph(ctx context.Context, req *FullUpdateGraphRequest) error {
+	g, err := s.loadGraph(ctx, req.ProjectID, req.GraphID)
+	if err != nil {
+		return err
+	}
+	if err := ownerCheck(ctx, g); err != nil {
+		return err
+	}
+	if req.Edges != nil {
+		g.Edges = graphjob.EdgesJSON(req.Edges)
+	}
+	if req.MaxParallelism != nil && *req.MaxParallelism > 0 {
+		g.MaxParallelism = *req.MaxParallelism
+	}
+	// Validate the datasource config before writing anything.
+	dsUpdates, err := s.validateDataSourceConfig(ctx, req.ProjectID, req.GraphID, req.DataSourceConfig)
+	if err != nil {
+		return err
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if req.Nodes != nil {
+			if err := tx.Unscoped().Where("project_id = ? AND graph_id = ?", req.ProjectID, req.GraphID).
 				Delete(&model.ProjectGraphNodeDO{}).Error; err != nil {
 				return err
 			}
-			for _, n := range req.Nodes {
-				node := &model.ProjectGraphNodeDO{
-					ProjectID:   req.ProjectID,
-					GraphID:     req.GraphID,
-					GraphNodeID: n.GraphNodeID,
-					CodeName:    n.CodeName,
-					Label:       n.Label,
-					X:           n.X,
-					Y:           n.Y,
-					Inputs:      rawJSONString(n.Inputs),
-					Outputs:     rawJSONString(n.Outputs),
-					NodeDef:     rawJSONString(n.NodeDef),
+			for i := range req.Nodes {
+				if req.Nodes[i].GraphNodeID == "" {
+					continue
 				}
-				if err := tx.Create(node).Error; err != nil {
+				if err := tx.Create(nodeDOFromInfo(req.ProjectID, req.GraphID, &req.Nodes[i])).Error; err != nil {
 					return err
 				}
 			}
-			return nil
-		})
-	}
+		}
+		if err := tx.Save(g).Error; err != nil {
+			return err
+		}
+		for i := range dsUpdates {
+			if err := saveGraphDatasource(tx, &dsUpdates[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
 
-	// Fallback without transaction (when db is nil, e.g. in unit tests)
-	if err := s.graphNodeRepo.DeleteByGraphID(ctx, req.ProjectID, req.GraphID); err != nil {
+// UpdateGraphMeta mirrors GraphServiceImpl.updateGraphMeta.
+func (s *GraphService) UpdateGraphMeta(ctx context.Context, req *UpdateGraphMetaRequest) error {
+	g, err := s.loadGraph(ctx, req.ProjectID, req.GraphID)
+	if err != nil {
 		return err
 	}
-	for _, n := range req.Nodes {
-		node := &model.ProjectGraphNodeDO{
-			ProjectID:   req.ProjectID,
-			GraphID:     req.GraphID,
-			GraphNodeID: n.GraphNodeID,
-			CodeName:    n.CodeName,
-			Label:       n.Label,
-			X:           n.X,
-			Y:           n.Y,
-			Inputs:      rawJSONString(n.Inputs),
-			Outputs:     rawJSONString(n.Outputs),
-			NodeDef:     rawJSONString(n.NodeDef),
+	op := OperatorFrom(ctx)
+	if strings.EqualFold(op.OwnerType, "P2P") && g.OwnerID != "" && !strings.EqualFold(op.OwnerID, g.OwnerID) {
+		return padErr(errcode.GraphNotOwnerCannotUpdate)
+	}
+	g.Name = req.Name
+	return s.graphRepo.Update(ctx, g)
+}
+
+// UpdateGraphNode mirrors GraphServiceImpl.updateGraphNode (whole node replace).
+func (s *GraphService) UpdateGraphNode(ctx context.Context, req *UpdateGraphNodeRequest) error {
+	g, err := s.loadGraph(ctx, req.ProjectID, req.GraphID)
+	if err != nil {
+		return err
+	}
+	if err := ownerCheck(ctx, g); err != nil {
+		return err
+	}
+	if req.Node == nil || req.Node.GraphNodeID == "" {
+		return padErr(errcode.GraphNodeNotExists)
+	}
+	existing, err := s.graphNodeRepo.FindByGraphNodeID(ctx, req.ProjectID, req.GraphID, req.Node.GraphNodeID)
+	if err != nil || existing == nil {
+		return padErr(errcode.GraphNodeNotExists, req.Node.GraphNodeID)
+	}
+	n := nodeDOFromInfo(req.ProjectID, req.GraphID, req.Node)
+	n.BaseDO = existing.BaseDO
+	return s.graphNodeRepo.Update(ctx, n)
+}
+
+// RefreshNodeMaxIndex mirrors GraphServiceImpl.refreshNodeMaxIndex.
+func (s *GraphService) RefreshNodeMaxIndex(ctx context.Context, req *RefreshNodeMaxIndexRequest) (*GraphNodeMaxIndexVO, error) {
+	g, err := s.loadGraph(ctx, req.ProjectID, req.GraphID)
+	if err != nil {
+		return nil, err
+	}
+	index := g.NodeMaxIndex
+	if req.CurrentIndex != nil && *req.CurrentIndex > index {
+		g.NodeMaxIndex = *req.CurrentIndex + 1
+		index = *req.CurrentIndex
+	} else {
+		g.NodeMaxIndex = index + 1
+	}
+	if err := s.graphRepo.Update(ctx, g); err != nil {
+		return nil, err
+	}
+	return &GraphNodeMaxIndexVO{MaxIndex: index}, nil
+}
+
+// --- status / logs / stop / output ---
+
+// ListNodeStatus mirrors GraphServiceImpl.listGraphNodeStatus.
+func (s *GraphService) ListNodeStatus(ctx context.Context, req *ListGraphNodeStatusRequest) (*GraphStatusVO, error) {
+	if _, err := s.loadGraph(ctx, req.ProjectID, req.GraphID); err != nil {
+		return nil, err
+	}
+	nodes, err := s.loadGraphNodes(ctx, req.ProjectID, req.GraphID)
+	if err != nil {
+		return nil, err
+	}
+	return s.latestTaskStatus(ctx, req.ProjectID, nodes)
+}
+
+// latestTaskStatus mirrors GraphServiceImpl.getLatestTaskStatus.
+func (s *GraphService) latestTaskStatus(ctx context.Context, projectID string, nodes []model.ProjectGraphNodeDO) (*GraphStatusVO, error) {
+	vo := &GraphStatusVO{Finished: true, Nodes: make([]GraphNodeStatusVO, 0, len(nodes))}
+	jobIDs := map[string]bool{}
+	for _, n := range nodes {
+		st := GraphNodeStatusVO{GraphNodeID: n.GraphNodeID, Status: graphjob.TaskStaging}
+		t, err := latestTask(ctx, s.db, projectID, n.GraphNodeID)
+		if err != nil {
+			return nil, err
 		}
-		if err := s.graphNodeRepo.Create(ctx, node); err != nil {
+		if t != nil {
+			st.Status = graphjob.NormalizeTaskStatus(t.Status)
+			st.TaskID = t.TaskID
+			st.JobID = t.JobID
+			st.Parties = nodeSimpleInfos(ctx, s.db, taskParties(t))
+			st.Progress = taskProgress(t)
+			jobIDs[t.JobID] = true
+		}
+		vo.Nodes = append(vo.Nodes, st)
+	}
+	if len(jobIDs) > 0 {
+		ids := make([]string, 0, len(jobIDs))
+		for id := range jobIDs {
+			ids = append(ids, id)
+		}
+		var jobs []model.ProjectJobDO
+		if err := s.db.WithContext(ctx).Where("project_id = ? AND job_id IN ?", projectID, ids).Find(&jobs).Error; err != nil {
+			return nil, err
+		}
+		for _, j := range jobs {
+			if !graphjob.IsJobFinished(j.Status) {
+				vo.Finished = false
+				break
+			}
+		}
+	}
+	return vo, nil
+}
+
+// GetNodeLogs mirrors GraphServiceImpl.getGraphNodeLogs.
+func (s *GraphService) GetNodeLogs(ctx context.Context, req *GraphNodeLogsRequest) (*GraphNodeTaskLogsVO, error) {
+	t, err := latestTask(ctx, s.db, req.ProjectID, req.GraphNodeID)
+	if err != nil {
+		return nil, err
+	}
+	if t == nil {
+		return nil, padErr(errcode.ProjectJobTaskNotExists)
+	}
+	logs, err := taskLogLines(ctx, s.db, t.JobID, t.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	logs = graphjob.Dedupe(logs)
+	if len(logs) == 0 {
+		info := s.taskNodeInfo(ctx, t, "")
+		if info.CodeName == graphjob.CompReadDataDatatable {
+			logs = []string{
+				graphjob.TaskStartLog(t.GmtCreate, t.JobID, t.TaskID),
+				graphjob.TaskSucceedLog(t.GmtCreate, t.JobID, t.TaskID),
+			}
+		}
+	}
+	prefix := "INFO the jobId=" + t.JobID + ", taskId=" + t.JobID + "-" + req.GraphNodeID
+	logs = graphjob.DistinctSpecifyLogs(logs, prefix+" start")
+	logs = graphjob.DistinctSpecifyLogs(logs, prefix+" succeed")
+	return &GraphNodeTaskLogsVO{Status: graphjob.NormalizeTaskStatus(t.Status), Logs: logs}, nil
+}
+
+// taskLogLines loads task log lines in insertion order (Java findAllByJobTaskId).
+func taskLogLines(ctx context.Context, db *gorm.DB, jobID, taskID string) ([]string, error) {
+	var rows []model.ProjectJobTaskLogDO
+	if err := db.WithContext(ctx).Where("job_id = ? AND task_id = ?", jobID, taskID).Order("id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, r.Log)
+	}
+	return out, nil
+}
+
+// StopGraph mirrors GraphServiceImpl.stopGraphNode: without graphNodeId every
+// RUNNING job of the graph is stopped, otherwise the jobs running the node.
+func (s *GraphService) StopGraph(ctx context.Context, req *StopGraphRequest) error {
+	g, err := s.loadGraph(ctx, req.ProjectID, req.GraphID)
+	if err != nil {
+		if req.JobID == "" {
+			return err
+		}
+		// Legacy clients stop by job id only.
+		return stopProjectJob(ctx, s.db, s.kuscia, req.ProjectID, req.JobID, false)
+	}
+	if err := ownerCheck(ctx, g); err != nil {
+		return err
+	}
+	jobIDs := []string{}
+	switch {
+	case req.JobID != "":
+		jobIDs = append(jobIDs, req.JobID)
+	case req.GraphNodeID == "":
+		var jobs []model.ProjectJobDO
+		if err := s.db.WithContext(ctx).Where("project_id = ? AND graph_id = ? AND status = ?", req.ProjectID, req.GraphID, graphjob.JobRunning).
+			Find(&jobs).Error; err != nil {
+			return err
+		}
+		for _, j := range jobs {
+			jobIDs = append(jobIDs, j.JobID)
+		}
+	default:
+		var tasks []model.ProjectJobTaskDO
+		if err := s.db.WithContext(ctx).Where("project_id = ? AND graph_node_id = ? AND status = ?", req.ProjectID, req.GraphNodeID, graphjob.TaskRunning).
+			Find(&tasks).Error; err != nil {
+			return err
+		}
+		seen := map[string]bool{}
+		for _, t := range tasks {
+			if !seen[t.JobID] {
+				seen[t.JobID] = true
+				jobIDs = append(jobIDs, t.JobID)
+			}
+		}
+	}
+	for _, id := range jobIDs {
+		if err := stopProjectJob(ctx, s.db, s.kuscia, req.ProjectID, id, true); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// UpdateGraphMeta updates graph name.
-func (s *GraphService) UpdateGraphMeta(ctx context.Context, req *UpdateGraphMetaRequest) error {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
-	}
-	if req.GraphID == "" {
-		req.GraphID = req.GraphIDAlt
-	}
-	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, req.ProjectID, req.GraphID)
-	if err != nil {
-		return ErrGraphNotFound
-	}
-
-	graph.Name = req.Name
-	return s.graphRepo.Update(ctx, graph)
-}
-
-// UpdateGraphNode updates a single graph node's definition.
-func (s *GraphService) UpdateGraphNode(ctx context.Context, req *UpdateGraphNodeRequest) error {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
-	}
-	if req.GraphID == "" {
-		req.GraphID = req.GraphIDAlt
-	}
-	if req.GraphNodeID == "" {
-		req.GraphNodeID = req.GraphNodeIDAlt
-	}
-	if req.GraphNodeID == "" && req.Node != nil {
-		req.GraphNodeID = firstNonEmpty(req.Node.GraphNodeID, req.Node.GraphNodeIDAlt)
-	}
-
-	node, err := s.graphNodeRepo.FindByGraphNodeID(ctx, req.ProjectID, req.GraphID, req.GraphNodeID)
-	if err != nil {
-		return ErrGraphNotFound
-	}
-
-	if req.Node != nil {
-		n := req.Node
-		if n.CodeName != "" {
-			node.CodeName = n.CodeName
-		}
-		if n.Label != "" {
-			node.Label = n.Label
-		}
-		node.X = n.X
-		node.Y = n.Y
-		if len(n.Inputs) > 0 {
-			node.Inputs = rawJSONString(n.Inputs)
-		}
-		if len(n.Outputs) > 0 {
-			node.Outputs = rawJSONString(n.Outputs)
-		}
-		if len(n.NodeDef) > 0 {
-			node.NodeDef = rawJSONString(n.NodeDef)
-		}
-	} else if len(req.NodeDef) > 0 {
-		node.NodeDef = rawJSONString(req.NodeDef)
-	}
-	return s.graphNodeRepo.Update(ctx, node)
-}
-
-// --- Graph Execution DTOs ---
-
-// StartGraphRequest represents a graph start request.
-type StartGraphRequest struct {
-	ProjectID    string   `json:"project_id"`
-	ProjectIDAlt string   `json:"projectId"`
-	GraphID      string   `json:"graph_id"`
-	GraphIDAlt   string   `json:"graphId"`
-	Nodes        []string `json:"nodes"` // optional: specific nodes to run
-}
-
-// StartGraphVO is the response for graph start.
-type StartGraphVO struct {
-	JobID   string `json:"job_id"`
-	GraphID string `json:"graph_id"`
-	Status  string `json:"status"`
-}
-
-// StopGraphRequest represents a graph stop request.
-type StopGraphRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
-	GraphID      string `json:"graph_id"`
-	GraphIDAlt   string `json:"graphId"`
-	JobID        string `json:"job_id"`
-	JobIDAlt     string `json:"jobId"`
-	TaskID       string `json:"task_id"`
-	TaskIDAlt    string `json:"taskId"`
-}
-
-// ListGraphNodeStatusRequest represents a node status request.
-type ListGraphNodeStatusRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
-	GraphID      string `json:"graph_id"`
-	GraphIDAlt   string `json:"graphId"`
-	JobID        string `json:"job_id"`
-	JobIDAlt     string `json:"jobId"`
-}
-
-// GraphNodeStatusVO represents a single node's status.
-type GraphNodeStatusVO struct {
-	GraphNodeID string `json:"graph_node_id"`
-	Status      string `json:"status"`
-	ErrMsg      string `json:"err_msg,omitempty"`
-}
-
-// GraphStatusVO represents the overall graph status.
-type GraphStatusVO struct {
-	JobID  string              `json:"job_id,omitempty"`
-	Status string              `json:"status"`
-	Nodes  []GraphNodeStatusVO `json:"nodes"`
-}
-
-// GraphNodeOutputRequest represents a node output request.
-type GraphNodeOutputRequest struct {
-	ProjectID      string `json:"project_id"`
-	ProjectIDAlt   string `json:"projectId"`
-	GraphID        string `json:"graph_id"`
-	GraphIDAlt     string `json:"graphId"`
-	GraphNodeID    string `json:"graph_node_id"`
-	GraphNodeIDAlt string `json:"graphNodeId"`
-	JobID          string `json:"job_id"`
-	JobIDAlt       string `json:"jobId"`
-	OutputID       string `json:"output_id"`
-	OutputIDAlt    string `json:"outputId"`
-}
-
-// GraphNodeOutputVO represents a node's output.
-type GraphNodeOutputVO struct {
-	GraphNodeID string          `json:"graph_node_id"`
-	Outputs     []NodeOutput    `json:"outputs"`
-	Type        string          `json:"type,omitempty"`
-	Meta        map[string]any  `json:"meta,omitempty"`
-	Tabs        json.RawMessage `json:"tabs,omitempty"`
-}
-
-// NodeOutput represents a single output of a node.
-type NodeOutput struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
-	Data string `json:"data,omitempty"`
-}
-
-// GraphNodeLogsRequest represents a node logs request.
-type GraphNodeLogsRequest struct {
-	ProjectID      string `json:"project_id"`
-	ProjectIDAlt   string `json:"projectId"`
-	GraphID        string `json:"graph_id"`
-	GraphIDAlt     string `json:"graphId"`
-	GraphNodeID    string `json:"graph_node_id"`
-	GraphNodeIDAlt string `json:"graphNodeId"`
-	JobID          string `json:"job_id"`
-	JobIDAlt       string `json:"jobId"`
-	TaskID         string `json:"task_id"`
-	TaskIDAlt      string `json:"taskId"`
-}
-
-// GraphNodeLogsVO represents a node's task logs.
-type GraphNodeLogsVO struct {
-	GraphNodeID string   `json:"graph_node_id"`
-	TaskID      string   `json:"task_id,omitempty"`
-	Logs        []string `json:"logs"`
-}
-
-// RefreshNodeMaxIndexRequest represents a max index refresh request.
-type RefreshNodeMaxIndexRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
-	GraphID      string `json:"graph_id"`
-	GraphIDAlt   string `json:"graphId"`
-}
-
-// --- Graph Execution Methods ---
-
-// StartGraph starts graph execution by creating a job.
-func (s *GraphService) StartGraph(ctx context.Context, req *StartGraphRequest) (*StartGraphVO, error) {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
-	}
-	if req.GraphID == "" {
-		req.GraphID = req.GraphIDAlt
-	}
-	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, req.ProjectID, req.GraphID)
-	if err != nil {
-		return nil, ErrGraphNotFound
-	}
-
-	// Create a job for this graph execution
-	jobID := uuid.New().String()[:8]
-	job := &model.ProjectJobDO{
-		ProjectID: req.ProjectID,
-		JobID:     jobID,
-		Name:      graph.Name + "_run",
-		Status:    "RUNNING",
-		GraphID:   req.GraphID,
-		Edges:     graph.Edges,
-	}
-	if err := s.jobRepo.Create(ctx, job); err != nil {
-		return nil, err
-	}
-
-	// Create tasks for each graph node
-	// Bug60 fix: propagate the error instead of silently ignoring it.
-	// A DB failure here would create a job with no tasks.
-	nodes, err := s.graphNodeRepo.FindByGraphID(ctx, req.ProjectID, req.GraphID)
+// GetNodeOutput mirrors GraphServiceImpl.getGraphNodeOutput.
+func (s *GraphService) GetNodeOutput(ctx context.Context, req *GraphNodeOutputRequest) (*GraphNodeOutputVO, error) {
+	t, err := latestTask(ctx, s.db, req.ProjectID, req.GraphNodeID)
 	if err != nil {
 		return nil, err
 	}
-	nodeByID := make(map[string]model.ProjectGraphNodeDO, len(nodes))
-	for _, n := range nodes {
-		nodeByID[n.GraphNodeID] = n
+	if t == nil {
+		return nil, padErr(errcode.GraphNodeOutputNotExists)
 	}
-	runSet := make(map[string]bool, len(nodes))
-	for _, n := range nodes {
-		if len(req.Nodes) > 0 && !containsStr(req.Nodes, n.GraphNodeID) {
-			continue
-		}
-		runSet[n.GraphNodeID] = true
-	}
-
-	var kusciaTasks []kuscia.TaskConfig
-	for _, n := range nodes {
-		if !runSet[n.GraphNodeID] {
-			continue
-		}
-		// Kuscia task IDs follow the SecretPad convention {jobId}-{graphNodeId}
-		// so output DomainData IDs and status sync line up.
-		taskID := jobID + "-" + n.GraphNodeID
-
-		// read_data/datatable is a virtual node: no Kuscia task is created and
-		// downstream components reference its datatable ID directly.
-		if n.CodeName == "read_data/datatable" {
-			task := &model.ProjectJobTaskDO{
-				ProjectID:   req.ProjectID,
-				JobID:       jobID,
-				TaskID:      taskID,
-				GraphNodeID: n.GraphNodeID,
-				Status:      "SUCCEEDED",
-				Parties:     "[\"alice\",\"bob\"]",
-			}
-			if err := s.taskRepo.Create(ctx, task); err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		task := &model.ProjectJobTaskDO{
-			ProjectID:   req.ProjectID,
-			JobID:       jobID,
-			TaskID:      taskID,
-			GraphNodeID: n.GraphNodeID,
-			Status:      "PENDING",
-			Parties:     "[\"alice\",\"bob\"]",
-		}
-		if err := s.taskRepo.Create(ctx, task); err != nil {
-			return nil, err
-		}
-
-		// Resolve inputs: an anchor produced by a read_data/datatable node maps
-		// to that datatable's DomainData ID; anything else maps to the upstream
-		// task output ID ({jobId}-{outputAnchor}) and adds a task dependency.
-		inputIDs := make([]string, 0)
-		dependencies := make([]string, 0)
-		for _, anchor := range splitOutputs(n.Inputs) {
-			upID := upstreamNodeID(anchor)
-			up, ok := nodeByID[upID]
-			if ok && up.CodeName == "read_data/datatable" {
-				if dtID := datatableIDFromNodeDef(up.NodeDef); dtID != "" {
-					inputIDs = append(inputIDs, dtID)
-					continue
-				}
-			}
-			if ok && runSet[upID] {
-				dependencies = append(dependencies, jobID+"-"+upID)
-			}
-			inputIDs = append(inputIDs, jobID+"-"+anchor)
-		}
-
-		// Outputs: DomainData ID {jobId}-{outputAnchor}, URI with '-' -> '_'.
-		outputAnchors := splitOutputs(n.Outputs)
-		outputIDs := make([]string, 0, len(outputAnchors))
-		outputURIs := make([]string, 0, len(outputAnchors))
-		for _, anchor := range outputAnchors {
-			outputID := jobID + "-" + anchor
-			outputIDs = append(outputIDs, outputID)
-			outputURIs = append(outputURIs, strings.ReplaceAll(outputID, "-", "_"))
-		}
-
-		// Build Kuscia task config with the SecretFlow task_input_config.
-		kusciaTasks = append(kusciaTasks, kuscia.TaskConfig{
-			AppImage:     "secretflow-image",
-			Alias:        n.GraphNodeID,
-			TaskID:       taskID,
-			Dependencies: dependencies,
-			InputConfig:  buildSFTaskInputConfig(n.NodeDef, inputIDs, outputIDs, outputURIs),
-			Parties: []kuscia.Party{
-				{DomainID: "alice", Role: "guest"},
-				{DomainID: "bob", Role: "host"},
-			},
-		})
-	}
-
-	// Submit to Kuscia if client is available
-	if s.kusciaClient != nil && len(kusciaTasks) > 0 {
-		kusciaReq := &kuscia.CreateJobRequest{
-			JobID:          jobID,
-			Initiator:      "alice",
-			MaxParallelism: 1,
-			Tasks:          kusciaTasks,
-			CustomFields: map[string]string{
-				"project_id": req.ProjectID,
-				"graph_id":   req.GraphID,
-			},
-		}
-		if _, err := s.kusciaClient.CreateJob(ctx, kusciaReq); err != nil {
-			// Kuscia unreachable — keep job in RUNNING, log warning
-			_ = s.jobRepo.UpdateStatus(ctx, jobID, "RUNNING", "kuscia unreachable: "+err.Error())
-		}
-	}
-
-	return &StartGraphVO{
-		JobID:   jobID,
-		GraphID: req.GraphID,
-		Status:  "RUNNING",
-	}, nil
+	r := newOutputRenderer(s.db, s.kuscia)
+	r.channel = s.kusciaFor
+	return r.taskOutput(ctx, t, req.OutputID)
 }
 
-// StopGraph stops a running graph execution.
-func (s *GraphService) StopGraph(ctx context.Context, req *StopGraphRequest) error {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
-	}
-	if req.GraphID == "" {
-		req.GraphID = req.GraphIDAlt
-	}
-	if req.JobID == "" {
-		req.JobID = req.JobIDAlt
-	}
-	if req.TaskID == "" {
-		req.TaskID = req.TaskIDAlt
-	}
-	if req.JobID == "" {
-		return ErrGraphNotFound
-	}
+// --- graph datasource bindings (Java ProjectGraphDomainDatasourceServiceImpl) ---
 
-	job, err := s.jobRepo.FindByProjectAndJobID(ctx, req.ProjectID, req.JobID)
-	if err != nil {
-		return ErrJobNotFound
+// controlNodeIDs mirrors getControlNodeIds: the project nodes the operator
+// may configure (CENTER / EDGE: every project node; P2P: its own node).
+func controlNodeIDs(ctx context.Context, db *gorm.DB, projectID string) []string {
+	var pns []model.ProjectNodeDO
+	db.WithContext(ctx).Where("project_id = ?", projectID).Order("id ASC").Find(&pns)
+	nodes := make([]string, 0, len(pns))
+	for _, pn := range pns {
+		nodes = append(nodes, pn.NodeID)
 	}
-
-	// Stop in Kuscia first (best-effort)
-	if s.kusciaClient != nil {
-		_ = s.kusciaClient.StopJob(ctx, req.JobID)
-	}
-
-	if err := s.jobRepo.UpdateStatus(ctx, job.JobID, "STOPPED", "stopped by user"); err != nil {
-		return err
-	}
-
-	// Stop all running tasks
-	// Bug61 fix: propagate task query and update errors instead of ignoring them.
-	tasks, err := s.taskRepo.FindByJobID(ctx, req.JobID)
-	if err != nil {
-		return err
-	}
-	for _, t := range tasks {
-		if t.Status == "RUNNING" || t.Status == "PENDING" {
-			if err := s.taskRepo.UpdateStatus(ctx, t.TaskID, "STOPPED", "stopped by user"); err != nil {
-				return err
+	op := OperatorFrom(ctx)
+	switch strings.ToUpper(op.OwnerType) {
+	case "P2P", "AUTONOMY":
+		for _, n := range nodes {
+			if n == op.OwnerID {
+				return []string{n}
 			}
 		}
 	}
+	return nodes
+}
 
+func boolPtr(b bool) *bool { return &b }
+
+func (s *GraphService) initDefaultDataSources(ctx context.Context, tx *gorm.DB, projectID, graphID string) error {
+	for _, nodeID := range controlNodeIDs(ctx, tx, projectID) {
+		if err := saveGraphDatasource(tx, &model.ProjectGraphDomainDatasourceDO{
+			ProjectID:      projectID,
+			GraphID:        graphID,
+			DomainID:       nodeID,
+			DatasourceID:   graphjob.DefaultDataSourceID,
+			DatasourceName: graphjob.DefaultDataSourceID,
+			EditEnable:     boolPtr(true),
+		}); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
-// ListNodeStatus retrieves status of all nodes in a graph execution.
-func (s *GraphService) ListNodeStatus(ctx context.Context, req *ListGraphNodeStatusRequest) (*GraphStatusVO, error) {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
+func saveGraphDatasource(tx *gorm.DB, d *model.ProjectGraphDomainDatasourceDO) error {
+	var existing model.ProjectGraphDomainDatasourceDO
+	err := tx.Where("project_id = ? AND graph_id = ? AND domain_id = ?", d.ProjectID, d.GraphID, d.DomainID).First(&existing).Error
+	if err == nil {
+		return tx.Model(&existing).Updates(map[string]any{
+			"datasource_id":   d.DatasourceID,
+			"datasource_name": d.DatasourceName,
+			"edit_enable":     d.EditEnable,
+		}).Error
 	}
-	if req.GraphID == "" {
-		req.GraphID = req.GraphIDAlt
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
 	}
-	if req.JobID == "" {
-		req.JobID = req.JobIDAlt
+	return tx.Create(d).Error
+}
+
+// ProjectDataSourceItem mirrors ProjectGraphDomainDataSourceVO.DataSource.
+type ProjectDataSourceItem struct {
+	NodeID         string `json:"nodeId"`
+	Type           string `json:"type"`
+	DataSourceID   string `json:"dataSourceId"`
+	DataSourceName string `json:"dataSourceName"`
+}
+
+// domainDataSources mirrors getDomainDataSourcesByProjectAndComputeMode: the
+// Kuscia datasources of a node (TEE projects: LOCAL only).
+func domainDataSources(ctx context.Context, db *gorm.DB, k GraphKusciaAPI, projectID, nodeID string) ([]ProjectDataSourceItem, error) {
+	out := []ProjectDataSourceItem{}
+	if k == nil {
+		return out, errors.New("kuscia client unavailable")
 	}
-	if req.JobID == "" {
-		// Java SecretPad semantics: without an explicit job id, report the
-		// status of the latest job launched for this graph.
-		// Bug75 fix: propagate DB error from latestJobIDForGraph.
-		jobID, lookupErr := s.latestJobIDForGraph(ctx, req.ProjectID, req.GraphID)
-		if lookupErr != nil {
-			return nil, lookupErr
+	list, err := k.ListDomainDataSource(ctx, nodeID)
+	if err != nil {
+		return out, err
+	}
+	tee := false
+	var p model.ProjectDO
+	if db.WithContext(ctx).Where("project_id = ?", projectID).First(&p).Error == nil {
+		tee = strings.EqualFold(p.ComputeMode, "TEE")
+	}
+	for _, ds := range list {
+		t := kusciaDatasourceTypeToPlatform(ds.Type)
+		if tee && t != "LOCAL" {
+			continue
 		}
-		req.JobID = jobID
+		out = append(out, ProjectDataSourceItem{NodeID: nodeID, Type: t, DataSourceID: ds.DatasourceID, DataSourceName: ds.Name})
 	}
-	if req.JobID == "" {
-		// No job running - all nodes idle
-		// Bug73 fix: propagate DB error instead of returning fake IDLE status.
-		nodes, err := s.graphNodeRepo.FindByGraphID(ctx, req.ProjectID, req.GraphID)
+	sort.Slice(out, func(i, j int) bool { return out[i].DataSourceID < out[j].DataSourceID })
+	return out, nil
+}
+
+// validateDataSourceConfig mirrors updateProjectGraphDomainDatasourceDOByFullUpdateGraphRequest.
+func (s *GraphService) validateDataSourceConfig(ctx context.Context, projectID, graphID string, cfgs []GraphDataSourceConfig) ([]model.ProjectGraphDomainDatasourceDO, error) {
+	if len(cfgs) == 0 {
+		return nil, nil
+	}
+	control := map[string]bool{}
+	for _, n := range controlNodeIDs(ctx, s.db, projectID) {
+		control[n] = true
+	}
+	out := make([]model.ProjectGraphDomainDatasourceDO, 0, len(cfgs))
+	for _, c := range cfgs {
+		if !control[c.NodeID] {
+			return nil, padErr(errcode.SystemValidationError, "unauthorized access to node "+c.NodeID+", by project "+projectID)
+		}
+		var existing model.ProjectGraphDomainDatasourceDO
+		err := s.db.WithContext(ctx).Where("project_id = ? AND graph_id = ? AND domain_id = ?", projectID, graphID, c.NodeID).First(&existing).Error
 		if err != nil {
-			return nil, err
+			return nil, padErr(errcode.SystemValidationError, "current node dataSources is empty")
 		}
-		nodeStatuses := make([]GraphNodeStatusVO, 0, len(nodes))
-		for _, n := range nodes {
-			nodeStatuses = append(nodeStatuses, GraphNodeStatusVO{
-				GraphNodeID: n.GraphNodeID,
-				Status:      "IDLE",
-			})
+		if existing.EditEnable != nil && !*existing.EditEnable {
+			if existing.DatasourceID == c.DataSourceID {
+				continue // unchanged, locked binding
+			}
+			return nil, padErr(errcode.SystemValidationError, "saved node dataSources are not editable "+existing.DatasourceID)
 		}
-		return &GraphStatusVO{Status: "IDLE", Nodes: nodeStatuses}, nil
-	}
-
-	job, err := s.jobRepo.FindByProjectAndJobID(ctx, req.ProjectID, req.JobID)
-	if err != nil {
-		return nil, ErrJobNotFound
-	}
-
-	// Bug74 fix: propagate DB error instead of returning empty node statuses.
-	tasks, err := s.taskRepo.FindByProjectAndJobID(ctx, req.ProjectID, req.JobID)
-	if err != nil {
-		return nil, err
-	}
-	nodeStatuses := make([]GraphNodeStatusVO, 0, len(tasks))
-	for _, t := range tasks {
-		nodeStatuses = append(nodeStatuses, GraphNodeStatusVO{
-			GraphNodeID: t.GraphNodeID,
-			// Java SecretPad uses SUCCEED for graph nodes; keep that contract.
-			Status: nodeStatusString(t.Status),
-			ErrMsg: t.ErrMsg,
+		name := c.DataSourceID
+		if s.kuscia != nil {
+			dss, err := domainDataSources(ctx, s.db, s.kuscia, projectID, c.NodeID)
+			if err != nil {
+				return nil, padErr(errcode.SystemValidationError, "failed to query domain data sources "+err.Error())
+			}
+			found := false
+			for _, ds := range dss {
+				if ds.DataSourceID == c.DataSourceID {
+					found, name = true, ds.DataSourceName
+					break
+				}
+			}
+			if !found {
+				return nil, padErr(errcode.SystemValidationError, "can't find data source "+c.DataSourceID)
+			}
+		}
+		out = append(out, model.ProjectGraphDomainDatasourceDO{
+			ProjectID: projectID, GraphID: graphID, DomainID: c.NodeID,
+			DatasourceID: c.DataSourceID, DatasourceName: name, EditEnable: boolPtr(false),
 		})
 	}
-
-	return &GraphStatusVO{
-		JobID:  req.JobID,
-		Status: job.Status,
-		Nodes:  nodeStatuses,
-	}, nil
+	return out, nil
 }
 
-// GetNodeOutput retrieves output of a specific graph node.
-// When the output DomainData is resolvable in Kuscia it returns the actual
-// output metadata (Java SecretPad-compatible type/meta/tabs); otherwise it
-// falls back to the node's declared outputs.
-func (s *GraphService) GetNodeOutput(ctx context.Context, req *GraphNodeOutputRequest) (*GraphNodeOutputVO, error) {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
+// graphDataSourceConfig mirrors convertToGraphDetailVODataSourceConfig.
+func (s *GraphService) graphDataSourceConfig(ctx context.Context, projectID, graphID string) []GraphDataSourceConfigVO {
+	control := map[string]bool{}
+	for _, n := range controlNodeIDs(ctx, s.db, projectID) {
+		control[n] = true
 	}
-	if req.GraphID == "" {
-		req.GraphID = req.GraphIDAlt
+	var rows []model.ProjectGraphDomainDatasourceDO
+	s.db.WithContext(ctx).Where("project_id = ? AND graph_id = ?", projectID, graphID).Order("id ASC").Find(&rows)
+	if len(rows) == 0 {
+		return nil
 	}
-	if req.GraphNodeID == "" {
-		req.GraphNodeID = req.GraphNodeIDAlt
-	}
-	if req.JobID == "" {
-		req.JobID = req.JobIDAlt
-	}
-	if req.OutputID == "" {
-		req.OutputID = req.OutputIDAlt
-	}
-	if req.JobID == "" {
-		// Bug75 fix: best-effort lookup; on error continue without job context.
-		jobID, _ := s.latestJobIDForGraph(ctx, req.ProjectID, req.GraphID)
-		req.JobID = jobID
-	}
-	node, err := s.graphNodeRepo.FindByGraphNodeID(ctx, req.ProjectID, req.GraphID, req.GraphNodeID)
-	if err != nil {
-		return nil, ErrGraphNotFound
-	}
-
-	vo := &GraphNodeOutputVO{
-		GraphNodeID: req.GraphNodeID,
-		Outputs:     make([]NodeOutput, 0),
-	}
-
-	// Resolve the actual output DomainData ({jobId}-{outputAnchor}).
-	if s.kusciaClient != nil && req.JobID != "" && req.OutputID != "" {
-		outputDataID := req.JobID + "-" + req.OutputID
-		if resp, err := s.kusciaClient.QueryDomainData(ctx, "alice", outputDataID); err == nil {
-			vo.Outputs = append(vo.Outputs, NodeOutput{Name: resp.Data.Name, Type: resp.Data.Type})
-			vo.Type = resp.Data.Type
-			switch resp.Data.Type {
-			case "table":
-				cols := make([]map[string]string, 0, len(resp.Data.Columns))
-				for _, c := range resp.Data.Columns {
-					cols = append(cols, map[string]string{"name": c.Name, "type": c.Type})
-				}
-				vo.Meta = map[string]any{
-					"rows": []map[string]string{{
-						"tableId":      resp.Data.RelativeURI,
-						"domainDataId": resp.Data.DomainDataID,
-					}},
-					"columns":      cols,
-					"datasourceId": resp.Data.DatasourceID,
-				}
-			case "report":
-				// The report content lives in attributes["dist_data"] as a
-				// DistData JSON whose packed meta carries the Report tabs.
-				if raw := resp.Data.Attributes["dist_data"]; raw != "" {
-					var dd struct {
-						Meta struct {
-							Tabs json.RawMessage `json:"tabs"`
-						} `json:"meta"`
-					}
-					if json.Unmarshal([]byte(raw), &dd) == nil && len(dd.Meta.Tabs) > 0 {
-						vo.Tabs = dd.Meta.Tabs
-					}
-				}
-			default:
-				vo.Meta = map[string]any{
-					"name":         resp.Data.Name,
-					"datasourceId": resp.Data.DatasourceID,
-				}
-			}
-			return vo, nil
+	out := make([]GraphDataSourceConfigVO, 0, len(rows))
+	for _, r := range rows {
+		if !control[r.DomainID] {
+			continue
 		}
-	}
-
-	// Fallback: return the node's declared outputs
-	if node.Outputs != "" {
-		var outNames []string
-		if json.Unmarshal([]byte(node.Outputs), &outNames) == nil {
-			for _, name := range outNames {
-				vo.Outputs = append(vo.Outputs, NodeOutput{Name: name, Type: "table"})
-			}
+		edit := r.EditEnable == nil || *r.EditEnable
+		name := r.DatasourceName
+		if name == "" {
+			name = r.DatasourceID
 		}
+		out = append(out, GraphDataSourceConfigVO{
+			EditEnable: edit, NodeID: r.DomainID, NodeName: nodeName(ctx, s.db, r.DomainID),
+			DataSourceName: name, DataSourceID: r.DatasourceID,
+		})
 	}
-
-	return vo, nil
+	return out
 }
 
-// latestJobIDForGraph returns the most recent job launched for a graph, or ""
-// when the graph has never run.
-// Bug75 fix: return error so callers can distinguish "no job" from DB failure.
-func (s *GraphService) latestJobIDForGraph(ctx context.Context, projectID, graphID string) (string, error) {
-	jobs, err := s.jobRepo.FindByProjectID(ctx, projectID)
-	if err != nil {
-		return "", err
+// graphDatasourceFor returns the datasource bound to (project, graph, party)
+// or the default datasource (KusciaJobConverter.buildDatasourceConfig).
+func graphDatasourceFor(ctx context.Context, db *gorm.DB, projectID, graphID, party string) string {
+	var d model.ProjectGraphDomainDatasourceDO
+	if projectID != "" && graphID != "" &&
+		db.WithContext(ctx).Where("project_id = ? AND graph_id = ? AND domain_id = ?", projectID, graphID, party).First(&d).Error == nil &&
+		d.DatasourceID != "" {
+		return d.DatasourceID
 	}
-	for _, j := range jobs {
-		if j.GraphID == graphID {
-			return j.JobID, nil
-		}
-	}
-	return "", nil
+	return graphjob.DefaultDataSourceID
 }
 
-// GetNodeLogs retrieves logs for a specific graph node.
-func (s *GraphService) GetNodeLogs(ctx context.Context, req *GraphNodeLogsRequest) (*GraphNodeLogsVO, error) {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
-	}
-	if req.GraphID == "" {
-		req.GraphID = req.GraphIDAlt
-	}
-	if req.GraphNodeID == "" {
-		req.GraphNodeID = req.GraphNodeIDAlt
-	}
-	if req.JobID == "" {
-		req.JobID = req.JobIDAlt
-	}
-	if req.TaskID == "" {
-		req.TaskID = req.TaskIDAlt
-	}
-	if req.TaskID == "" && req.JobID != "" {
-		// Find task by graph node ID
-		// Bug76 fix: propagate DB error instead of silently returning empty logs.
-		tasks, err := s.taskRepo.FindByJobID(ctx, req.JobID)
-		if err != nil {
-			return nil, err
-		}
-		for _, t := range tasks {
-			if t.GraphNodeID == req.GraphNodeID {
-				req.TaskID = t.TaskID
-				break
-			}
-		}
-	}
-
-	logs := make([]string, 0)
-	if req.TaskID != "" {
-		taskLogs, err := s.taskLogRepo.FindByTaskID(ctx, req.ProjectID, req.JobID, req.TaskID)
-		if err == nil {
-			for _, l := range taskLogs {
-				logs = append(logs, l.Log)
-			}
-		}
-	}
-
-	return &GraphNodeLogsVO{
-		GraphNodeID: req.GraphNodeID,
-		TaskID:      req.TaskID,
-		Logs:        logs,
-	}, nil
-}
-
-// RefreshNodeMaxIndex recalculates and updates the node max index.
-func (s *GraphService) RefreshNodeMaxIndex(ctx context.Context, req *RefreshNodeMaxIndexRequest) (int, error) {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
-	}
-	if req.GraphID == "" {
-		req.GraphID = req.GraphIDAlt
-	}
-	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, req.ProjectID, req.GraphID)
-	if err != nil {
-		return 0, ErrGraphNotFound
-	}
-
-	// Bug77 fix: propagate DB error instead of silently skipping index update.
-	nodes, err := s.graphNodeRepo.FindByGraphID(ctx, req.ProjectID, req.GraphID)
-	if err != nil {
-		return 0, err
-	}
-	if len(nodes) > graph.NodeMaxIndex {
-		graph.NodeMaxIndex = len(nodes)
-		if err := s.graphRepo.Update(ctx, graph); err != nil {
-			return graph.NodeMaxIndex, err
-		}
-	}
-
-	return graph.NodeMaxIndex, nil
-}
-
-// containsStr checks if a string slice contains a value.
-func containsStr(slice []string, val string) bool {
-	for _, s := range slice {
-		if s == val {
-			return true
-		}
-	}
-	return false
-}
+// timeNow is overridable in tests.
+var timeNow = time.Now

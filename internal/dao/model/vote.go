@@ -67,12 +67,15 @@ func (NodeRouteApprovalConfigDO) TableName() string { return "node_route_approva
 // ProjectApprovalConfigDO stores project creation/join approval vote config.
 type ProjectApprovalConfigDO struct {
 	BaseDO
-	VoteID       string `gorm:"uniqueIndex:upk_project_approval_config_vote_id;type:varchar(64);not null" json:"vote_id"`
-	Initiator    string `gorm:"type:varchar(64);not null" json:"initiator"`
-	Type         string `gorm:"type:varchar(16);not null" json:"type"`
-	Parties      string `gorm:"type:text" json:"parties"`
-	ProjectID    string `gorm:"type:varchar(64)" json:"project_id"`
-	InviteNodeID string `gorm:"type:varchar(64)" json:"invite_node_id"`
+	VoteID    string `gorm:"uniqueIndex:upk_project_approval_config_vote_id;type:varchar(64);not null" json:"vote_id"`
+	Initiator string `gorm:"type:varchar(64);not null" json:"initiator"`
+	Type      string `gorm:"type:varchar(16);not null" json:"type"`
+	Parties   string `gorm:"type:text" json:"parties"`
+	// ParticipantNodeInfo is the JSON list of Java ParticipantNodeInstVO
+	// ({initiatorNodeId, initiatorNodeName, invitees[{inviteeId,...}]}).
+	ParticipantNodeInfo string `gorm:"type:text" json:"participant_node_info"`
+	ProjectID           string `gorm:"type:varchar(64)" json:"project_id"`
+	InviteNodeID        string `gorm:"type:varchar(64)" json:"invite_node_id"`
 }
 
 func (ProjectApprovalConfigDO) TableName() string { return "project_approval_config" }

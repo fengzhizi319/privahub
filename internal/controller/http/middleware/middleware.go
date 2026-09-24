@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/logger"
 	"github.com/fengzhizi319/privahub/pkg/metrics"
 	"github.com/gin-gonic/gin"
@@ -16,16 +17,22 @@ import (
 	"go.uber.org/zap"
 )
 
-// TraceID generates a unique trace ID for each request and injects it into context.
+// TraceID reads the trace ID from `Trace-Id` (Java SecretPad / frontend) or
+// `X-Trace-ID`, generating one when absent, injects it into the request
+// context and echoes it in both response headers.
 func TraceID() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		traceID := c.GetHeader("X-Trace-ID")
+		traceID := c.GetHeader("Trace-Id")
+		if traceID == "" {
+			traceID = c.GetHeader("X-Trace-ID")
+		}
 		if traceID == "" {
 			traceID = uuid.New().String()
 		}
 		ctx := logger.ContextWithTraceID(c.Request.Context(), traceID)
 		c.Request = c.Request.WithContext(ctx)
 		c.Header("X-Trace-ID", traceID)
+		c.Header("Trace-Id", traceID)
 		c.Next()
 	}
 }
@@ -40,7 +47,7 @@ func Recovery(log *zap.Logger) gin.HandlerFunc {
 					zap.String("path", c.Request.URL.Path),
 				)
 				c.AbortWithStatusJSON(200, gin.H{
-					"status": gin.H{"code": 202011500, "msg": "system unknown error"},
+					"status": gin.H{"code": errcode.SystemUnknownError.Code, "msg": "system unknown error"},
 				})
 			}
 		}()
@@ -73,24 +80,31 @@ func Metrics() gin.HandlerFunc {
 	}
 }
 
-// CORS configures Cross-Origin Resource Sharing headers with explicit allowed origins.
+// CORS configures Cross-Origin Resource Sharing headers with explicit allowed
+// origins (server.cors_allowed_origins). "*" allows any origin (the request
+// origin is echoed so credentials keep working).
 func CORS(allowedOrigins ...string) gin.HandlerFunc {
 	if len(allowedOrigins) == 0 {
 		allowedOrigins = []string{"http://localhost:8000", "http://127.0.0.1:8000"}
 	}
 	originSet := make(map[string]bool, len(allowedOrigins))
+	anyOrigin := false
 	for _, o := range allowedOrigins {
+		o = strings.TrimRight(strings.TrimSpace(o), "/")
+		if o == "*" {
+			anyOrigin = true
+		}
 		originSet[o] = true
 	}
 
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
-		if origin != "" && originSet[origin] {
+		if origin != "" && (anyOrigin || originSet[origin]) {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Access-Control-Allow-Credentials", "true")
 		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization, X-Trace-ID, User-Token, token")
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization, X-Trace-ID, Trace-Id, User-Token, token, Accept-Language")
 		c.Header("Access-Control-Max-Age", "86400")
 
 		if c.Request.Method == "OPTIONS" {
@@ -108,6 +122,19 @@ func SecurityHeaders() gin.HandlerFunc {
 		c.Header("X-Frame-Options", "DENY")
 		c.Header("X-XSS-Protection", "1; mode=block")
 		c.Header("Cache-Control", "no-store")
+		c.Next()
+	}
+}
+
+// ExtraHeaders adds configured response headers to every response (Java
+// secretpad.response.extra-headers, e.g. Content-Security-Policy).
+func ExtraHeaders(headers map[string]string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		for k, v := range headers {
+			if k != "" {
+				c.Header(k, v)
+			}
+		}
 		c.Next()
 	}
 }
@@ -265,7 +292,22 @@ func RateLimiter(maxTokens float64, refillRate float64) gin.HandlerFunc {
 
 // BodyLimit restricts the maximum request body size.
 func BodyLimit(maxBytes int64) gin.HandlerFunc {
+	return BodyLimitWithOverrides(maxBytes, nil)
+}
+
+// BodyLimitWithOverrides restricts the request body size to defaultMax, with
+// per-path overrides (exact URL path match). A limit <= 0 means unlimited, so
+// upload routes can be exempted from the global limit.
+func BodyLimitWithOverrides(defaultMax int64, overrides map[string]int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		maxBytes := defaultMax
+		if v, ok := overrides[c.Request.URL.Path]; ok {
+			maxBytes = v
+		}
+		if maxBytes <= 0 {
+			c.Next()
+			return
+		}
 		if c.Request.ContentLength > maxBytes {
 			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
 				"status": gin.H{"code": 413, "msg": "request body too large"},

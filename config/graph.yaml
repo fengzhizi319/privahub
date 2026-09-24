@@ -1,0 +1,51 @@
+# Graph execution / component settings (Java application.yaml keys:
+# sfclusterDesc, job.max-parallelism, secretpad.component.hide,
+# secretpad.version, secretpad.deploy-mode). Override the path with
+# PRIVAHUB_GRAPH_CONFIG. Missing keys fall back to the built-in defaults.
+graph:
+  # Kuscia AppImage names used for SecretFlow / SCQL tasks.
+  app_image: "secretflow-image"
+  scql_image: "scql-image"
+  # Kuscia AppImage of SecretFlow-Serving (model publishing).
+  serving_image: "sf-serving-image"
+  # Default job max parallelism when a graph does not define one.
+  max_parallelism: 1
+  # Check node readiness and routes in Kuscia before starting a graph.
+  health_check: true
+  # SecretFlow cluster devices (sf_cluster_desc.devices), in order.
+  devices:
+    - name: spu
+      type: spu
+      config: '{"runtime_config":{"protocol":"SEMI2K","field":"FM128"},"link_desc":{"connect_retry_times":60,"connect_retry_interval_ms":1000,"brpc_channel_protocol":"http","brpc_channel_connection_type":"pooled","recv_timeout_ms":1200000,"http_timeout_ms":1200000}}'
+    - name: heu
+      type: heu
+      config: '{"mode":"PHEU","schema":"paillier","key_size":2048}'
+  cross_silo_comm_backend: brpc_link
+
+  # Component definitions (CompListDef JSON per app, regenerate secretflow.json
+  # with scripts/gen_components.py) and translations.
+  component_dir: config/components
+  i18n_dir: config/i18n
+  legacy_component_file: config/components.json
+  hide:
+    - secretflow/io/read_data:1.0.0
+    - secretflow/io/write_data:1.0.0
+    - secretflow/io/identity:1.0.0
+    - secretflow/io/data_sink:1.0.0
+    - secretflow/io/data_source:1.0.0
+    - secretflow/model/model_export:1.0.0
+    - secretflow/ml.train/slnn_train:0.0.1
+    - secretflow/ml.predict/slnn_predict:0.0.2
+
+  # version/list: MPC / TEE / ALL-IN-ONE
+  deploy_mode: ALL-IN-ONE
+  versions:
+    secretpadImage: "0.5.0b0"
+    kusciaImage: "0.6.0b0"
+    secretflowImage: "1.4.0b0"
+    secretflowServingImage: "0.2.0b0"
+    teeAppImage: "0.1.0b0"
+    teeDmImage: "0.1.0b0"
+    capsuleManagerSimImage: "0.1.2b0"
+    dataProxyImage: "0.1.0b0"
+    scqlImage: "0.1.0b0"

@@ -1,94 +1,169 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/fengzhizi319/privahub/pkg/auth"
+	"github.com/fengzhizi319/privahub/pkg/errcode"
+	"github.com/fengzhizi319/privahub/pkg/response"
+	"github.com/gin-gonic/gin"
 )
 
-// JWTAuth creates a middleware that validates JWT tokens.
-func JWTAuth(jwtManager *auth.JWTManager) gin.HandlerFunc {
+// Gin context keys set by the auth middlewares.
+const (
+	CtxUserContext = "user_context"
+	CtxToken       = "user_token"
+)
+
+// KusciaOriginSourceHeader identifies the calling node on the inner port
+// (set by the Kuscia gateway).
+const KusciaOriginSourceHeader = "kuscia-origin-source"
+
+// SessionValidator is implemented by service.AuthService.
+type SessionValidator interface {
+	// ValidateSession looks the token up in user_tokens (sliding expiry) and
+	// returns the stored UserContext.
+	ValidateSession(ctx context.Context, token string) (*auth.UserContext, error)
+	// DisabledAuthUser is injected when authentication is disabled.
+	DisabledAuthUser() *auth.UserContext
+	// BuildNodeVirtualUser builds the inner-port identity of a calling node.
+	BuildNodeVirtualUser(ctx context.Context, nodeID string) *auth.UserContext
+}
+
+// ExtractToken returns the session token from User-Token (Java), Authorization
+// Bearer or token headers.
+func ExtractToken(c *gin.Context) string {
+	if t := strings.TrimSpace(c.GetHeader("User-Token")); t != "" {
+		return t
+	}
+	if h := c.GetHeader("Authorization"); h != "" {
+		parts := strings.SplitN(h, " ", 2)
+		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+			return strings.TrimSpace(parts[1])
+		}
+	}
+	return strings.TrimSpace(c.GetHeader("token"))
+}
+
+// abortAuthFailed rejects the request with HTTP 401 and the Java AUTH_FAILED
+// code (202011602). HTTP 401 is kept (Java answers 200) because the frontend
+// uses it to drop the stored token and redirect to /login.
+func abortAuthFailed(c *gin.Context, reason string) {
+	response.AbortHTTP(c, http.StatusUnauthorized, errcode.AuthFailed, reason)
+}
+
+// SetUser stores the UserContext in both the request context and the gin
+// context (plus the legacy username/owner keys used by existing handlers).
+func SetUser(c *gin.Context, u *auth.UserContext) {
+	c.Request = c.Request.WithContext(auth.ContextWithUser(c.Request.Context(), u))
+	c.Set(CtxUserContext, u)
+	c.Set("username", u.Name)
+	c.Set("owner_type", u.OwnerType)
+	c.Set("owner_id", u.OwnerID)
+	if u.UserID != "" {
+		c.Set("user_id", u.UserID)
+	} else {
+		c.Set("user_id", u.Name)
+	}
+}
+
+// CurrentUser returns the authenticated UserContext (Java UserContext.getUser()),
+// or nil for unauthenticated requests.
+func CurrentUser(c *gin.Context) *auth.UserContext {
+	if v, ok := c.Get(CtxUserContext); ok {
+		if u, ok := v.(*auth.UserContext); ok {
+			return u
+		}
+	}
+	if u, ok := auth.UserFromContext(c.Request.Context()); ok {
+		return u
+	}
+	return nil
+}
+
+// SessionAuth authenticates main-port requests: the token must be a valid
+// access JWT (when it is a JWT) AND an existing, non-idle user_tokens session.
+// Logout deletes the session so the token stops working immediately.
+// When enabled is false a platform admin is injected (Java auth.enabled=false).
+func SessionAuth(jwtManager *auth.JWTManager, sessions SessionValidator, enabled bool) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		tokenString := ""
-		authHeader := c.GetHeader("Authorization")
-		if authHeader != "" {
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) == 2 && parts[0] == "Bearer" {
-				tokenString = parts[1]
+		if c.Request.Method == http.MethodOptions {
+			c.Next()
+			return
+		}
+		if !enabled {
+			SetUser(c, sessions.DisabledAuthUser())
+			c.Next()
+			return
+		}
+		token := ExtractToken(c)
+		if token == "" {
+			abortAuthFailed(c, "login is required")
+			return
+		}
+		var claims *auth.Claims
+		if strings.Count(token, ".") == 2 && jwtManager != nil {
+			cl, err := jwtManager.ValidateToken(token)
+			if err != nil {
+				abortAuthFailed(c, "login is expire, please login again.")
+				return
 			}
+			if cl.TokenType != auth.AccessToken {
+				abortAuthFailed(c, "invalid token type")
+				return
+			}
+			claims = cl
 		}
-		if tokenString == "" {
-			tokenString = c.GetHeader("User-Token")
-		}
-		if tokenString == "" {
-			tokenString = c.GetHeader("token")
-		}
-
-		if tokenString == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"status": gin.H{"code": 202011502, "msg": "missing authorization header"},
-			})
-			c.Abort()
+		u, err := sessions.ValidateSession(c.Request.Context(), token)
+		if err != nil || u == nil {
+			abortAuthFailed(c, "login is required")
 			return
 		}
-
-		claims, err := jwtManager.ValidateToken(tokenString)
-		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"status": gin.H{"code": 202011502, "msg": err.Error()},
-			})
-			c.Abort()
-			return
+		if claims != nil {
+			if u.UserID == "" {
+				u.UserID = claims.UserID
+			}
+			c.Request = c.Request.WithContext(auth.ContextWithClaims(c.Request.Context(), claims))
 		}
-
-		// Only allow access tokens for API requests
-		if claims.TokenType != auth.AccessToken {
-			c.JSON(http.StatusUnauthorized, gin.H{
-				"status": gin.H{"code": 202011502, "msg": "invalid token type"},
-			})
-			c.Abort()
-			return
-		}
-
-		// Add claims to context
-		ctx := auth.ContextWithClaims(c.Request.Context(), claims)
-		c.Request = c.Request.WithContext(ctx)
-
-		// Also set in Gin context for easy access
-		c.Set("user_id", claims.UserID)
-		c.Set("username", claims.Username)
-		c.Set("owner_type", claims.OwnerType)
-		c.Set("owner_id", claims.OwnerID)
-
+		SetUser(c, u)
+		c.Set(CtxToken, token)
 		c.Next()
 	}
 }
 
-// OptionalAuth creates a middleware that validates JWT tokens but doesn't require them.
-func OptionalAuth(jwtManager *auth.JWTManager) gin.HandlerFunc {
+// InnerAuth authenticates inner-port (node RPC) requests: the calling node is
+// identified by the kuscia-origin-source header and a node-scoped virtual user
+// is built (Java LoginInterceptor.processByNodeRpcRequest).
+func InnerAuth(sessions SessionValidator) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			c.Next()
+		nodeID := strings.TrimSpace(c.GetHeader(KusciaOriginSourceHeader))
+		if nodeID == "" {
+			abortAuthFailed(c, "Cannot find node id in header for rpc.")
 			return
 		}
+		SetUser(c, sessions.BuildNodeVirtualUser(c.Request.Context(), nodeID))
+		c.Next()
+	}
+}
 
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			c.Next()
+// BlockInnerPaths answers 404 on the main port for paths that must only be
+// reachable through the inner port (Java InnerPortPathConfig / inner-port.path).
+func BlockInnerPaths(paths []string) gin.HandlerFunc {
+	set := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		if p = strings.TrimSpace(p); p != "" {
+			set[strings.TrimRight(p, "/")] = true
+		}
+	}
+	return func(c *gin.Context) {
+		p := strings.TrimRight(c.Request.URL.Path, "/")
+		if set[p] {
+			c.AbortWithStatus(http.StatusNotFound)
+			_, _ = c.Writer.WriteString("404")
 			return
 		}
-
-		claims, err := jwtManager.ValidateToken(parts[1])
-		if err == nil && claims.TokenType == auth.AccessToken {
-			ctx := auth.ContextWithClaims(c.Request.Context(), claims)
-			c.Request = c.Request.WithContext(ctx)
-			c.Set("user_id", claims.UserID)
-			c.Set("username", claims.Username)
-		}
-
 		c.Next()
 	}
 }

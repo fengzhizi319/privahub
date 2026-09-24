@@ -142,8 +142,12 @@ var caseSkipPaths = []string{
 	"/api/v1alpha1/sync", // SSE center-edge sync
 	"/metrics",
 	"/api/v1alpha1/healthz",
+	"/api/v1alpha1/docs", // generated OpenAPI document (property names verbatim)
 	"/assets",
 	"/favicon.ico",
+	// Component definitions / i18n are keyed by app names and English texts
+	// (e.g. "secretpad_tee", "datatable_selected") that must not get twins.
+	"/api/v1alpha1/component/",
 }
 
 func shouldSkipCasePath(path string) bool {

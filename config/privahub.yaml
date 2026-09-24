@@ -5,6 +5,32 @@ server:
   read_timeout: 10s
   write_timeout: 10s
   shutdown_timeout: 5s
+  # Request throttling (Java RateLimitUtil.verifyRate). user_* applies per
+  # user to user_paths (inst/node/newToken, datasource/create,
+  # datatable/create, feature_datasource/create by default); login_* per IP.
+  # Non-positive permits disable a limiter.
+  rate_limit:
+    user_permits: 5
+    user_window: 60s
+    user_burst: 1
+    login_per_minute: 20
+    login_burst: 1
+    global_burst: 100
+    global_rps: 20
+  # Inner (node-to-node) port. It trusts the kuscia-origin-source header, so a
+  # non-loopback inner_bind_address (e.g. 0.0.0.0 for a Kuscia gateway in
+  # another container) requires inner_auth; every configured check applies.
+  # inner_bind_address: "127.0.0.1"
+  # inner_auth:
+  #   token: ""            # shared secret (>=16 chars), header X-Privahub-Inner-Token
+  #   token_file: ""
+  #   allowed_cidrs: []    # direct peer allowlist, e.g. ["172.18.0.0/16"]
+  #   tls: { cert_file: "", key_file: "", client_ca_file: "" }   # mTLS
+  # OpenAPI 3 document at GET /api/v1alpha1/docs (Java springdoc). Default:
+  # enabled only in dev/test profiles; public=false requires a login session.
+  # api_docs:
+  #   enabled: false
+  #   public: false
 
 database:
   driver: "sqlite" # Options: mysql, sqlite
@@ -12,14 +38,17 @@ database:
   max_open_conns: 50
   max_idle_conns: 10
 
+# Without PRIVAHUB_PROFILE=dev|test the sample aes_key / jwt_secret below are
+# REJECTED at startup: set PRIVAHUB_CRYPTO_AES_KEY / PRIVAHUB_AUTH_JWT_SECRET.
 crypto:
-  aes_key: "12345678901234567890123456789012" # 32 bytes for AES-256
+  aes_key: "12345678901234567890123456789012" # sample; 32 bytes for AES-256
 
 kuscia:
   kubeconfig: ""
   namespace: "kuscia-system"
   api_address: "127.0.0.1"
-  api_port: 8083
+  api_port: 8083  # KusciaAPI gRPC port
+  http_port: 8082 # KusciaAPI HTTP port (used by privahub)
   protocol: "notls"
 
 observability:
@@ -27,8 +56,36 @@ observability:
   metrics_port: 9091
   log_level: "info"
   log_format: "console" # json for production, console for development
+  # GET /metrics: public (dev/test default) | restricted (default otherwise:
+  # loopback, metrics_allowed_cidrs or "Authorization: Bearer <metrics_token>")
+  # | auth (login session) | disabled.
+  # metrics_access: restricted
+  # metrics_allowed_cidrs: ["10.0.0.0/8"]
+  # metrics_token: ""
 
 auth:
   jwt_secret: "privahub-dev-secret-change-in-production"
-  access_token_expiry: "2h"
+  # Absolute session cap; sessions also expire after session_idle_timeout
+  # without activity (sliding, like Java SecretPad's 24h).
+  access_token_expiry: "168h"
+  session_idle_timeout: "24h"
+  # Login lockout (Java secretpad.account-error-*).
+  max_attempts: 5
+  lock_minutes: 30
+  # Initial admin: set PRIVAHUB_AUTH_ADMIN_PASSWORD, otherwise (non-dev
+  # profiles) a random password is written once to initial_password_file (0600).
+  admin_name: "admin"
+  initial_password_file: "./config/initial-admin-password"
   refresh_token_expiry: "168h"
+
+# Data management (datasource / datatable / upload). See pkg/config/data.go.
+# data:
+#   dir: "/app/data"            # uploaded CSV root: ${dir}/<nodeId>/ (env PRIVAHUB_DATA_DIR also honored)
+#   ip_block:                   # SSRF blacklist for OSS/ODPS/HTTP endpoints (Java ip.block)
+#     enable: true
+#     list: ["0.0.0.0/32", "127.0.0.1/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+#   tee:
+#     domain_id: "tee"
+#     capsule_manager: "capsule-manager.#.svc"
+#   cloud_log:
+#     sls: { ak: "", sk: "", host: "", project: "" }

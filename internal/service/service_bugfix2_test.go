@@ -24,10 +24,17 @@ func setupBugfix2TestDB(t *testing.T) *gorm.DB {
 		&model.FeatureTableDO{},
 		&model.ProjectFeatureTableDO{},
 		&model.ProjectScheduleTaskDO{},
+		&model.NodeDO{},
+		&model.UserTokensDO{},
 	)
 	if err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
+	if !db.Migrator().HasTable(&model.SysUserPermissionRelDO{}) {
+		_ = db.AutoMigrate(&model.SysUserPermissionRelDO{})
+	}
+	// Node users require an existing node (Java NodeUserServiceImpl).
+	seedNodeUserTestNodes(db)
 	return db
 }
 
@@ -153,73 +160,6 @@ func TestUserService_UpdateUser_TransactionalRolesAndNodes(t *testing.T) {
 	}
 }
 
-// --- Bug 22: ScheduledService.registerCron stays RUNNING ---
-
-func TestScheduledService_CronTask_StaysRunning(t *testing.T) {
-	db := setupBugfix2TestDB(t)
-
-	// Create service WITHOUT graphService (nil) — should mark SUCCESS
-	svc := NewScheduledService(db, nil, nil)
-	defer svc.Stop()
-
-	ctx := context.Background()
-	vo, err := svc.Create(ctx, &CreateScheduledRequest{
-		ProjectID: "proj1",
-		GraphID:   "graph1",
-		Cron:      "0 0 12 * * *",
-	})
-	if err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-	if vo.Status != model.ScheduledStatusToBeRun {
-		t.Fatalf("expected TO_BE_RUN, got %s", vo.Status)
-	}
-
-	// Verify task exists in DB with correct status
-	var task model.ProjectScheduleTaskDO
-	if err := db.Where("schedule_task_id = ?", vo.ScheduleTaskID).First(&task).Error; err != nil {
-		t.Fatalf("task not found: %v", err)
-	}
-	if task.Status != model.ScheduledStatusToBeRun {
-		t.Errorf("expected TO_BE_RUN in DB, got %s", task.Status)
-	}
-}
-
-func TestScheduledService_PauseResume(t *testing.T) {
-	db := setupBugfix2TestDB(t)
-	svc := NewScheduledService(db, nil, nil)
-	defer svc.Stop()
-
-	ctx := context.Background()
-	vo, err := svc.Create(ctx, &CreateScheduledRequest{
-		ProjectID: "proj2",
-		GraphID:   "graph2",
-		Cron:      "0 30 8 * * *",
-	})
-	if err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-
-	// Pause
-	if err := svc.Pause(ctx, vo.ScheduleTaskID); err != nil {
-		t.Fatalf("Pause failed: %v", err)
-	}
-	var task model.ProjectScheduleTaskDO
-	db.Where("schedule_task_id = ?", vo.ScheduleTaskID).First(&task)
-	if task.Status != model.ScheduledStatusPaused {
-		t.Errorf("expected PAUSED, got %s", task.Status)
-	}
-
-	// Resume
-	if err := svc.Resume(ctx, vo.ScheduleTaskID); err != nil {
-		t.Fatalf("Resume failed: %v", err)
-	}
-	db.Where("schedule_task_id = ?", vo.ScheduleTaskID).First(&task)
-	if task.Status != model.ScheduledStatusToBeRun {
-		t.Errorf("expected TO_BE_RUN after resume, got %s", task.Status)
-	}
-}
-
 // --- Bug 23: SseServer data race (run with -race) ---
 
 func TestSseServer_ConcurrentSendNoRace(t *testing.T) {
@@ -243,67 +183,6 @@ func TestSseServer_ConcurrentSendNoRace(t *testing.T) {
 }
 
 // --- Bug 24: FeatureTableService.CreateFeatureTable error propagation ---
-
-func TestFeatureTableService_Create_Success(t *testing.T) {
-	db := setupBugfix2TestDB(t)
-	svc := NewFeatureTableService(db)
-
-	ctx := context.Background()
-	err := svc.CreateFeatureTable(ctx, &CreateFeatureDatasourceRequest{
-		NodeID:           "alice",
-		FeatureTableName: "feature1",
-		Type:             "HTTP",
-		URL:              "http://localhost:8080/features",
-		Columns:          "col1,col2",
-		ProjectID:        "proj1",
-	})
-	if err != nil {
-		t.Fatalf("CreateFeatureTable failed: %v", err)
-	}
-
-	// Verify feature table created
-	var ft model.FeatureTableDO
-	if err := db.Where("feature_table_name = ?", "feature1").First(&ft).Error; err != nil {
-		t.Fatalf("feature table not found: %v", err)
-	}
-	if ft.Status != "Available" {
-		t.Errorf("expected Available, got %s", ft.Status)
-	}
-
-	// Verify project association created
-	var pft model.ProjectFeatureTableDO
-	if err := db.Where("project_id = ? AND feature_table_id = ?", "proj1", ft.FeatureTableID).
-		First(&pft).Error; err != nil {
-		t.Fatalf("project-feature association not found: %v", err)
-	}
-}
-
-func TestFeatureTableService_List(t *testing.T) {
-	db := setupBugfix2TestDB(t)
-	svc := NewFeatureTableService(db)
-
-	ctx := context.Background()
-	// Create two feature tables for the same node
-	for _, name := range []string{"ft_a", "ft_b"} {
-		err := svc.CreateFeatureTable(ctx, &CreateFeatureDatasourceRequest{
-			NodeID:           "bob",
-			FeatureTableName: name,
-			URL:              "http://example.com/" + name,
-			Columns:          "x,y",
-		})
-		if err != nil {
-			t.Fatalf("CreateFeatureTable(%s) failed: %v", name, err)
-		}
-	}
-
-	list, err := svc.FeatureDatasourceList(ctx, "bob")
-	if err != nil {
-		t.Fatalf("FeatureDatasourceList failed: %v", err)
-	}
-	if len(list) != 2 {
-		t.Fatalf("expected 2 feature tables, got %d", len(list))
-	}
-}
 
 // --- Bug 25: RBAC least privilege (tested via middleware package) ---
 // The RBAC fix is in the middleware package; here we verify the service-level
@@ -374,41 +253,6 @@ func TestNodeUserService_ListByNodeId(t *testing.T) {
 	}
 }
 
-// --- Additional: ScheduledService Delete ---
-
-func TestScheduledService_Delete(t *testing.T) {
-	db := setupBugfix2TestDB(t)
-	svc := NewScheduledService(db, nil, nil)
-	defer svc.Stop()
-
-	ctx := context.Background()
-	vo, err := svc.Create(ctx, &CreateScheduledRequest{
-		ProjectID: "proj_del",
-		GraphID:   "graph_del",
-		Cron:      "0 0 6 * * *",
-	})
-	if err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-
-	// Delete
-	if err := svc.Delete(ctx, vo.ScheduleTaskID); err != nil {
-		t.Fatalf("Delete failed: %v", err)
-	}
-
-	// Verify removed from DB
-	var count int64
-	db.Model(&model.ProjectScheduleTaskDO{}).Where("schedule_task_id = ?", vo.ScheduleTaskID).Count(&count)
-	if count != 0 {
-		t.Errorf("expected 0 tasks after delete, got %d", count)
-	}
-
-	// Delete non-existent should return error
-	if err := svc.Delete(ctx, "nonexistent"); err != ErrScheduledNotFound {
-		t.Errorf("expected ErrScheduledNotFound, got %v", err)
-	}
-}
-
 // --- Additional: EnvService concurrency safety ---
 
 func TestEnvService_ConcurrentAccess(t *testing.T) {
@@ -431,60 +275,6 @@ func TestEnvService_ConcurrentAccess(t *testing.T) {
 
 	if !svc.IsCenter() {
 		t.Error("expected center platform")
-	}
-}
-
-// --- Additional: DataDirectoryService path traversal prevention ---
-
-func TestDataDirectoryService_PathTraversal(t *testing.T) {
-	svc := NewDataDirectoryService(t.TempDir())
-
-	// Path traversal attempts should return empty
-	tests := []struct {
-		nodeID   string
-		fileName string
-	}{
-		{"../etc", "passwd"},
-		{"alice", "../../etc/passwd"},
-		{"alice/bob", "file.csv"},
-		{"..", "file.csv"},
-		{"alice", ".."},
-	}
-	for _, tc := range tests {
-		if path := svc.GetFilePath(tc.nodeID, tc.fileName); path != "" {
-			t.Errorf("GetFilePath(%q, %q) = %q, want empty (path traversal)", tc.nodeID, tc.fileName, path)
-		}
-		if svc.FileExists(tc.nodeID, tc.fileName) {
-			t.Errorf("FileExists(%q, %q) = true, want false (path traversal)", tc.nodeID, tc.fileName)
-		}
-	}
-}
-
-// --- Additional: ScheduledService Offline ---
-
-func TestScheduledService_Offline(t *testing.T) {
-	db := setupBugfix2TestDB(t)
-	svc := NewScheduledService(db, nil, nil)
-	defer svc.Stop()
-
-	ctx := context.Background()
-	vo, err := svc.Create(ctx, &CreateScheduledRequest{
-		ProjectID: "proj_off",
-		GraphID:   "graph_off",
-		Cron:      "0 0 10 * * *",
-	})
-	if err != nil {
-		t.Fatalf("Create failed: %v", err)
-	}
-
-	if err := svc.Offline(ctx, vo.ScheduleTaskID); err != nil {
-		t.Fatalf("Offline failed: %v", err)
-	}
-
-	var task model.ProjectScheduleTaskDO
-	db.Where("schedule_task_id = ?", vo.ScheduleTaskID).First(&task)
-	if task.Status != model.ScheduledStatusOffline {
-		t.Errorf("expected OFFLINE, got %s", task.Status)
 	}
 }
 

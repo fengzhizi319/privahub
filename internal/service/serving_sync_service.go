@@ -5,18 +5,21 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fengzhizi319/privahub/internal/dao/model"
-	"github.com/fengzhizi319/privahub/pkg/kuscia"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+
+	"github.com/fengzhizi319/privahub/internal/dao/model"
+	"github.com/fengzhizi319/privahub/pkg/kuscia"
 )
 
-// ServingStatusSyncService periodically polls Kuscia for serving status updates
-// and synchronizes them to the local database. It runs as a background
-// goroutine started via Start() and gracefully stopped via Stop().
+// ServingStatusSyncService periodically polls Kuscia for the servings of
+// PUBLISHING models and moves them to PUBLISHED / PUBLISH_FAIL, updating both
+// project_model_serving.serving_stats and project_model_pack.model_stats
+// (Java refreshes on model/page only; the loop keeps the state fresh).
 type ServingStatusSyncService struct {
 	db           *gorm.DB
 	kusciaClient *kuscia.Client
+	models       *ModelService
 	log          *zap.Logger
 	interval     time.Duration
 	stopCh       chan struct{}
@@ -25,6 +28,9 @@ type ServingStatusSyncService struct {
 
 // NewServingStatusSyncService creates a new ServingStatusSyncService.
 func NewServingStatusSyncService(db *gorm.DB, kusciaClient *kuscia.Client, log *zap.Logger) *ServingStatusSyncService {
+	if log == nil {
+		log = zap.NewNop()
+	}
 	return &ServingStatusSyncService{
 		db:           db,
 		kusciaClient: kusciaClient,
@@ -34,9 +40,22 @@ func NewServingStatusSyncService(db *gorm.DB, kusciaClient *kuscia.Client, log *
 	}
 }
 
+// WithModelService shares the model service (pool / env aware Kuscia routing).
+func (s *ServingStatusSyncService) WithModelService(m *ModelService) *ServingStatusSyncService {
+	s.models = m
+	return s
+}
+
+func (s *ServingStatusSyncService) modelService() *ModelService {
+	if s.models != nil {
+		return s.models
+	}
+	return NewModelService(s.db, s.kusciaClient).WithLogger(s.log)
+}
+
 // Start begins the background sync loop.
 func (s *ServingStatusSyncService) Start() {
-	if s.kusciaClient == nil {
+	if s.kusciaClient == nil && s.models == nil {
 		return
 	}
 	go s.loop()
@@ -63,63 +82,32 @@ func (s *ServingStatusSyncService) loop() {
 	}
 }
 
-// syncOnce performs a single sync cycle: find active servings, query Kuscia, update DB.
+// syncOnce refreshes every PUBLISHING model once.
 func (s *ServingStatusSyncService) syncOnce() {
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-
-	// Find all non-terminal servings
-	var activeServings []model.ProjectModelServingDO
-	if err := s.db.WithContext(ctx).
-		Where("serving_stats IN ?", []string{"init", "pending", "progressing", "partial_available"}).
-		Find(&activeServings).Error; err != nil {
-		return
-	}
-
-	if len(activeServings) == 0 {
-		return
-	}
-
-	// Batch query Kuscia for serving statuses
-	servingIDs := make([]string, 0, len(activeServings))
-	for _, sv := range activeServings {
-		servingIDs = append(servingIDs, sv.ServingID)
-	}
-
-	entries, err := s.kusciaClient.BatchQueryServingStatus(ctx, servingIDs)
-	if err != nil {
-		// Kuscia unreachable — skip this cycle
-		return
-	}
-
-	// Build lookup map
-	statusMap := make(map[string]string, len(entries))
-	for _, e := range entries {
-		statusMap[e.ServingID] = mapServingState(e.Status.State)
-	}
-
-	// Update local DB for servings whose status changed
-	for _, sv := range activeServings {
-		newState, ok := statusMap[sv.ServingID]
-		if !ok || newState == sv.ServingStats {
-			continue
-		}
-
-		s.db.WithContext(ctx).Model(&model.ProjectModelServingDO{}).
-			Where("serving_id = ?", sv.ServingID).
-			Update("serving_stats", newState)
-
-		if s.log != nil {
-			s.log.Info("Serving status synced from Kuscia",
-				zap.String("serving_id", sv.ServingID),
-				zap.String("old_status", sv.ServingStats),
-				zap.String("new_status", newState),
-			)
-		}
-	}
+	s.SyncOnce(ctx)
 }
 
-// mapServingState maps Kuscia serving states to SecretPad status strings.
+// SyncOnce refreshes every PUBLISHING model once and returns how many changed.
+func (s *ServingStatusSyncService) SyncOnce(ctx context.Context) int {
+	var packs []model.ProjectModelPackDO
+	if err := s.db.WithContext(ctx).
+		Where("model_stats = ? AND serving_id <> '' AND is_deleted = 0", model.ModelStatsPublishing).
+		Find(&packs).Error; err != nil {
+		return 0
+	}
+	ms := s.modelService()
+	changed := 0
+	for i := range packs {
+		if ms.RefreshPublishing(ctx, &packs[i]) {
+			changed++
+		}
+	}
+	return changed
+}
+
+// mapServingState maps Kuscia serving states to lower-case status strings.
 func mapServingState(state string) string {
 	switch state {
 	case "Pending", "pending":

@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
+	"github.com/fengzhizi319/privahub/internal/graphjob"
+	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -20,8 +22,6 @@ var (
 )
 
 // firstNonEmpty returns the first non-empty string from the given values.
-// It reconciles the dual-field (snake_case / camelCase) DTO convention so the
-// service works whether or not the case-normalization middleware ran.
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if v != "" {
@@ -31,14 +31,22 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// ProjectService handles project management.
+// ProjectService handles project management (Java ProjectServiceImpl).
 type ProjectService struct {
 	projectRepo          repository.ProjectRepository
 	projectInstRepo      repository.ProjectInstRepository
 	projectNodeRepo      repository.ProjectNodeRepository
 	projectDatatableRepo repository.DatatableRepository
 	db                   *gorm.DB
-	kusciaClient         *kuscia.Client
+	kuscia               GraphKusciaAPI
+	// teeAuth pushes / authorizes datatables of TEE projects (DatatableService).
+	teeAuth TeeDatatableAuthorizer
+}
+
+// SetTeeAuthorizer wires the TEE push/auth jobs of datatable/add (TEE projects).
+func (s *ProjectService) SetTeeAuthorizer(a TeeDatatableAuthorizer) *ProjectService {
+	s.teeAuth = a
+	return s
 }
 
 // NewProjectService creates a new ProjectService.
@@ -56,42 +64,66 @@ func NewProjectService(
 		projectNodeRepo:      projectNodeRepo,
 		projectDatatableRepo: projectDatatableRepo,
 		db:                   db,
-		kusciaClient:         kusciaClient,
+		kuscia:               toGraphKuscia(kusciaClient),
 	}
 }
 
-// CreateProjectRequest represents a project creation request.
+// SetKuscia overrides the Kuscia API (tests).
+func (s *ProjectService) SetKuscia(k GraphKusciaAPI) { s.kuscia = k }
+
+// --- DTOs (Java camelCase contract) ---
+
+// CreateProjectRequest mirrors Java CreateProjectRequest (instId / nodeIds are Go extensions).
 type CreateProjectRequest struct {
 	Name        string   `json:"name" binding:"required"`
 	Description string   `json:"description"`
-	ComputeMode string   `json:"compute_mode"`
-	ComputeFunc string   `json:"compute_func"`
-	InstID      string   `json:"inst_id"`
-	NodeIDs     []string `json:"node_ids"`
+	ComputeMode string   `json:"computeMode"`
+	ComputeFunc string   `json:"computeFunc"`
+	TeeNodeID   string   `json:"teeNodeId"`
+	InstID      string   `json:"instId"`
+	NodeIDs     []string `json:"nodeIds"`
 }
 
-// UpdateProjectRequest represents a project update request.
+// UpdateProjectRequest mirrors Java UpdateProjectRequest.
 type UpdateProjectRequest struct {
-	ProjectID   string `json:"project_id" binding:"required"`
+	ProjectID   string `json:"projectId" binding:"required"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
 
-// ProjectVO represents a project view object.
-type ProjectVO struct {
-	ProjectID   string   `json:"project_id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	ComputeMode string   `json:"compute_mode"`
-	ComputeFunc string   `json:"compute_func"`
-	OwnerID     string   `json:"owner_id"`
-	Status      int8     `json:"status"`
-	InstID      string   `json:"inst_id,omitempty"`
-	NodeIDs     []string `json:"node_ids,omitempty"`
-	GmtCreate   string   `json:"gmt_create"`
+// ProjectDatatableBaseVO mirrors Java ProjectDatatableBaseVO.
+type ProjectDatatableBaseVO struct {
+	DatatableID   string `json:"datatableId"`
+	DatatableName string `json:"datatableName"`
 }
 
-// ProjectListResponse represents a paginated project list.
+// ProjectNodeVO mirrors Java ProjectNodeVO.
+type ProjectNodeVO struct {
+	NodeID     string                   `json:"nodeId"`
+	NodeName   string                   `json:"nodeName"`
+	NodeType   string                   `json:"nodeType,omitempty"`
+	Datatables []ProjectDatatableBaseVO `json:"datatables,omitempty"`
+}
+
+// ProjectVO mirrors Java ProjectVO (ownerId / instId / nodeIds / computeFunc are kept for compatibility).
+type ProjectVO struct {
+	ProjectID   string          `json:"projectId"`
+	ProjectName string          `json:"projectName"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Nodes       []ProjectNodeVO `json:"nodes"`
+	GraphCount  int64           `json:"graphCount"`
+	JobCount    int64           `json:"jobCount"`
+	GmtCreate   string          `json:"gmtCreate"`
+	ComputeMode string          `json:"computeMode"`
+	ComputeFunc string          `json:"computeFunc,omitempty"`
+	TeeNodeID   string          `json:"teeNodeId"`
+	OwnerID     string          `json:"ownerId,omitempty"`
+	InstID      string          `json:"instId,omitempty"`
+	NodeIDs     []string        `json:"nodeIds,omitempty"`
+}
+
+// ProjectListResponse is the paginated list (Go extension, only when paging is requested).
 type ProjectListResponse struct {
 	Projects []ProjectVO `json:"projects"`
 	Total    int64       `json:"total"`
@@ -99,436 +131,610 @@ type ProjectListResponse struct {
 	Size     int         `json:"size"`
 }
 
-// CreateProject creates a new project. The project, institution association,
-// and node associations are created atomically within a database transaction
-// to prevent orphan records on partial failure.
+// ProjectListRequest is the project/list request (paging is optional).
+type ProjectListRequest struct {
+	Page int    `json:"page"`
+	Size int    `json:"size"`
+	Name string `json:"name"`
+}
+
+func normalizeComputeMode(m string) string {
+	switch strings.ToUpper(strings.TrimSpace(m)) {
+	case "TEE":
+		return "TEE"
+	case "", "MPC", "FL":
+		return "MPC"
+	default:
+		return strings.ToUpper(m)
+	}
+}
+
+func (s *ProjectService) openProject(ctx context.Context, projectID string) (*model.ProjectDO, error) {
+	p, err := s.projectRepo.FindByProjectID(ctx, projectID)
+	if err != nil || p == nil {
+		return nil, padErrBase(ErrProjectNotFound, errcode.ProjectNotExists)
+	}
+	return p, nil
+}
+
+// CreateProject mirrors ProjectServiceImpl.createProject.
 func (s *ProjectService) CreateProject(ctx context.Context, req *CreateProjectRequest, ownerID string) (*ProjectVO, error) {
-	projectID := uuid.New().String()[:8]
-
-	computeMode := req.ComputeMode
-	if computeMode == "" {
-		computeMode = "mpc"
+	mode := normalizeComputeMode(req.ComputeMode)
+	if mode == "TEE" && req.TeeNodeID == "" {
+		return nil, padErr(errcode.SystemValidationError, "teeNodeId can not be empty in TEE mode")
 	}
-	computeFunc := req.ComputeFunc
-	if computeFunc == "" {
-		computeFunc = "ALL"
-	}
-
+	info, _ := json.Marshal(map[string]string{"teeDomainId": req.TeeNodeID})
 	project := &model.ProjectDO{
-		ProjectID:   projectID,
+		ProjectID:   graphjob.RandomLetters(8),
 		Name:        req.Name,
 		Description: req.Description,
-		ComputeMode: computeMode,
-		ComputeFunc: computeFunc,
+		ComputeMode: mode,
+		ComputeFunc: firstNonEmpty(req.ComputeFunc, "ALL"),
+		ProjectInfo: string(info),
 		OwnerID:     ownerID,
 	}
-
-	// Wrap project + inst + nodes creation in a transaction for atomicity
+	nodeIDs := append([]string(nil), req.NodeIDs...)
+	if op := OperatorFrom(ctx); op.isEdge() && op.OwnerID != "" {
+		nodeIDs = append(nodeIDs, op.OwnerID)
+	}
 	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(project).Error; err != nil {
 			return err
 		}
-
-		// Associate institution
 		if req.InstID != "" {
-			if err := tx.Create(&model.ProjectInstDO{
-				ProjectID: projectID,
-				InstID:    req.InstID,
-			}).Error; err != nil {
+			if err := upsertProjectInst(tx, project.ProjectID, req.InstID); err != nil {
 				return err
 			}
 		}
-
-		// Associate nodes
-		for _, nodeID := range req.NodeIDs {
-			if err := tx.Create(&model.ProjectNodeDO{
-				ProjectID: projectID,
-				NodeID:    nodeID,
-			}).Error; err != nil {
+		for _, n := range nodeIDs {
+			if err := upsertProjectNode(tx, project.ProjectID, n); err != nil {
 				return err
 			}
 		}
-
 		return nil
 	}); err != nil {
 		return nil, err
 	}
-
-	return s.toProjectVO(ctx, project), nil
+	return s.toProjectVO(ctx, project, false), nil
 }
 
-// GetProject retrieves a project by ID.
+// GetProject mirrors ProjectServiceImpl.getProject (nodes with imported datatables).
 func (s *ProjectService) GetProject(ctx context.Context, projectID string) (*ProjectVO, error) {
-	project, err := s.projectRepo.FindByProjectID(ctx, projectID)
-	if err != nil {
-		return nil, ErrProjectNotFound
-	}
-	return s.toProjectVO(ctx, project), nil
-}
-
-// ListProjects retrieves projects with pagination.
-func (s *ProjectService) ListProjects(ctx context.Context, page, size int, name string) (*ProjectListResponse, error) {
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 || size > 100 {
-		size = 10
-	}
-
-	projects, total, err := s.projectRepo.PageQuery(ctx, page, size, name)
+	p, err := s.openProject(ctx, projectID)
 	if err != nil {
 		return nil, err
 	}
-
-	result := make([]ProjectVO, 0, len(projects))
-	for i := range projects {
-		result = append(result, *s.toProjectVO(ctx, &projects[i]))
-	}
-
-	return &ProjectListResponse{
-		Projects: result,
-		Total:    total,
-		Page:     page,
-		Size:     size,
-	}, nil
+	return s.toProjectVO(ctx, p, true), nil
 }
 
-// UpdateProject updates a project.
-func (s *ProjectService) UpdateProject(ctx context.Context, req *UpdateProjectRequest) error {
-	project, err := s.projectRepo.FindByProjectID(ctx, req.ProjectID)
-	if err != nil {
-		return ErrProjectNotFound
+// ListAllProjects mirrors ProjectServiceImpl.listProject: every project (EDGE
+// users only see the projects of their node).
+func (s *ProjectService) ListAllProjects(ctx context.Context, name string) ([]ProjectVO, error) {
+	q := s.db.WithContext(ctx).Model(&model.ProjectDO{})
+	if op := OperatorFrom(ctx); op.isEdge() && op.OwnerID != "" {
+		q = q.Where("project_id IN (?)", s.db.Model(&model.ProjectNodeDO{}).Select("project_id").Where("node_id = ?", op.OwnerID))
 	}
+	if name != "" {
+		q = q.Where("name LIKE ?", "%"+name+"%")
+	}
+	var projects []model.ProjectDO
+	if err := q.Order("gmt_create DESC").Find(&projects).Error; err != nil {
+		return nil, err
+	}
+	out := make([]ProjectVO, 0, len(projects))
+	for i := range projects {
+		out = append(out, *s.toProjectVO(ctx, &projects[i], false))
+	}
+	return out, nil
+}
 
+// ListProjects returns a page of projects (Go extension for callers sending page/size).
+func (s *ProjectService) ListProjects(ctx context.Context, page, size int, name string) (*ProjectListResponse, error) {
+	all, err := s.ListAllProjects(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 {
+		size = 10
+	}
+	start := (page - 1) * size
+	if start > len(all) {
+		start = len(all)
+	}
+	end := start + size
+	if end > len(all) {
+		end = len(all)
+	}
+	return &ProjectListResponse{Projects: all[start:end], Total: int64(len(all)), Page: page, Size: size}, nil
+}
+
+// UpdateProject mirrors ProjectServiceImpl.updateProject.
+func (s *ProjectService) UpdateProject(ctx context.Context, req *UpdateProjectRequest) error {
+	project, err := s.openProject(ctx, req.ProjectID)
+	if err != nil {
+		return err
+	}
 	if req.Name != "" {
 		project.Name = req.Name
 	}
 	if req.Description != "" {
 		project.Description = req.Description
 	}
-
 	return s.projectRepo.Update(ctx, project)
 }
 
-// DeleteProject deletes a project and cleans up all associated data
-// (node associations, institution links, datatables) atomically within a
-// database transaction. Graph/job cleanup is best-effort to avoid blocking
-// deletion on large datasets.
+// DeleteProject mirrors ProjectServiceImpl.deleteProject: refused while the
+// project still has graphs.
 func (s *ProjectService) DeleteProject(ctx context.Context, projectID string) error {
-	project, err := s.projectRepo.FindByProjectID(ctx, projectID)
+	project, err := s.openProject(ctx, projectID)
 	if err != nil {
-		return ErrProjectNotFound
+		return err
 	}
-
-	// Clean up associated records atomically
+	var graphs int64
+	s.db.WithContext(ctx).Model(&model.ProjectGraphDO{}).Where("project_id = ?", projectID).Count(&graphs)
+	if graphs > 0 {
+		return padErr(errcode.ProjectGraphNotEmpty)
+	}
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("project_id = ?", projectID).Delete(&model.ProjectNodeDO{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("project_id = ?", projectID).Delete(&model.ProjectInstDO{}).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("project_id = ?", projectID).Delete(&model.ProjectDatatableDO{}).Error; err != nil {
-			return err
+		for _, m := range []any{&model.ProjectNodeDO{}, &model.ProjectInstDO{}, &model.ProjectDatatableDO{}} {
+			if err := tx.Unscoped().Where("project_id = ?", projectID).Delete(m).Error; err != nil {
+				return err
+			}
 		}
 		return tx.Delete(&model.ProjectDO{}, project.ID).Error
 	})
 }
 
-// AddNode adds a node to a project.
-func (s *ProjectService) AddNode(ctx context.Context, projectID, nodeID string) error {
-	_, err := s.projectRepo.FindByProjectID(ctx, projectID)
-	if err != nil {
-		return ErrProjectNotFound
+func upsertProjectNode(tx *gorm.DB, projectID, nodeID string) error {
+	var existing model.ProjectNodeDO
+	err := tx.Unscoped().Where("project_id = ? AND node_id = ?", projectID, nodeID).First(&existing).Error
+	if err == nil {
+		if existing.DeletedAt.Valid {
+			return tx.Unscoped().Model(&existing).Updates(map[string]any{"deleted_at": nil, "is_deleted": 0}).Error
+		}
+		return nil
 	}
-
-	return s.projectNodeRepo.Create(ctx, &model.ProjectNodeDO{
-		ProjectID: projectID,
-		NodeID:    nodeID,
-	})
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	return tx.Create(&model.ProjectNodeDO{ProjectID: projectID, NodeID: nodeID}).Error
 }
 
-// AddInst adds an institution to a project.
-func (s *ProjectService) AddInst(ctx context.Context, projectID, instID string) error {
-	_, err := s.projectRepo.FindByProjectID(ctx, projectID)
-	if err != nil {
-		return ErrProjectNotFound
+func upsertProjectInst(tx *gorm.DB, projectID, instID string) error {
+	var existing model.ProjectInstDO
+	err := tx.Unscoped().Where("project_id = ? AND inst_id = ?", projectID, instID).First(&existing).Error
+	if err == nil {
+		if existing.DeletedAt.Valid {
+			return tx.Unscoped().Model(&existing).Updates(map[string]any{"deleted_at": nil, "is_deleted": 0}).Error
+		}
+		return nil
 	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	return tx.Create(&model.ProjectInstDO{ProjectID: projectID, InstID: instID}).Error
+}
 
-	return s.projectInstRepo.Create(ctx, &model.ProjectInstDO{
-		ProjectID: projectID,
-		InstID:    instID,
-	})
+// AddNode mirrors addNodeToProject (existence checks, idempotent).
+func (s *ProjectService) AddNode(ctx context.Context, projectID, nodeID string) error {
+	project, err := s.openProject(ctx, projectID)
+	if err != nil {
+		return err
+	}
+	var n model.NodeDO
+	if err := s.db.WithContext(ctx).Where("node_id = ?", nodeID).First(&n).Error; err != nil {
+		return padErr(errcode.NodeNotExistError)
+	}
+	if err := upsertProjectNode(s.db.WithContext(ctx), projectID, nodeID); err != nil {
+		return err
+	}
+	return s.projectRepo.Update(ctx, project) // touch gmt_modified
+}
+
+// AddInst mirrors addInstToProject (existence checks, idempotent).
+func (s *ProjectService) AddInst(ctx context.Context, projectID, instID string) error {
+	if _, err := s.openProject(ctx, projectID); err != nil {
+		return err
+	}
+	var inst model.InstDO
+	if err := s.db.WithContext(ctx).Where("inst_id = ?", instID).First(&inst).Error; err != nil {
+		return padErr(errcode.InstNotExists)
+	}
+	return upsertProjectInst(s.db.WithContext(ctx), projectID, instID)
 }
 
 // ArchiveProject archives a project (sets status to archived).
 func (s *ProjectService) ArchiveProject(ctx context.Context, projectID string) error {
-	project, err := s.projectRepo.FindByProjectID(ctx, projectID)
+	project, err := s.openProject(ctx, projectID)
 	if err != nil {
-		return ErrProjectNotFound
+		return err
 	}
-	project.Status = 1 // 1 = archived
+	project.Status = 1
 	return s.projectRepo.Update(ctx, project)
 }
 
-// --- Project Datatable DTOs ---
-
-// AddDatatableRequest represents adding a datatable to a project.
-type AddDatatableRequest struct {
-	ProjectID        string          `json:"project_id"`
-	ProjectIDAlt     string          `json:"projectId"`
-	DatatableID      string          `json:"datatable_id"`
-	DatatableIDAlt   string          `json:"datatableId"`
-	DatatableName    string          `json:"datatable_name"`
-	DatatableNameAlt string          `json:"datatableName"`
-	NodeID           string          `json:"node_id"`
-	NodeIDAlt        string          `json:"nodeId"`
-	DatasourceID     string          `json:"datasource_id"`
-	DatasourceIDAlt  string          `json:"datasourceId"`
-	TeeNodeID        string          `json:"tee_node_id"`
-	TeeNodeIDAlt     string          `json:"teeNodeId"`
-	Type             string          `json:"type"`
-	Configs          json.RawMessage `json:"configs"`
-}
-
-// ProjDeleteDatatableRequest represents removing a datatable from a project.
-type ProjDeleteDatatableRequest struct {
-	ProjectID      string `json:"project_id"`
-	ProjectIDAlt   string `json:"projectId"`
-	DatatableID    string `json:"datatable_id"`
-	DatatableIDAlt string `json:"datatableId"`
-	NodeID         string `json:"node_id"`
-	NodeIDAlt      string `json:"nodeId"`
-}
-
-// ProjGetDatatableRequest represents getting a datatable from a project.
-type ProjGetDatatableRequest struct {
-	ProjectID      string `json:"project_id"`
-	ProjectIDAlt   string `json:"projectId"`
-	DatatableID    string `json:"datatable_id"`
-	DatatableIDAlt string `json:"datatableId"`
-}
-
-// ProjectDatatableVO represents a project datatable view object.
-type ProjectDatatableVO struct {
-	ProjectID     string `json:"project_id"`
-	DatatableID   string `json:"datatable_id"`
-	DatatableName string `json:"datatable_name"`
-	NodeID        string `json:"node_id"`
-	DatasourceID  string `json:"datasource_id"`
-	GmtCreate     string `json:"gmt_create"`
-}
-
-func (s *ProjectService) toProjectVO(ctx context.Context, project *model.ProjectDO) *ProjectVO {
+func (s *ProjectService) toProjectVO(ctx context.Context, p *model.ProjectDO, withDatatables bool) *ProjectVO {
 	vo := &ProjectVO{
-		ProjectID:   project.ProjectID,
-		Name:        project.Name,
-		Description: project.Description,
-		ComputeMode: project.ComputeMode,
-		ComputeFunc: project.ComputeFunc,
-		OwnerID:     project.OwnerID,
-		Status:      project.Status,
-		GmtCreate:   project.GmtCreate.Format("2006-01-02 15:04:05"),
+		ProjectID:   p.ProjectID,
+		ProjectName: p.Name,
+		Name:        p.Name,
+		Description: p.Description,
+		ComputeMode: normalizeComputeMode(p.ComputeMode),
+		ComputeFunc: p.ComputeFunc,
+		TeeNodeID:   projectTeeNodeID(p),
+		OwnerID:     p.OwnerID,
+		GmtCreate:   rfc3339(p.GmtCreate),
+		Nodes:       []ProjectNodeVO{},
 	}
-
-	// Get associated inst
-	insts, err := s.projectInstRepo.FindByProjectID(ctx, project.ProjectID)
-	if err == nil && len(insts) > 0 {
+	s.db.WithContext(ctx).Model(&model.ProjectGraphDO{}).Where("project_id = ?", p.ProjectID).Count(&vo.GraphCount)
+	s.db.WithContext(ctx).Model(&model.ProjectJobDO{}).Where("project_id = ?", p.ProjectID).Count(&vo.JobCount)
+	var insts []model.ProjectInstDO
+	s.db.WithContext(ctx).Where("project_id = ?", p.ProjectID).Order("id ASC").Find(&insts)
+	if len(insts) > 0 {
 		vo.InstID = insts[0].InstID
 	}
-
-	// Get associated nodes
-	nodes, err := s.projectNodeRepo.FindByProjectID(ctx, project.ProjectID)
-	if err == nil {
-		nodeIDs := make([]string, 0, len(nodes))
-		for _, n := range nodes {
-			nodeIDs = append(nodeIDs, n.NodeID)
+	var pns []model.ProjectNodeDO
+	s.db.WithContext(ctx).Where("project_id = ?", p.ProjectID).Order("id ASC").Find(&pns)
+	dtsByNode := map[string][]ProjectDatatableBaseVO{}
+	if withDatatables {
+		var dts []model.ProjectDatatableDO
+		s.db.WithContext(ctx).Where("project_id = ? AND source = ?", p.ProjectID, "IMPORTED").Order("id ASC").Find(&dts)
+		for _, dt := range dts {
+			name := dt.DatatableID
+			if s.kuscia != nil {
+				if dd, err := s.kuscia.QueryDomainData(ctx, dt.NodeID, dt.DatatableID); err == nil && dd != nil && dd.Data.Name != "" {
+					name = dd.Data.Name
+				}
+			}
+			dtsByNode[dt.NodeID] = append(dtsByNode[dt.NodeID], ProjectDatatableBaseVO{DatatableID: dt.DatatableID, DatatableName: name})
 		}
-		vo.NodeIDs = nodeIDs
 	}
-
+	for _, pn := range pns {
+		nvo := ProjectNodeVO{NodeID: pn.NodeID, NodeName: pn.NodeID}
+		var n model.NodeDO
+		if s.db.WithContext(ctx).Where("node_id = ?", pn.NodeID).First(&n).Error == nil {
+			nvo.NodeName, nvo.NodeType = n.Name, n.Type
+		}
+		if withDatatables {
+			nvo.Datatables = dtsByNode[pn.NodeID]
+			if nvo.Datatables == nil {
+				nvo.Datatables = []ProjectDatatableBaseVO{}
+			}
+		}
+		vo.Nodes = append(vo.Nodes, nvo)
+		vo.NodeIDs = append(vo.NodeIDs, pn.NodeID)
+	}
 	return vo
 }
 
-// --- Project Datatable operations ---
+// --- Project Datatable ---
 
-// AddDatatable associates a datatable with a project on a node. The operation
-// is idempotent: re-adding an existing association updates its column configs.
-// Column configs are persisted verbatim as JSON in ProjectDatatableDO.TableConfigs.
-func (s *ProjectService) AddDatatable(ctx context.Context, req *AddDatatableRequest) error {
-	projectID := firstNonEmpty(req.ProjectID, req.ProjectIDAlt)
-	nodeID := firstNonEmpty(req.NodeID, req.NodeIDAlt)
-	datatableID := firstNonEmpty(req.DatatableID, req.DatatableIDAlt)
-	if projectID == "" || nodeID == "" || datatableID == "" {
-		return ErrProjectDatatableInvalid
+// TableColumnConfigParam mirrors Java TableColumnConfigParam.
+type TableColumnConfigParam struct {
+	ColName        string `json:"colName"`
+	IsAssociateKey bool   `json:"isAssociateKey"`
+	IsGroupKey     bool   `json:"isGroupKey"`
+	IsLabelKey     bool   `json:"isLabelKey"`
+	IsProtection   bool   `json:"isProtection"`
+}
+
+// AddDatatableRequest mirrors Java AddProjectDatatableRequest.
+type AddDatatableRequest struct {
+	ProjectID    string                   `json:"projectId"`
+	NodeID       string                   `json:"nodeId"`
+	DatatableID  string                   `json:"datatableId"`
+	DatasourceID string                   `json:"datasourceId"`
+	TeeNodeID    string                   `json:"teeNodeId"`
+	Type         string                   `json:"type"`
+	Configs      []TableColumnConfigParam `json:"configs"`
+}
+
+// ProjDeleteDatatableRequest mirrors Java DeleteProjectDatatableRequest.
+type ProjDeleteDatatableRequest struct {
+	ProjectID   string `json:"projectId"`
+	NodeID      string `json:"nodeId"`
+	DatatableID string `json:"datatableId"`
+	Type        string `json:"type"`
+}
+
+// ProjGetDatatableRequest mirrors Java GetProjectDatatableRequest.
+type ProjGetDatatableRequest struct {
+	ProjectID   string `json:"projectId"`
+	NodeID      string `json:"nodeId"`
+	DatatableID string `json:"datatableId"`
+	Type        string `json:"type"`
+}
+
+// TableColumnConfigVO mirrors Java TableColumnConfigVO.
+type TableColumnConfigVO struct {
+	ColName        string `json:"colName"`
+	ColType        string `json:"colType"`
+	ColComment     string `json:"colComment"`
+	IsAssociateKey bool   `json:"isAssociateKey"`
+	IsGroupKey     bool   `json:"isGroupKey"`
+	IsLabelKey     bool   `json:"isLabelKey"`
+	IsProtection   bool   `json:"isProtection"`
+}
+
+// ProjectDatatableVO mirrors Java ProjectDatatableVO; datatableVO / nodeId /
+// nodeName keep the DatatableNodeVO shape the new frontend validates.
+type ProjectDatatableVO struct {
+	DatatableID   string                `json:"datatableId"`
+	DatatableName string                `json:"datatableName"`
+	Configs       []TableColumnConfigVO `json:"configs"`
+	NodeID        string                `json:"nodeId"`
+	NodeName      string                `json:"nodeName"`
+	DatatableVO   *DatatableVO          `json:"datatableVO,omitempty"`
+}
+
+func configVOs(cfgs []graphjob.ColumnConfig) []TableColumnConfigVO {
+	out := make([]TableColumnConfigVO, 0, len(cfgs))
+	for _, c := range cfgs {
+		out = append(out, TableColumnConfigVO(c))
 	}
+	return out
+}
 
-	tableConfigs := "[]"
-	if len(req.Configs) > 0 {
-		tableConfigs = string(req.Configs)
+// mergeColumnFlags mirrors TableColumnConfig.from(column, configs...): the
+// column schema is kept and the four flags come from the request.
+func mergeColumnFlags(cols []graphjob.ColumnConfig, params []TableColumnConfigParam) []graphjob.ColumnConfig {
+	byName := make(map[string]TableColumnConfigParam, len(params))
+	for _, p := range params {
+		byName[p.ColName] = p
 	}
-
-	existing, err := s.projectDatatableRepo.FindByProjectNodeDatatable(ctx, projectID, nodeID, datatableID)
-	if err == nil && existing != nil {
-		existing.TableConfigs = tableConfigs
-		return s.projectDatatableRepo.Update(ctx, existing)
+	out := make([]graphjob.ColumnConfig, 0, len(cols))
+	for _, c := range cols {
+		p, ok := byName[c.ColName]
+		c.IsAssociateKey = ok && p.IsAssociateKey
+		c.IsGroupKey = ok && p.IsGroupKey
+		c.IsLabelKey = ok && p.IsLabelKey
+		c.IsProtection = ok && p.IsProtection
+		out = append(out, c)
 	}
+	return out
+}
 
-	if err := s.projectDatatableRepo.Create(ctx, &model.ProjectDatatableDO{
-		ProjectID:    projectID,
-		NodeID:       nodeID,
-		DatatableID:  datatableID,
-		TableConfigs: tableConfigs,
-		Source:       "IMPORTED",
-	}); err != nil {
-		return err
+func (s *ProjectService) requireProjectNode(ctx context.Context, projectID, nodeID string) error {
+	var cnt int64
+	s.db.WithContext(ctx).Model(&model.ProjectNodeDO{}).Where("project_id = ? AND node_id = ?", projectID, nodeID).Count(&cnt)
+	if cnt == 0 {
+		return padErr(errcode.ProjectNodeNotExists)
 	}
-
-	// Authorizing a datatable to a project grants read access to every other
-	// project node, so cross-domain jobs can resolve the DomainData metadata.
-	s.grantDatatableToProjectNodes(ctx, projectID, nodeID, datatableID)
 	return nil
 }
 
-// grantDatatableToProjectNodes grants the datatable's DomainData to all
-// project nodes other than the owner. Best-effort: already-existing grants
-// are ignored and failures do not fail the association itself.
-func (s *ProjectService) grantDatatableToProjectNodes(ctx context.Context, projectID, ownerNodeID, datatableID string) {
-	if s.kusciaClient == nil {
-		return
-	}
-	nodes, err := s.projectNodeRepo.FindByProjectID(ctx, projectID)
-	if err != nil {
-		return
-	}
-	for _, n := range nodes {
-		if n.NodeID == ownerNodeID {
-			continue
+// datatableColumns loads a datatable's schema from Kuscia (Java openDatatable).
+func (s *ProjectService) datatableColumns(ctx context.Context, nodeID, datatableID string, fallback []TableColumnConfigParam) ([]graphjob.ColumnConfig, string, error) {
+	if s.kuscia == nil {
+		cols := make([]graphjob.ColumnConfig, 0, len(fallback))
+		for _, p := range fallback {
+			cols = append(cols, graphjob.ColumnConfig{ColName: p.ColName})
 		}
-		err := s.kusciaClient.GrantDomainData(ctx, &kuscia.GrantDomainDataRequest{
-			DomainID:     ownerNodeID,
-			DomainDataID: datatableID,
-			GrantDomain:  n.NodeID,
-		})
-		if err != nil && !strings.Contains(err.Error(), "exist") {
-			// Tolerate duplicate-grant errors; log-worthy failures are surfaced
-			// through job errors if the data actually cannot be read.
-			continue
-		}
+		return cols, datatableID, nil
 	}
+	dd, err := s.kuscia.QueryDomainData(ctx, nodeID, datatableID)
+	if err != nil || dd == nil {
+		return nil, "", padErr(errcode.DatatableNotExists)
+	}
+	cols := make([]graphjob.ColumnConfig, 0, len(dd.Data.Columns))
+	for _, c := range dd.Data.Columns {
+		cols = append(cols, graphjob.ColumnConfig{ColName: c.Name, ColType: c.Type, ColComment: c.Comment})
+	}
+	return cols, firstNonEmpty(dd.Data.Name, datatableID), nil
 }
 
-// DeleteDatatable removes a datatable association from a project. It is
-// idempotent: deleting a non-existent association is a no-op success.
-func (s *ProjectService) DeleteDatatable(ctx context.Context, req *ProjDeleteDatatableRequest) error {
-	projectID := firstNonEmpty(req.ProjectID, req.ProjectIDAlt)
-	nodeID := firstNonEmpty(req.NodeID, req.NodeIDAlt)
-	datatableID := firstNonEmpty(req.DatatableID, req.DatatableIDAlt)
-	if projectID == "" || nodeID == "" || datatableID == "" {
+func featureTableColumns(ft *model.FeatureTableDO) []graphjob.ColumnConfig {
+	var cols []map[string]any
+	_ = json.Unmarshal([]byte(ft.Columns), &cols)
+	out := make([]graphjob.ColumnConfig, 0, len(cols))
+	str := func(m map[string]any, keys ...string) string {
+		for _, k := range keys {
+			if v, ok := m[k].(string); ok {
+				return v
+			}
+		}
+		return ""
+	}
+	for _, c := range cols {
+		out = append(out, graphjob.ColumnConfig{
+			ColName:    str(c, "colName", "col_name", "name"),
+			ColType:    str(c, "colType", "col_type", "type"),
+			ColComment: str(c, "colComment", "col_comment", "comment"),
+		})
+	}
+	return out
+}
+
+// AddDatatable mirrors ProjectServiceImpl.addDatatableToProject.
+func (s *ProjectService) AddDatatable(ctx context.Context, req *AddDatatableRequest) error {
+	if req.ProjectID == "" || req.NodeID == "" || req.DatatableID == "" {
 		return ErrProjectDatatableInvalid
 	}
+	project, err := s.openProject(ctx, req.ProjectID)
+	if err != nil {
+		return err
+	}
+	if err := s.requireProjectNode(ctx, req.ProjectID, req.NodeID); err != nil {
+		return err
+	}
+	datasourceID := firstNonEmpty(req.DatasourceID, graphjob.DefaultDataSourceID)
+	if strings.EqualFold(req.Type, "HTTP") {
+		var ft model.FeatureTableDO
+		if err := s.db.WithContext(ctx).Where("node_id = ? AND feature_table_id = ?", req.NodeID, req.DatatableID).First(&ft).Error; err != nil {
+			return padErr(errcode.ProjectFeatureTableNotExists)
+		}
+		cfgs := mergeColumnFlags(featureTableColumns(&ft), req.Configs)
+		return upsertBy(ctx, s.db, &model.ProjectFeatureTableDO{
+			ProjectID: req.ProjectID, NodeID: req.NodeID, FeatureTableID: req.DatatableID,
+			TableConfigs: graphjob.ColumnConfigsJSON(cfgs), Source: "IMPORTED",
+		}, "project_id = ? AND node_id = ? AND feature_table_id = ?", req.ProjectID, req.NodeID, req.DatatableID)
+	}
+	cols, _, err := s.datatableColumns(ctx, req.NodeID, req.DatatableID, req.Configs)
+	if err != nil {
+		return err
+	}
+	var pns []model.ProjectNodeDO
+	s.db.WithContext(ctx).Where("project_id = ?", req.ProjectID).Find(&pns)
+	for _, pn := range pns {
+		if strings.EqualFold(pn.NodeID, req.NodeID) {
+			continue
+		}
+		if err := grantDomainData(ctx, s.kuscia, req.NodeID, pn.NodeID, req.DatatableID); err != nil {
+			return padErr(errcode.DatatableCreateDatatableGrantFailed, err.Error())
+		}
+	}
+	if isTeeComputeMode(project.ComputeMode) {
+		// Java: check routes with the TEE node, push the table when needed and
+		// authorize it to the project (TeeJob kind Auth).
+		if s.teeAuth == nil {
+			return padErr(errcode.DatatableCreateTeeJobFailed, "tee authorizer not configured")
+		}
+		// teeNodeId may be blank: the datatable service falls back to tee.domain-id.
+		if _, err := s.teeAuth.AuthDatatableToTee(ctx, req.ProjectID, req.NodeID, req.DatatableID, req.TeeNodeID, datasourceID); err != nil {
+			return err
+		}
+	}
+	return upsertBy(ctx, s.db, &model.ProjectDatatableDO{
+		ProjectID: req.ProjectID, NodeID: req.NodeID, DatatableID: req.DatatableID,
+		TableConfigs: graphjob.ColumnConfigsJSON(mergeColumnFlags(cols, req.Configs)), Source: "IMPORTED",
+	}, "project_id = ? AND node_id = ? AND datatable_id = ?", req.ProjectID, req.NodeID, req.DatatableID)
+}
 
-	existing, err := s.projectDatatableRepo.FindByProjectNodeDatatable(ctx, projectID, nodeID, datatableID)
-	if err != nil || existing == nil {
+// DeleteDatatable mirrors deleteDatatableToProject (must exist).
+func (s *ProjectService) DeleteDatatable(ctx context.Context, req *ProjDeleteDatatableRequest) error {
+	if req.ProjectID == "" || req.NodeID == "" || req.DatatableID == "" {
+		return ErrProjectDatatableInvalid
+	}
+	if strings.EqualFold(req.Type, "HTTP") {
+		res := s.db.WithContext(ctx).Unscoped().Where("project_id = ? AND node_id = ? AND feature_table_id = ?", req.ProjectID, req.NodeID, req.DatatableID).
+			Delete(&model.ProjectFeatureTableDO{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return padErr(errcode.ProjectFeatureTableNotExists)
+		}
 		return nil
 	}
-	return s.projectDatatableRepo.Delete(ctx, existing.ID)
+	res := s.db.WithContext(ctx).Unscoped().Where("project_id = ? AND node_id = ? AND datatable_id = ?", req.ProjectID, req.NodeID, req.DatatableID).
+		Delete(&model.ProjectDatatableDO{})
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return padErr(errcode.ProjectDatatableNotExists)
+	}
+	return nil
 }
 
-// UpdateTableConfig updates the column configs of a project datatable. If the
-// association does not exist yet it is created (upsert) so config edits are
-// durable even before an explicit add.
+// GetDatatable mirrors getProjectDatatable: the project level column config.
+func (s *ProjectService) GetDatatable(ctx context.Context, req *ProjGetDatatableRequest) (*ProjectDatatableVO, error) {
+	if _, err := s.openProject(ctx, req.ProjectID); err != nil {
+		return nil, err
+	}
+	vo := &ProjectDatatableVO{DatatableID: req.DatatableID, NodeID: req.NodeID, NodeName: nodeName(ctx, s.db, req.NodeID)}
+	if strings.EqualFold(req.Type, "HTTP") {
+		var pft model.ProjectFeatureTableDO
+		if err := s.db.WithContext(ctx).Where("project_id = ? AND node_id = ? AND feature_table_id = ?", req.ProjectID, req.NodeID, req.DatatableID).First(&pft).Error; err != nil {
+			return nil, padErr(errcode.ProjectFeatureTableNotExists)
+		}
+		var ft model.FeatureTableDO
+		if err := s.db.WithContext(ctx).Where("node_id = ? AND feature_table_id = ?", req.NodeID, req.DatatableID).First(&ft).Error; err != nil {
+			return nil, padErr(errcode.ProjectFeatureTableNotExists)
+		}
+		vo.DatatableName = ft.FeatureTableName
+		vo.Configs = configVOs(graphjob.ParseColumnConfigs(pft.TableConfigs))
+		vo.DatatableVO = &DatatableVO{DatatableID: req.DatatableID, DatatableName: ft.FeatureTableName, NodeID: req.NodeID, Type: "HTTP"}
+		return vo, nil
+	}
+	var pd model.ProjectDatatableDO
+	if err := s.db.WithContext(ctx).Where("project_id = ? AND node_id = ? AND datatable_id = ?", req.ProjectID, req.NodeID, req.DatatableID).First(&pd).Error; err != nil {
+		return nil, padErr(errcode.ProjectDatatableNotExists)
+	}
+	cfgs := graphjob.ParseColumnConfigs(pd.TableConfigs)
+	vo.Configs = configVOs(cfgs)
+	vo.DatatableName = req.DatatableID
+	dvo := &DatatableVO{DatatableID: req.DatatableID, DatatableName: req.DatatableID, NodeID: req.NodeID}
+	if s.kuscia != nil {
+		if dd, err := s.kuscia.QueryDomainData(ctx, req.NodeID, req.DatatableID); err == nil && dd != nil {
+			vo.DatatableName = firstNonEmpty(dd.Data.Name, req.DatatableID)
+			dvo.DatatableName = vo.DatatableName
+			dvo.DatasourceID = dd.Data.DatasourceID
+			dvo.RelativeURI = dd.Data.RelativeURI
+			dvo.Type = dd.Data.Type
+		}
+	}
+	vo.DatatableVO = dvo
+	return vo, nil
+}
+
+// UpdateTableConfig mirrors updateProjectTableConfig: the association must
+// exist; columns keep their schema and take the four flags from the request.
 func (s *ProjectService) UpdateTableConfig(ctx context.Context, req *AddDatatableRequest) error {
-	projectID := firstNonEmpty(req.ProjectID, req.ProjectIDAlt)
-	nodeID := firstNonEmpty(req.NodeID, req.NodeIDAlt)
-	datatableID := firstNonEmpty(req.DatatableID, req.DatatableIDAlt)
-	if projectID == "" || nodeID == "" || datatableID == "" {
+	if req.ProjectID == "" || req.DatatableID == "" {
 		return ErrProjectDatatableInvalid
 	}
-
-	existing, err := s.projectDatatableRepo.FindByProjectNodeDatatable(ctx, projectID, nodeID, datatableID)
-	if err != nil || existing == nil {
-		return s.AddDatatable(ctx, req)
+	if strings.EqualFold(req.Type, "HTTP") {
+		var pft model.ProjectFeatureTableDO
+		if err := s.db.WithContext(ctx).Where("project_id = ? AND node_id = ? AND feature_table_id = ?", req.ProjectID, req.NodeID, req.DatatableID).First(&pft).Error; err != nil {
+			return padErr(errcode.ProjectFeatureTableNotExists)
+		}
+		pft.TableConfigs = graphjob.ColumnConfigsJSON(mergeColumnFlags(graphjob.ParseColumnConfigs(pft.TableConfigs), req.Configs))
+		return s.db.WithContext(ctx).Save(&pft).Error
 	}
-	if len(req.Configs) > 0 {
-		existing.TableConfigs = string(req.Configs)
+	q := s.db.WithContext(ctx).Where("project_id = ? AND datatable_id = ?", req.ProjectID, req.DatatableID)
+	if req.NodeID != "" {
+		q = q.Where("node_id = ?", req.NodeID)
 	}
-	return s.projectDatatableRepo.Update(ctx, existing)
+	var pd model.ProjectDatatableDO
+	if err := q.Order("id ASC").First(&pd).Error; err != nil {
+		return padErr(errcode.ProjectDatatableNotExists)
+	}
+	pd.TableConfigs = graphjob.ColumnConfigsJSON(mergeColumnFlags(graphjob.ParseColumnConfigs(pd.TableConfigs), req.Configs))
+	return s.db.WithContext(ctx).Save(&pd).Error
 }
 
 // --- Project Datasource aggregation ---
 
-// ProjectDataSourceItem is a single datasource available on a project node
-// (frontend DataSource contract: dataSourceId/dataSourceName/nodeId/type).
-type ProjectDataSourceItem struct {
-	DataSourceID   string `json:"dataSourceId"`
-	DataSourceName string `json:"dataSourceName"`
-	NodeID         string `json:"nodeId"`
-	Type           string `json:"type"`
-}
-
-// ProjectDatasourceNodeVO groups a project node with its available datasources
-// (frontend ProjectGraphDomainDataSourceVO contract).
+// ProjectDatasourceNodeVO mirrors Java ProjectGraphDomainDataSourceVO.
 type ProjectDatasourceNodeVO struct {
 	NodeID      string                  `json:"nodeId"`
 	NodeName    string                  `json:"nodeName"`
 	DataSources []ProjectDataSourceItem `json:"dataSources"`
 }
 
-// ListProjectDatasources aggregates the datasources available on each node of a
-// project. For every project node it resolves the node name and the datasources
-// bound to that node (via datasource_node), returning a per-node grouping that
-// matches the frontend project/datasource/list contract. Degrades gracefully to
-// an empty list when the project has no nodes or a lookup fails.
+// ListProjectDatasources mirrors getProjectGraphDomainDataSource: for each
+// node the operator controls, the Kuscia datasources (TEE: LOCAL only).
 func (s *ProjectService) ListProjectDatasources(ctx context.Context, projectID string) ([]ProjectDatasourceNodeVO, error) {
-	result := make([]ProjectDatasourceNodeVO, 0)
-
-	pnodes, err := s.projectNodeRepo.FindByProjectID(ctx, projectID)
-	if err != nil {
-		return result, nil
+	if _, err := s.openProject(ctx, projectID); err != nil {
+		return nil, err
 	}
-
-	for _, pn := range pnodes {
-		nodeName := ""
-		var node model.NodeDO
-		if err := s.db.WithContext(ctx).Where("node_id = ?", pn.NodeID).First(&node).Error; err == nil {
-			nodeName = node.Name
+	nodes := controlNodeIDs(ctx, s.db, projectID)
+	sort.Strings(nodes)
+	out := make([]ProjectDatasourceNodeVO, 0, len(nodes))
+	for _, n := range nodes {
+		items, err := domainDataSources(ctx, s.db, s.kuscia, projectID, n)
+		if err != nil {
+			items = []ProjectDataSourceItem{}
 		}
-
-		items := make([]ProjectDataSourceItem, 0)
-		var dsNodes []model.DatasourceNodeDO
-		if err := s.db.WithContext(ctx).Where("node_id = ?", pn.NodeID).Find(&dsNodes).Error; err == nil {
-			for _, dsn := range dsNodes {
-				var ds model.DatasourceDO
-				if err := s.db.WithContext(ctx).Where("datasource_id = ?", dsn.DatasourceID).First(&ds).Error; err == nil {
-					items = append(items, ProjectDataSourceItem{
-						DataSourceID:   ds.DatasourceID,
-						DataSourceName: ds.Name,
-						NodeID:         pn.NodeID,
-						Type:           ds.Type,
-					})
-				}
-			}
-		}
-
-		result = append(result, ProjectDatasourceNodeVO{
-			NodeID:      pn.NodeID,
-			NodeName:    nodeName,
-			DataSources: items,
-		})
+		out = append(out, ProjectDatasourceNodeVO{NodeID: n, NodeName: nodeName(ctx, s.db, n), DataSources: items})
 	}
-
-	return result, nil
+	return out, nil
 }
 
-// ProjectGraphOutputVO lists a graph node's declared output tables (frontend contract).
+// ProjectGraphOutputVO lists a graph node's declared output tables.
 type ProjectGraphOutputVO struct {
 	GraphID     string   `json:"graphId"`
 	GraphNodeID string   `json:"graphNodeId"`
+	CodeName    string   `json:"codeName,omitempty"`
+	Label       string   `json:"label,omitempty"`
 	Outputs     []string `json:"outputs"`
 }
 
-// ProjectOutputVO aggregates project metadata with its graph-node output tables (frontend contract).
+// ProjectOutputVO mirrors Java ProjectOutputVO.
 type ProjectOutputVO struct {
 	ProjectID   string                 `json:"projectId"`
 	ProjectName string                 `json:"projectName"`
@@ -540,45 +746,31 @@ type ProjectOutputVO struct {
 	Nodes       []ProjectGraphOutputVO `json:"nodes"`
 }
 
-// GetProjectOutTable returns a project's output tables for the frontend
-// project/getOutTable endpoint. It aggregates project metadata, graph/job
-// counts and each graph node's declared output tables (parsed from the graph
-// node Outputs JSON, the same source used by the node-output fallback). When
-// graphID is non-empty, only that graph's nodes are included.
+// GetProjectOutTable mirrors getProjectAllOutTable.
 func (s *ProjectService) GetProjectOutTable(ctx context.Context, projectID, graphID string) (*ProjectOutputVO, error) {
-	vo := &ProjectOutputVO{ProjectID: projectID, Nodes: make([]ProjectGraphOutputVO, 0)}
-
-	if project, err := s.projectRepo.FindByProjectID(ctx, projectID); err == nil {
-		vo.ProjectName = project.Name
-		vo.Description = project.Description
-		vo.ComputeMode = project.ComputeMode
-		vo.GmtCreate = project.GmtCreate.Format("2006-01-02 15:04:05")
+	project, err := s.openProject(ctx, projectID)
+	if err != nil {
+		return nil, err
 	}
-
-	_ = s.db.WithContext(ctx).Model(&model.ProjectGraphDO{}).Where("project_id = ?", projectID).Count(&vo.GraphCount).Error
-	_ = s.db.WithContext(ctx).Model(&model.ProjectJobDO{}).Where("project_id = ?", projectID).Count(&vo.JobCount).Error
-
-	nodeQuery := s.db.WithContext(ctx).Where("project_id = ?", projectID)
+	vo := &ProjectOutputVO{
+		ProjectID: projectID, ProjectName: project.Name, Description: project.Description,
+		ComputeMode: normalizeComputeMode(project.ComputeMode), GmtCreate: rfc3339(project.GmtCreate),
+		Nodes: make([]ProjectGraphOutputVO, 0),
+	}
+	s.db.WithContext(ctx).Model(&model.ProjectGraphDO{}).Where("project_id = ?", projectID).Count(&vo.GraphCount)
+	s.db.WithContext(ctx).Model(&model.ProjectJobDO{}).Where("project_id = ?", projectID).Count(&vo.JobCount)
+	q := s.db.WithContext(ctx).Where("project_id = ?", projectID)
 	if graphID != "" {
-		nodeQuery = nodeQuery.Where("graph_id = ?", graphID)
+		q = q.Where("graph_id = ?", graphID)
 	}
-	var graphNodes []model.ProjectGraphNodeDO
-	if err := nodeQuery.Find(&graphNodes).Error; err == nil {
-		for _, gn := range graphNodes {
-			var outNames []string
-			if gn.Outputs != "" {
-				_ = json.Unmarshal([]byte(gn.Outputs), &outNames)
-			}
-			if len(outNames) == 0 {
-				continue
-			}
-			vo.Nodes = append(vo.Nodes, ProjectGraphOutputVO{
-				GraphID:     gn.GraphID,
-				GraphNodeID: gn.GraphNodeID,
-				Outputs:     outNames,
-			})
+	var nodes []model.ProjectGraphNodeDO
+	q.Order("id ASC").Find(&nodes)
+	for _, gn := range nodes {
+		outs := splitOutputs(gn.Outputs)
+		if len(outs) == 0 {
+			continue
 		}
+		vo.Nodes = append(vo.Nodes, ProjectGraphOutputVO{GraphID: gn.GraphID, GraphNodeID: gn.GraphNodeID, CodeName: gn.CodeName, Label: gn.Label, Outputs: outs})
 	}
-
 	return vo, nil
 }

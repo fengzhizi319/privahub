@@ -30,6 +30,9 @@ type ProjectGraphDomainDatasourceDO struct {
 	GraphID      string `gorm:"uniqueIndex:upk_project_graph_domain_datasource;type:varchar(64);not null" json:"graph_id"`
 	DomainID     string `gorm:"uniqueIndex:upk_project_graph_domain_datasource;type:varchar(64);not null" json:"domain_id"`
 	DatasourceID string `gorm:"type:varchar(64);not null" json:"datasource_id"`
+	// DatasourceName / EditEnable mirror Java ProjectGraphDomainDatasourceDO.
+	DatasourceName string `gorm:"type:varchar(256)" json:"datasource_name"`
+	EditEnable     *bool  `gorm:"default:true" json:"edit_enable"`
 }
 
 func (ProjectGraphDomainDatasourceDO) TableName() string { return "project_graph_domain_datasource" }

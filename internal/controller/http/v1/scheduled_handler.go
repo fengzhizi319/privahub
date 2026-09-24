@@ -1,13 +1,15 @@
 package v1
 
 import (
+	"errors"
+
 	"github.com/fengzhizi319/privahub/internal/service"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/response"
 	"github.com/gin-gonic/gin"
 )
 
-// ScheduledHandler handles scheduled task HTTP requests.
+// ScheduledHandler serves /api/v1alpha1/scheduled/* (Java ScheduledController).
 type ScheduledHandler struct {
 	scheduledService *service.ScheduledService
 }
@@ -17,289 +19,206 @@ func NewScheduledHandler(scheduledService *service.ScheduledService) *ScheduledH
 	return &ScheduledHandler{scheduledService: scheduledService}
 }
 
-// Create handles scheduled task creation.
-func (h *ScheduledHandler) Create(c *gin.Context) {
-	var req service.CreateScheduledRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	vo, err := h.scheduledService.Create(c.Request.Context(), &req)
-	if err != nil {
-		if err == service.ErrInvalidCron {
-			response.FailWithMsg(c, errcode.ParamError, "invalid cron expression")
-			return
+// failScheduled maps service errors to Java-compatible error responses.
+func failScheduled(c *gin.Context, err error) {
+	var se *service.ScheduledError
+	if errors.As(err, &se) {
+		switch {
+		case se.Msg == "":
+			response.Fail(c, se.Code)
+		case se.Code.HasPlaceholder():
+			response.FailArgs(c, se.Code, se.Msg)
+		default:
+			response.FailWithMsg(c, se.Code, response.Message(c, se.Code)+": "+se.Msg)
 		}
-		response.Fail(c, errcode.SystemError)
 		return
 	}
-
-	response.OK(c, vo)
+	response.FailWithMsg(c, errcode.SystemError, err.Error())
 }
 
-// List handles scheduled task list retrieval.
-func (h *ScheduledHandler) List(c *gin.Context) {
-	var req struct {
-		ProjectID string `json:"project_id"`
+func bindScheduled(c *gin.Context, req any) bool {
+	if err := c.ShouldBindJSON(req); err != nil {
+		response.FailWithMsg(c, errcode.ParamError, err.Error())
+		return false
 	}
-	_ = c.ShouldBindJSON(&req)
-
-	tasks, err := h.scheduledService.List(c.Request.Context(), req.ProjectID)
-	if err != nil {
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OK(c, gin.H{"list": tasks})
+	return true
 }
 
-// Delete handles scheduled task deletion.
-func (h *ScheduledHandler) Delete(c *gin.Context) {
-	var req struct {
-		ScheduleTaskID string `json:"schedule_task_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	if err := h.scheduledService.Delete(c.Request.Context(), req.ScheduleTaskID); err != nil {
-		if err == service.ErrScheduledNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
+func requireFields(c *gin.Context, fields map[string]string) bool {
+	for name, v := range fields {
+		if v == "" {
+			response.FailWithMsg(c, errcode.ParamError, name+" must not be blank")
+			return false
 		}
-		response.Fail(c, errcode.SystemError)
-		return
 	}
-
-	response.OKEmpty(c)
+	return true
 }
 
-// Pause handles scheduled task pause.
-func (h *ScheduledHandler) Pause(c *gin.Context) {
-	var req struct {
-		ScheduleTaskID string `json:"schedule_task_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	if err := h.scheduledService.Pause(c.Request.Context(), req.ScheduleTaskID); err != nil {
-		if err == service.ErrScheduledNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
-		}
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OKEmpty(c)
-}
-
-// Resume handles scheduled task resume.
-func (h *ScheduledHandler) Resume(c *gin.Context) {
-	var req struct {
-		ScheduleTaskID string `json:"schedule_task_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	if err := h.scheduledService.Resume(c.Request.Context(), req.ScheduleTaskID); err != nil {
-		if err == service.ErrScheduledNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
-		}
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OKEmpty(c)
-}
-
-// Offline handles scheduled task offline.
-func (h *ScheduledHandler) Offline(c *gin.Context) {
-	var req struct {
-		ScheduleTaskID string `json:"schedule_task_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	if err := h.scheduledService.Offline(c.Request.Context(), req.ScheduleTaskID); err != nil {
-		if err == service.ErrScheduledNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
-		}
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OKEmpty(c)
-}
-
-// GraphCreate handles scheduled graph creation (frontend contract).
-func (h *ScheduledHandler) GraphCreate(c *gin.Context) {
-	var req service.ScheduledGraphCreateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	if err := h.scheduledService.CreateScheduledGraph(c.Request.Context(), &req); err != nil {
-		if err == service.ErrInvalidCron {
-			response.FailWithMsg(c, errcode.ParamError, "invalid cron config")
-			return
-		}
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OKEmpty(c)
-}
-
-// GetID handles schedule id retrieval.
+// GetID handles POST /scheduled/id: generates a new schedule id.
 func (h *ScheduledHandler) GetID(c *gin.Context) {
 	var req service.ScheduledIdRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+	if !bindScheduled(c, &req) || !requireFields(c, map[string]string{"projectId": req.ProjectID, "graphId": req.GraphID}) {
 		return
 	}
-
-	id, err := h.scheduledService.GetScheduledID(c.Request.Context(), &req)
+	id, err := h.scheduledService.BuildSchedulerID(c.Request.Context(), &req)
 	if err != nil {
-		response.Fail(c, errcode.SystemError)
+		failScheduled(c, err)
 		return
 	}
-
 	response.OK(c, id)
 }
 
-// Info handles schedule info retrieval.
-func (h *ScheduledHandler) Info(c *gin.Context) {
-	var req service.ScheduledInfoRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	vo, err := h.scheduledService.GetScheduledInfo(c.Request.Context(), &req)
-	if err != nil {
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OK(c, vo)
-}
-
-// TaskPage handles scheduled task page retrieval.
-func (h *ScheduledHandler) TaskPage(c *gin.Context) {
-	var req service.TaskPageScheduledRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	list, err := h.scheduledService.GetScheduledTaskPage(c.Request.Context(), &req)
-	if err != nil {
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OK(c, gin.H{"list": list})
-}
-
-// TaskReRun handles scheduled task rerun.
-func (h *ScheduledHandler) TaskReRun(c *gin.Context) {
-	var req service.TaskReRunScheduledRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	if err := h.scheduledService.ReRunScheduledTask(c.Request.Context(), &req); err != nil {
-		if err == service.ErrScheduledNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
-		}
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OKEmpty(c)
-}
-
-// TaskStop handles scheduled task stop.
-func (h *ScheduledHandler) TaskStop(c *gin.Context) {
-	var req service.TaskStopScheduledRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	if err := h.scheduledService.StopScheduledTask(c.Request.Context(), &req); err != nil {
-		if err == service.ErrScheduledNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
-		}
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OKEmpty(c)
-}
-
-// OnceSuccess handles once-success query.
+// OnceSuccess handles POST /scheduled/graph/once/success.
 func (h *ScheduledHandler) OnceSuccess(c *gin.Context) {
 	var req service.ScheduledGraphOnceSuccessRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+	if !bindScheduled(c, &req) || !requireFields(c, map[string]string{"projectId": req.ProjectID, "graphId": req.GraphID}) {
 		return
 	}
-
-	ok, err := h.scheduledService.GetScheduledOnceSuccess(c.Request.Context(), &req)
+	ok, err := h.scheduledService.OnceSuccess(c.Request.Context(), &req)
 	if err != nil {
-		response.Fail(c, errcode.SystemError)
+		failScheduled(c, err)
 		return
 	}
-
 	response.OK(c, ok)
 }
 
-// JobList handles scheduled job list retrieval.
-func (h *ScheduledHandler) JobList(c *gin.Context) {
-	var req service.ScheduleListProjectJobRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+// GraphCreate handles POST /scheduled/graph/create.
+func (h *ScheduledHandler) GraphCreate(c *gin.Context) {
+	var req service.ScheduledGraphCreateRequest
+	if !bindScheduled(c, &req) || !requireFields(c, map[string]string{"projectId": req.ProjectID, "graphId": req.GraphID}) {
 		return
 	}
-
-	jobs, err := h.scheduledService.GetScheduledJobs(c.Request.Context(), &req)
-	if err != nil {
-		response.Fail(c, errcode.SystemError)
+	if err := h.scheduledService.CreateScheduler(c.Request.Context(), &req); err != nil {
+		failScheduled(c, err)
 		return
 	}
-
-	response.OK(c, gin.H{"list": jobs})
+	response.OKEmpty(c)
 }
 
-// TaskInfo handles scheduled task info retrieval.
+// Page handles POST /scheduled/page.
+func (h *ScheduledHandler) Page(c *gin.Context) {
+	var req service.PageScheduledRequest
+	if !bindScheduled(c, &req) || !requireFields(c, map[string]string{"projectId": req.ProjectID}) {
+		return
+	}
+	page, err := h.scheduledService.QueryPage(c.Request.Context(), &req)
+	if err != nil {
+		failScheduled(c, err)
+		return
+	}
+	response.OK(c, page)
+}
+
+// Offline handles POST /scheduled/offline.
+func (h *ScheduledHandler) Offline(c *gin.Context) {
+	var req service.ScheduledOfflineRequest
+	if !bindScheduled(c, &req) || !requireFields(c, map[string]string{"scheduleId": req.ScheduleID}) {
+		return
+	}
+	if err := h.scheduledService.Offline(c.Request.Context(), &req); err != nil {
+		failScheduled(c, err)
+		return
+	}
+	response.OKEmpty(c)
+}
+
+// Del handles POST /scheduled/del.
+func (h *ScheduledHandler) Del(c *gin.Context) {
+	var req service.ScheduledDelRequest
+	if !bindScheduled(c, &req) || !requireFields(c, map[string]string{"scheduleId": req.ScheduleID}) {
+		return
+	}
+	if err := h.scheduledService.Del(c.Request.Context(), &req); err != nil {
+		failScheduled(c, err)
+		return
+	}
+	response.OKEmpty(c)
+}
+
+// Info handles POST /scheduled/info.
+func (h *ScheduledHandler) Info(c *gin.Context) {
+	var req service.ScheduledInfoRequest
+	if !bindScheduled(c, &req) || !requireFields(c, map[string]string{"scheduleId": req.ScheduleID}) {
+		return
+	}
+	vo, err := h.scheduledService.Info(c.Request.Context(), &req)
+	if err != nil {
+		failScheduled(c, err)
+		return
+	}
+	response.OK(c, vo)
+}
+
+// TaskPage handles POST /scheduled/task/page.
+func (h *ScheduledHandler) TaskPage(c *gin.Context) {
+	var req service.TaskPageScheduledRequest
+	if !bindScheduled(c, &req) {
+		return
+	}
+	page, err := h.scheduledService.TaskPage(c.Request.Context(), &req)
+	if err != nil {
+		failScheduled(c, err)
+		return
+	}
+	response.OK(c, page)
+}
+
+// TaskStop handles POST /scheduled/task/stop.
+func (h *ScheduledHandler) TaskStop(c *gin.Context) {
+	var req service.TaskStopScheduledRequest
+	if !bindScheduled(c, &req) || !requireFields(c, map[string]string{"scheduleId": req.ScheduleID, "scheduleTaskId": req.ScheduleTaskID}) {
+		return
+	}
+	if err := h.scheduledService.TaskStop(c.Request.Context(), &req); err != nil {
+		failScheduled(c, err)
+		return
+	}
+	response.OKEmpty(c)
+}
+
+// TaskReRun handles POST /scheduled/task/rerun.
+func (h *ScheduledHandler) TaskReRun(c *gin.Context) {
+	var req service.TaskReRunScheduledRequest
+	if !bindScheduled(c, &req) || !requireFields(c, map[string]string{"scheduleId": req.ScheduleID, "scheduleTaskId": req.ScheduleTaskID}) {
+		return
+	}
+	if req.Type != "" && req.Type != service.ScheduledRestartTypeAll && req.Type != service.ScheduledRestartTypeFailed {
+		response.FailWithMsg(c, errcode.ParamError, "type must be one of 0, 1")
+		return
+	}
+	if err := h.scheduledService.TaskRerun(c.Request.Context(), &req); err != nil {
+		failScheduled(c, err)
+		return
+	}
+	response.OKEmpty(c)
+}
+
+// TaskInfo handles POST /scheduled/task/info.
 func (h *ScheduledHandler) TaskInfo(c *gin.Context) {
 	var req service.TaskInfoScheduledRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+	if !bindScheduled(c, &req) || !requireFields(c, map[string]string{"scheduleId": req.ScheduleID, "scheduleTaskId": req.ScheduleTaskID}) {
 		return
 	}
-
-	vo, err := h.scheduledService.GetScheduledTaskInfo(c.Request.Context(), &req)
+	vo, err := h.scheduledService.TaskInfo(c.Request.Context(), &req)
 	if err != nil {
-		response.Fail(c, errcode.SystemError)
+		failScheduled(c, err)
 		return
 	}
-
 	response.OK(c, vo)
+}
+
+// JobList handles POST /scheduled/job/list. Java requires scheduleTaskId (one
+// run); Go also accepts it blank to list the jobs of every run of the
+// schedule's graph (the periodic-task detail page of the whole schedule).
+func (h *ScheduledHandler) JobList(c *gin.Context) {
+	var req service.ScheduleListProjectJobRequest
+	if !bindScheduled(c, &req) || !requireFields(c, map[string]string{"projectId": req.ProjectID, "graphId": req.GraphID}) {
+		return
+	}
+	page, err := h.scheduledService.ListProjectJob(c.Request.Context(), &req)
+	if err != nil {
+		failScheduled(c, err)
+		return
+	}
+	response.OK(c, page)
 }

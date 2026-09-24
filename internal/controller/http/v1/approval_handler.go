@@ -3,119 +3,82 @@ package v1
 import (
 	"strings"
 
-	"github.com/fengzhizi319/privahub/internal/dao/model"
+	"github.com/fengzhizi319/privahub/internal/controller/http/middleware"
+	"github.com/fengzhizi319/privahub/internal/service/votehandler"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/response"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
-// ApprovalHandler handles approval HTTP requests.
+// ApprovalHandler is Java ApprovalController (/api/v1alpha1/approval/*).
 type ApprovalHandler struct {
-	db *gorm.DB
+	svc *votehandler.Service
 }
 
 // NewApprovalHandler creates a new ApprovalHandler.
-func NewApprovalHandler(db *gorm.DB) *ApprovalHandler {
-	return &ApprovalHandler{db: db}
+func NewApprovalHandler(svc *votehandler.Service) *ApprovalHandler {
+	return &ApprovalHandler{svc: svc}
 }
 
-// Create handles approval creation.
+// Create is POST approval/create {initiatorId, voteType, voteConfig}
+// (@DataResource initiatorId NODE_ID). Data is empty like Java; the new vote
+// id is returned as a Go extension field.
 func (h *ApprovalHandler) Create(c *gin.Context) {
 	var req struct {
-		Initiator   string   `json:"initiator" binding:"required"`
-		Voters      []string `json:"voters" binding:"required"`
-		Type        string   `json:"type" binding:"required"`
-		Description string   `json:"description"`
+		InitiatorID string                  `json:"initiatorId"`
+		VoteType    string                  `json:"voteType"`
+		VoteConfig  *votehandler.VoteConfig `json:"voteConfig"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+		response.FailWithMsg(c, errcode.SystemValidationError, "invalid request body")
 		return
 	}
-
-	voteID := uuid.New().String()[:8]
-	vote := &model.VoteRequestDO{
-		VoteID:            voteID,
-		Initiator:         req.Initiator,
-		Voters:            strings.Join(req.Voters, ","),
-		Type:              req.Type,
-		VoteCounter:       req.Initiator,
-		Executors:         strings.Join(req.Voters, ","),
-		ApprovedThreshold: len(req.Voters),
-		Status:            0, // 0 = PENDING
-		ExecuteStatus:     "COMMITTED",
-		Description:       req.Description,
+	// Java CreateApprovalRequest: @NotBlank initiatorId, @OneOfType voteType
+	// and the @Valid per-type voteConfig.
+	msg := ""
+	if strings.TrimSpace(req.InitiatorID) == "" {
+		msg = "initiatorId must not be blank"
+	} else if msg = votehandler.ValidateVoteType(req.VoteType); msg == "" {
+		msg = votehandler.ValidateVoteConfig(req.VoteType, req.VoteConfig)
 	}
-
-	// Create vote and invites atomically in a transaction.
-	if err := h.db.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(vote).Error; err != nil {
-			return err
-		}
-		for _, voter := range req.Voters {
-			invite := &model.VoteInviteDO{
-				VoteID:            voteID,
-				Initiator:         req.Initiator,
-				VoteParticipantID: voter,
-				Type:              req.Type,
-				Action:            "REVIEWING",
-				Description:       req.Description,
-			}
-			if err := tx.Create(invite).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		response.Fail(c, errcode.SystemError)
+	if msg != "" {
+		response.FailWithMsg(c, errcode.SystemValidationError, msg)
 		return
 	}
-
-	response.OK(c, gin.H{"vote_id": voteID})
+	if !middleware.RequireNodeAccess(c, req.InitiatorID) {
+		return
+	}
+	voteID, err := h.svc.CreateApproval(nodeReqCtx(c), req.InitiatorID, req.VoteType, req.VoteConfig)
+	if err != nil {
+		failNodeErr(c, err)
+		return
+	}
+	response.OK(c, gin.H{"voteId": voteID})
 }
 
-// PullStatus handles approval status polling.
+// PullStatus is POST approval/pull/status {projectID, jobID, taskID?, resourceID, resourceType}.
+// Java PullStatusRequest also requires taskID; Go resolves an empty taskID
+// from the project result (the result list rows carry no task id).
 func (h *ApprovalHandler) PullStatus(c *gin.Context) {
 	var req struct {
-		VoteID string `json:"vote_id" binding:"required"`
+		ProjectID    string `json:"projectID"`
+		JobID        string `json:"jobID"`
+		TaskID       string `json:"taskID"`
+		ResourceType string `json:"resourceType"`
+		ResourceID   string `json:"resourceID"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+		response.FailWithMsg(c, errcode.SystemValidationError, "invalid request body")
 		return
 	}
-
-	var vote model.VoteRequestDO
-	if err := h.db.WithContext(c.Request.Context()).Where("vote_id = ?", req.VoteID).First(&vote).Error; err != nil {
-		response.Fail(c, errcode.NotFound)
+	if msg := votehandler.ValidatePullStatus(req.ProjectID, req.JobID, req.ResourceID, req.ResourceType); msg != "" {
+		response.FailWithMsg(c, errcode.SystemValidationError, msg)
 		return
 	}
-
-	var invites []model.VoteInviteDO
-	// Bug65 fix: check the DB error instead of silently ignoring it.
-	if err := h.db.WithContext(c.Request.Context()).Where("vote_id = ?", req.VoteID).Find(&invites).Error; err != nil {
-		response.Fail(c, errcode.SystemError)
+	vo, err := h.svc.PullStatus(nodeReqCtx(c), req.ProjectID, req.JobID, req.TaskID, req.ResourceID, req.ResourceType)
+	if err != nil {
+		failNodeErr(c, err)
 		return
 	}
-
-	inviteVOs := make([]gin.H, 0, len(invites))
-	for _, inv := range invites {
-		inviteVOs = append(inviteVOs, gin.H{
-			"voter":  inv.VoteParticipantID,
-			"action": inv.Action,
-		})
-	}
-
-	statusStr := "PENDING"
-	if vote.Status == 1 {
-		statusStr = "APPROVED"
-	} else if vote.Status == 2 {
-		statusStr = "REJECTED"
-	}
-
-	response.OK(c, gin.H{
-		"vote_id": vote.VoteID,
-		"status":  statusStr,
-		"invites": inviteVOs,
-	})
+	response.OK(c, vo)
 }

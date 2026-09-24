@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"go.uber.org/zap"
@@ -48,6 +49,7 @@ func AllModels() []interface{} {
 		&model.ProjectModelDO{},
 		&model.ProjectModelPackDO{},
 		&model.ProjectModelServingDO{},
+		&model.ProjectModelExportDO{},
 
 		// User/Auth
 		&model.UserAccountsDO{},
@@ -72,6 +74,8 @@ func AllModels() []interface{} {
 		&model.ProjectResultDO{},
 		&model.EdgeDataSyncLogDO{},
 		&model.ProjectScheduleTaskDO{},
+		&model.ProjectScheduleDO{},
+		&model.ProjectScheduleJobDO{},
 		&model.CertificateDO{},
 	}
 }
@@ -82,32 +86,56 @@ func AutoMigrate(db *gorm.DB, log *zap.Logger) error {
 	if err := db.AutoMigrate(AllModels()...); err != nil {
 		return err
 	}
+	if err := MigrateScheduledData(db); err != nil {
+		return err
+	}
+	if err := MigrateJobStatusData(db); err != nil {
+		return err
+	}
 	log.Info("Database auto-migration completed")
 	return nil
 }
 
-// SeedData initializes default data if not exists.
+// SeedData initializes default data if not exists, using development seed
+// options (admin/12345678). Production startup uses SeedDataWithOptions.
 func SeedData(ctx context.Context, db *gorm.DB, log *zap.Logger) error {
+	return SeedDataWithOptions(ctx, db, log, DevSeedOptions())
+}
+
+// SeedDataWithOptions initializes default data if not exists.
+func SeedDataWithOptions(ctx context.Context, db *gorm.DB, log *zap.Logger, opts SeedOptions) error {
 	log.Info("Seeding initial data...")
+	// The embedded alice/bob nodes, routes and demo data only exist on a
+	// CENTER platform (Java center flyway schema); EDGE/AUTONOMY initialize
+	// their own node in internal/bootstrap. The TEE node/routes are created
+	// by bootstrap.TeeResourceInit (CENTER, deploy mode ALL-IN-ONE/TEE).
+	center := isCenterSeed(opts.PlatformType)
 
-	// Seed default institutions
-	if err := seedInstitutions(ctx, db); err != nil {
-		return err
-	}
+	if center {
+		// Seed default institutions
+		if err := seedInstitutions(ctx, db); err != nil {
+			return err
+		}
 
-	// Seed default nodes
-	if err := seedNodes(ctx, db); err != nil {
-		return err
+		// Seed default nodes
+		if err := seedNodes(ctx, db); err != nil {
+			return err
+		}
 	}
 
 	// Seed default admin user
-	if err := seedAdminUser(ctx, db); err != nil {
+	if err := seedAdminUser(ctx, db, log, opts); err != nil {
 		return err
 	}
 
 	// Seed default roles and resources
-	if err := seedRBAC(ctx, db); err != nil {
+	if err := seedRBAC(ctx, db, opts); err != nil {
 		return err
+	}
+
+	if !center {
+		log.Info("Initial data seeding completed", zap.String("platform", opts.PlatformType))
+		return nil
 	}
 
 	// Seed default datasources
@@ -217,83 +245,7 @@ func seedNodes(ctx context.Context, db *gorm.DB) error {
 	return nil
 }
 
-func seedAdminUser(ctx context.Context, db *gorm.DB) error {
-	var count int64
-	// Bug72 fix: check error on Count query.
-	if err := db.WithContext(ctx).Model(&model.UserAccountsDO{}).Where("name = ?", "admin").Count(&count).Error; err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil
-	}
-
-	// Default password: 12345678 (SHA-256 hash)
-	passwordHash := hashPassword("12345678")
-
-	admin := &model.UserAccountsDO{
-		Name:         "admin",
-		PasswordHash: passwordHash,
-		OwnerType:    "CENTER",
-		OwnerID:      "kuscia-system",
-	}
-
-	return db.WithContext(ctx).Create(admin).Error
-}
-
-func seedRBAC(ctx context.Context, db *gorm.DB) error {
-	// Seed default role
-	var roleCount int64
-	// Bug72 fix: check error on Count query.
-	if err := db.WithContext(ctx).Model(&model.SysRoleDO{}).Where("role_code = ?", "ADMIN").Count(&roleCount).Error; err != nil {
-		return err
-	}
-	if roleCount == 0 {
-		role := &model.SysRoleDO{
-			RoleCode: "ADMIN",
-			RoleName: "Administrator",
-		}
-		if err := db.WithContext(ctx).Create(role).Error; err != nil {
-			return err
-		}
-	}
-
-	// Seed ALL_INTERFACE_RESOURCE
-	var resCount int64
-	// Bug72 fix: check error on Count query.
-	if err := db.WithContext(ctx).Model(&model.SysResourceDO{}).Where("resource_code = ?", "ALL_INTERFACE_RESOURCE").Count(&resCount).Error; err != nil {
-		return err
-	}
-	if resCount == 0 {
-		resource := &model.SysResourceDO{
-			ResourceType: "API",
-			ResourceCode: "ALL_INTERFACE_RESOURCE",
-			ResourceName: "ALL_INTERFACE_RESOURCE",
-		}
-		if err := db.WithContext(ctx).Create(resource).Error; err != nil {
-			return err
-		}
-	}
-
-	// Assign admin role to admin user
-	var permCount int64
-	// Bug72 fix: check error on Count query.
-	if err := db.WithContext(ctx).Model(&model.SysUserPermissionRelDO{}).Where("user_key = ? AND target_code = ?", "admin", "ADMIN").Count(&permCount).Error; err != nil {
-		return err
-	}
-	if permCount == 0 {
-		perm := &model.SysUserPermissionRelDO{
-			UserType:   "USER",
-			UserKey:    "admin",
-			TargetType: "ROLE",
-			TargetCode: "ADMIN",
-		}
-		if err := db.WithContext(ctx).Create(perm).Error; err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
+// seedAdminUser and seedRBAC live in auth_seed.go.
 
 func hashPassword(password string) string {
 	hash := sha256.Sum256([]byte(password))
@@ -461,4 +413,14 @@ func seedGraphs(ctx context.Context, db *gorm.DB) error {
 		}
 	}
 	return nil
+}
+
+// isCenterSeed reports whether the demo (alice/bob) seed applies: CENTER,
+// TEST or unset platform.
+func isCenterSeed(platform string) bool {
+	switch strings.ToUpper(strings.TrimSpace(platform)) {
+	case "", "CENTER", "MASTER", "TEST":
+		return true
+	}
+	return false
 }

@@ -88,8 +88,24 @@ func TestFail(t *testing.T) {
 	if body.Status.Code != errcode.ParamError.Code {
 		t.Errorf("expected code %d, got %d", errcode.ParamError.Code, body.Status.Code)
 	}
-	if body.Status.Msg != errcode.ParamError.Message {
-		t.Errorf("expected msg %q, got %q", errcode.ParamError.Message, body.Status.Msg)
+	// No Accept-Language -> Java default locale (zh_CN), placeholder dropped.
+	if body.Status.Msg != "入参校验失败" {
+		t.Errorf("expected localized zh msg, got %q", body.Status.Msg)
+	}
+}
+
+func TestFail_AcceptLanguageEN(t *testing.T) {
+	r := setupRouter(func(c *gin.Context) {
+		FailArgs(c, errcode.ParamError, "name")
+	})
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/test", nil)
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	r.ServeHTTP(w, req)
+	var body Body
+	json.Unmarshal(w.Body.Bytes(), &body)
+	if body.Status.Msg != "Input parameter verification failed: name" {
+		t.Errorf("unexpected en msg %q", body.Status.Msg)
 	}
 }
 
@@ -108,8 +124,17 @@ func TestFailWithMsg(t *testing.T) {
 	if body.Status.Code != errcode.SystemError.Code {
 		t.Errorf("expected code %d, got %d", errcode.SystemError.Code, body.Status.Code)
 	}
-	if body.Status.Msg != customMsg {
-		t.Errorf("expected msg %q, got %q", customMsg, body.Status.Msg)
+	// SystemError's Java template is "系统未知错误: {0}" -> custom msg fills {0}.
+	if body.Status.Msg != "系统未知错误: "+customMsg {
+		t.Errorf("expected msg with %q, got %q", customMsg, body.Status.Msg)
+	}
+	// Codes without placeholder keep the custom message verbatim.
+	r2 := setupRouter(func(c *gin.Context) { FailWithMsg(c, errcode.AuthUserIsLocked, customMsg) })
+	w2 := httptest.NewRecorder()
+	r2.ServeHTTP(w2, req)
+	json.Unmarshal(w2.Body.Bytes(), &body)
+	if body.Status.Msg == "" {
+		t.Error("expected non-empty msg")
 	}
 }
 

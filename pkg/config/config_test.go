@@ -1,5 +1,4 @@
 package config
-package config
 
 import (
 	"os"
@@ -21,6 +20,8 @@ server:
 database:
   driver: sqlite
   dsn: ":memory:"
+auth:
+  jwt_secret: a-very-long-random-secret-value-123456
 `
 	if _, err := tmpFile.WriteString(content); err != nil {
 		t.Fatalf("failed to write config: %v", err)
@@ -100,6 +101,7 @@ func TestValidate_InvalidPort(t *testing.T) {
 
 func TestValidate_EmptyJWTSecret_GetsDefault(t *testing.T) {
 	cfg := &Config{
+		Profile: "dev",
 		Server: ServerConfig{
 			Mode:     "master",
 			HTTPPort: 8080,
@@ -132,7 +134,7 @@ func TestValidate_ValidConfig(t *testing.T) {
 			Driver: "sqlite",
 		},
 		Auth: AuthConfig{
-			JWTSecret: "my-secret",
+			JWTSecret: "my-secret-of-sufficient-length",
 		},
 	}
 
@@ -159,6 +161,8 @@ server:
   http_port: 8080
 database:
   driver: sqlite
+auth:
+  jwt_secret: a-very-long-random-secret-value-123456
 `
 	if _, err := tmpFile.WriteString(content); err != nil {
 		t.Fatalf("failed to write config: %v", err)

@@ -2,297 +2,675 @@ package service
 
 import (
 	"context"
-	"errors"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/json"
+	"math/big"
+	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
+	"github.com/fengzhizi319/privahub/pkg/auth"
+	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
-	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
-// Node service errors.
+// Node service errors (Java NodeErrorCode / NodeRouteErrorCode).
 var (
-	ErrNodeNotFound       = errors.New("node not found")
-	ErrNodeAlreadyExists  = errors.New("node already exists")
-	ErrRouteNotFound      = errors.New("route not found")
-	ErrRouteAlreadyExists = errors.New("route already exists")
+	ErrNodeNotFound       = &BizError{Code: errcode.NodeNotExistError, Msg: "node not found"}
+	ErrNodeAlreadyExists  = &BizError{Code: errcode.NodeAlreadyExistError, Msg: "node already exists"}
+	ErrRouteNotFound      = &BizError{Code: errcode.NodeRouteNotExistError, Msg: "route not found"}
+	ErrRouteAlreadyExists = &BizError{Code: errcode.NodeRouteAlreadyExists, Msg: "route already exists"}
 )
 
-// NodeService handles node and route management.
+// Java constants.
+const (
+	nodeTypeNormal   = "normal"
+	nodeTypeEmbedded = "embedded"
+	nodeTypePrimary  = "primary"
+	// Java NodeServiceImpl.createNode: Sm3Utils.hash(nodeId + "12#$qwER").
+	nodeUserInitPwdSuffix = "12#$qwER"
+	certConfigured        = "configured"
+	certUnconfirmed       = "unconfirmed"
+)
+
+// NodeService handles node management (Java NodeServiceImpl + NodeManager).
 type NodeService struct {
 	nodeRepo     repository.NodeRepository
 	routeRepo    repository.NodeRouteRepository
 	kusciaClient *kuscia.Client
 	db           *gorm.DB
+
+	mu        sync.RWMutex
+	pool      *kuscia.ClientPool
+	env       *EnvService
+	dataProxy *DataProxyService
+	protocol  string
+	log       *zap.Logger
+	teeNodeID string
+
+	routeOnce sync.Once
+	routeSvc  *NodeRouteService
 }
 
-// NewNodeService creates a new NodeService.
+// NodeServiceOptions configures optional collaborators of NodeService.
+type NodeServiceOptions struct {
+	Pool      *kuscia.ClientPool
+	Env       *EnvService
+	DataProxy *DataProxyService
+	// Protocol is the KusciaAPI protocol reported in NodeVO.protocol (Java kusciaapi.protocol).
+	Protocol string
+	Log      *zap.Logger
+	// TeeNodeID is the configured TEE node (data.tee.domain_id, Java teeNodeId).
+	TeeNodeID string
+}
+
+// NewNodeService creates a new NodeService. A nil kusciaClient disables all
+// Kuscia calls (offline / unit-test mode).
 func NewNodeService(nodeRepo repository.NodeRepository, routeRepo repository.NodeRouteRepository, kusciaClient *kuscia.Client, db *gorm.DB) *NodeService {
-	return &NodeService{nodeRepo: nodeRepo, routeRepo: routeRepo, kusciaClient: kusciaClient, db: db}
+	return &NodeService{nodeRepo: nodeRepo, routeRepo: routeRepo, kusciaClient: kusciaClient, db: db, log: zap.NewNop()}
 }
 
-// CreateNodeRequest represents a node creation request.
+// Configure sets optional collaborators (client pool, env, data proxy).
+func (s *NodeService) Configure(o NodeServiceOptions) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if o.Pool != nil {
+		s.pool = o.Pool
+	}
+	if o.Env != nil {
+		s.env = o.Env
+	}
+	if o.DataProxy != nil {
+		s.dataProxy = o.DataProxy
+	}
+	if o.Protocol != "" {
+		s.protocol = o.Protocol
+	}
+	if o.Log != nil {
+		s.log = o.Log
+	}
+	if o.TeeNodeID != "" {
+		s.teeNodeID = o.TeeNodeID
+	}
+}
+
+// Routes returns the NodeRouteService sharing this service's dependencies.
+func (s *NodeService) Routes() *NodeRouteService {
+	s.routeOnce.Do(func() { s.routeSvc = &NodeRouteService{ns: s} })
+	return s.routeSvc
+}
+
+// Pool returns the Kuscia client pool (may be nil).
+func (s *NodeService) Pool() *kuscia.ClientPool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.pool
+}
+
+func (s *NodeService) envSvc() *EnvService {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.env
+}
+
+func (s *NodeService) isAutonomy() bool {
+	if e := s.envSvc(); e != nil {
+		return e.IsAutonomy()
+	}
+	return false
+}
+
+func (s *NodeService) isCenter() bool {
+	if e := s.envSvc(); e != nil {
+		return e.IsCenter()
+	}
+	return true
+}
+
+func (s *NodeService) localNodeID() string {
+	if e := s.envSvc(); e != nil {
+		return e.GetPlatformNodeId()
+	}
+	return ""
+}
+
+// kc returns the Kuscia client used for a channel node. An empty channel
+// means the default (local master/autonomy) KusciaAPI, like Java
+// kusciaGrpcClientAdapter.xxx(request) vs xxx(request, channelNodeId).
+func (s *NodeService) kc(channelNodeID string) *kuscia.Client {
+	if channelNodeID != "" {
+		if p := s.Pool(); p != nil {
+			if c, ok := p.Lookup(channelNodeID); ok {
+				return c
+			}
+		}
+	}
+	return s.kusciaClient
+}
+
+func (s *NodeService) hasKuscia() bool { return s.kusciaClient != nil }
+
+// --- DTOs (Java camelCase contract) ---
+
+// CreateNodeRequest represents a node creation request (Java CreateNodeRequest).
+// The node id is generated by the server.
 type CreateNodeRequest struct {
-	NodeID        string `json:"node_id" binding:"required"`
-	Name          string `json:"name" binding:"required"`
-	Auth          string `json:"auth"`
-	Description   string `json:"description"`
-	ControlNodeID string `json:"control_node_id"`
-	NetAddress    string `json:"net_address"`
-	Type          string `json:"type"`
-	Mode          int    `json:"mode"`
-	MasterNodeID  string `json:"master_node_id"`
+	Name string `json:"name"`
+	Mode int    `json:"mode"`
 }
 
-// UpdateNodeRequest represents a node update request.
+// UpdateNodeRequest represents a node update request. Java only updates netAddress.
 type UpdateNodeRequest struct {
-	NodeID      string `json:"node_id" binding:"required"`
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	NetAddress  string `json:"net_address"`
-	Mode        *int   `json:"mode"`
-}
-
-// NodeVO represents a node view object.
-type NodeVO struct {
-	NodeID        string `json:"node_id"`
-	NodeName      string `json:"node_name"`
+	NodeID        string `json:"nodeId"`
+	NodeIDAlt     string `json:"node_id"`
+	NetAddress    string `json:"netAddress"`
+	NetAddressAlt string `json:"net_address"`
 	Name          string `json:"name"`
-	Auth          string `json:"auth"`
 	Description   string `json:"description"`
-	ControlNodeID string `json:"control_node_id"`
-	NetAddress    string `json:"net_address"`
-	Type          string `json:"type"`
-	Mode          int    `json:"mode"`
-	MasterNodeID  string `json:"master_node_id"`
-	Token         string `json:"token,omitempty"`
-	NodeStatus    string `json:"node_status"`
-	Status        string `json:"status"`
-	GmtCreate     string `json:"gmt_create"`
+	Mode          *int   `json:"mode"`
 }
 
-// CreateNode creates a new node.
-func (s *NodeService) CreateNode(ctx context.Context, req *CreateNodeRequest) (*NodeVO, error) {
-	// Check if node already exists
-	existing, err := s.nodeRepo.FindByNodeID(ctx, req.NodeID)
-	if err == nil && existing != nil {
-		return nil, ErrNodeAlreadyExists
-	}
-
-	controlNodeID := req.ControlNodeID
-	if controlNodeID == "" {
-		controlNodeID = req.NodeID
-	}
-	nodeType := req.Type
-	if nodeType == "" {
-		nodeType = "normal"
-	}
-	masterNodeID := req.MasterNodeID
-	if masterNodeID == "" {
-		masterNodeID = "master"
-	}
-
-	node := &model.NodeDO{
-		NodeID:        req.NodeID,
-		Name:          req.Name,
-		Auth:          req.Auth,
-		Description:   req.Description,
-		ControlNodeID: controlNodeID,
-		NetAddress:    req.NetAddress,
-		Type:          nodeType,
-		Mode:          req.Mode,
-		MasterNodeID:  masterNodeID,
-	}
-
-	if err := s.nodeRepo.Create(ctx, node); err != nil {
-		return nil, err
-	}
-
-	// Register domain in Kuscia (best-effort)
-	if s.kusciaClient != nil {
-		_ = s.kusciaClient.CreateDomain(ctx, &kuscia.CreateDomainRequest{
-			DomainID: req.NodeID,
-			Role:     nodeType,
-		})
-		// DataProxy integration: set access_directly=false for new domain's datasources
-		// Corresponds to Java DataProxyService.updateDataSourceUseDataProxyByDomainId
-		s.updateDataProxyForDomain(ctx, req.NodeID)
-	}
-
-	return s.toNodeVO(node), nil
+// PageNodeRequest is the node/page request (Java PageNodeRequest + pageable).
+type PageNodeRequest struct {
+	Search     string            `json:"search"`
+	Page       int               `json:"page"`
+	Size       int               `json:"size"`
+	PageNumber int               `json:"pageNumber"`
+	PageSize   int               `json:"pageSize"`
+	Sort       map[string]string `json:"sort"`
 }
 
-// UpdateNode updates an existing node.
+// NodeInstanceVO is a Kuscia node instance (Java NodeInstanceDTO).
+type NodeInstanceVO struct {
+	Name               string `json:"name"`
+	Status             string `json:"status"`
+	Version            string `json:"version"`
+	LastHeartbeatTime  string `json:"lastHeartbeatTime"`
+	LastTransitionTime string `json:"lastTransitionTime"`
+}
+
+// NodeDatatableVO is a datatable brief (Java NodeDatatableVO).
+type NodeDatatableVO struct {
+	DatatableID   string `json:"datatableId"`
+	DatatableName string `json:"datatableName"`
+}
+
+// NodeRouteBriefVO is a route brief inside NodeVO (Java NodeRouteVO).
+type NodeRouteBriefVO struct {
+	RouteID       string `json:"routeId"`
+	SrcNodeID     string `json:"srcNodeId"`
+	DstNodeID     string `json:"dstNodeId"`
+	SrcNetAddress string `json:"srcNetAddress"`
+	DstNetAddress string `json:"dstNetAddress"`
+	Status        string `json:"status,omitempty"`
+}
+
+// NodeVO represents a node view object (Java NodeVO).
+type NodeVO struct {
+	NodeID                 string             `json:"nodeId"`
+	NodeName               string             `json:"nodeName"`
+	InstID                 string             `json:"instId,omitempty"`
+	InstName               string             `json:"instName,omitempty"`
+	ControlNodeID          string             `json:"controlNodeId"`
+	MasterNodeID           string             `json:"masterNodeId"`
+	Description            string             `json:"description"`
+	NetAddress             string             `json:"netAddress"`
+	Cert                   string             `json:"cert,omitempty"`
+	CertText               string             `json:"certText,omitempty"`
+	NodeAuthenticationCode string             `json:"nodeAuthenticationCode,omitempty"`
+	Token                  string             `json:"token,omitempty"`
+	TokenStatus            string             `json:"tokenStatus,omitempty"`
+	NodeRole               string             `json:"nodeRole,omitempty"`
+	NodeStatus             string             `json:"nodeStatus"`
+	Type                   string             `json:"type"`
+	Mode                   int                `json:"mode"`
+	GmtCreate              string             `json:"gmtCreate"`
+	GmtModified            string             `json:"gmtModified"`
+	NodeInstances          []NodeInstanceVO   `json:"nodeInstances,omitempty"`
+	Datatables             []NodeDatatableVO  `json:"datatables,omitempty"`
+	NodeRoutes             []NodeRouteBriefVO `json:"nodeRoutes,omitempty"`
+	ResultCount            *int64             `json:"resultCount,omitempty"`
+	Protocol               string             `json:"protocol,omitempty"`
+	AllowDeletion          bool               `json:"allowDeletion"`
+	IsMainNode             bool               `json:"isMainNode"`
+}
+
+// NodeTokenVO is the node/token response (Java NodeTokenVO).
+type NodeTokenVO struct {
+	Token              string `json:"token"`
+	TokenStatus        string `json:"tokenStatus"`
+	LastTransitionTime string `json:"lastTransitionTime"`
+}
+
+// NodePageVO is the paged node list (Java SecretPadPageResponse).
+type NodePageVO struct {
+	List  []NodeVO `json:"list"`
+	Total int64    `json:"total"`
+}
+
+// --- ID generation ---
+
+const domainIDLetters = "abcdefghijklmnopqrstuvwxyz"
+
+// genDomainID mirrors Java UUIDUtils.random(8): 8 random lowercase letters.
+func genDomainID() string {
+	b := make([]byte, 8)
+	for i := range b {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(domainIDLetters))))
+		if err != nil {
+			panic(err)
+		}
+		b[i] = domainIDLetters[n.Int64()]
+	}
+	return string(b)
+}
+
+// newUniqueNodeID generates a node id not present in the node table (including soft-deleted rows).
+func (s *NodeService) newUniqueNodeID(ctx context.Context, tx *gorm.DB) (string, error) {
+	for i := 0; i < 10; i++ {
+		id := genDomainID()
+		var cnt int64
+		if err := tx.WithContext(ctx).Unscoped().Model(&model.NodeDO{}).Where("node_id = ?", id).Count(&cnt).Error; err != nil {
+			return "", err
+		}
+		if cnt == 0 {
+			return id, nil
+		}
+	}
+	return "", bizErr(errcode.NodeCreateError, "cannot allocate node id")
+}
+
+// --- Node CRUD ---
+
+// CreateNode creates a node (Java NodeServiceImpl.createNode + NodeManager.createNode):
+// server-generated nodeId, netAddress "<nodeId>:1080", EDGE_NODE permission,
+// node user with the Java initial password, and a Kuscia domain with
+// auth_center {Token, UID-RSA-GEN}. Any failure (including Kuscia) rolls back.
+func (s *NodeService) CreateNode(ctx context.Context, req *CreateNodeRequest) (string, error) {
+	if req == nil || strings.TrimSpace(req.Name) == "" {
+		return "", bizErr(errcode.ParamError, "name is required")
+	}
+	var nodeID string
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		id, err := s.newUniqueNodeID(ctx, tx)
+		if err != nil {
+			return err
+		}
+		nodeID = id
+		node := &model.NodeDO{
+			NodeID:        id,
+			ControlNodeID: id,
+			NetAddress:    id + ":1080",
+			InstID:        "",
+			Type:          nodeTypeNormal,
+			Mode:          req.Mode,
+			Name:          req.Name,
+		}
+		if err := tx.Create(node).Error; err != nil {
+			return bizWrap(errcode.NodeCreateError, err, "")
+		}
+		perm := &model.SysUserPermissionRelDO{
+			UserType:   auth.PermissionUserTypeNode,
+			TargetType: "ROLE",
+			UserKey:    id,
+			TargetCode: auth.RoleEdgeNode,
+		}
+		if err := tx.Create(perm).Error; err != nil {
+			return bizWrap(errcode.NodeCreateError, err, "")
+		}
+		// Java: passwordHash = Sm3(nodeId + "12#$qwER"); Go login stores the
+		// SHA-256 hex (HashPassword), so the initial plaintext password stays
+		// nodeId + "12#$qwER".
+		if err := NewNodeUserService(tx).Create(ctx, &NodeUserCreateRequest{
+			NodeID:       id,
+			Name:         id,
+			PasswordHash: HashPassword(id + nodeUserInitPwdSuffix),
+		}); err != nil {
+			return bizWrap(errcode.NodeCreateError, err, "")
+		}
+		if s.hasKuscia() {
+			if err := s.kusciaClient.CreateDomain(ctx, &kuscia.CreateDomainRequest{
+				DomainID: id,
+				AuthCenter: &kuscia.AuthCenter{
+					AuthenticationType: kuscia.AuthTypeToken,
+					TokenGenMethod:     kuscia.TokenGenUIDRSAGen,
+				},
+			}); err != nil {
+				return bizWrap(errcode.NodeCreateError, err, "")
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	s.updateDataProxyForDomain(ctx, nodeID)
+	return nodeID, nil
+}
+
+// UpdateNode updates an existing node (Java: netAddress only; name/description/mode kept for Go callers).
 func (s *NodeService) UpdateNode(ctx context.Context, req *UpdateNodeRequest) error {
-	node, err := s.nodeRepo.FindByNodeID(ctx, req.NodeID)
+	nodeID := firstNonEmpty(req.NodeID, req.NodeIDAlt)
+	if nodeID == "" {
+		return bizErr(errcode.ParamError, "nodeId is required")
+	}
+	node, err := s.nodeRepo.FindByNodeID(ctx, nodeID)
 	if err != nil {
 		return ErrNodeNotFound
 	}
-
+	if addr := firstNonEmpty(req.NetAddress, req.NetAddressAlt); addr != "" {
+		node.NetAddress = addr
+	}
 	if req.Name != "" {
 		node.Name = req.Name
 	}
 	if req.Description != "" {
 		node.Description = req.Description
 	}
-	if req.NetAddress != "" {
-		node.NetAddress = req.NetAddress
-	}
 	if req.Mode != nil {
 		node.Mode = *req.Mode
 	}
-
 	return s.nodeRepo.Update(ctx, node)
 }
 
-// GetNode retrieves a node by ID.
+// GetNode returns a node with Kuscia status/cert/token/instances (Java NodeManager.getNode).
 func (s *NodeService) GetNode(ctx context.Context, nodeID string) (*NodeVO, error) {
 	node, err := s.nodeRepo.FindByNodeID(ctx, nodeID)
-	if err != nil {
+	if err != nil || node == nil {
 		return nil, ErrNodeNotFound
 	}
-	return s.toNodeVO(node), nil
+	if s.isAutonomy() {
+		return s.nodeVOP2P(ctx, node)
+	}
+	return s.nodeVOWithKuscia(ctx, node), nil
 }
 
-// ListNodes retrieves all nodes.
+// RefreshNode re-queries the node status from Kuscia.
+func (s *NodeService) RefreshNode(ctx context.Context, nodeID string) (*NodeVO, error) {
+	return s.GetNode(ctx, nodeID)
+}
+
+// ListNodes lists nodes (Java NodeServiceImpl.listNodes). In CENTER mode an
+// EDGE user only sees its cooperating nodes (itself + route destinations).
+// Status is filled by Kuscia BatchQueryDomain; for CENTER (or the user's own
+// node) datatables, nodeRoutes and resultCount are included.
 func (s *NodeService) ListNodes(ctx context.Context) ([]NodeVO, error) {
-	nodes, err := s.nodeRepo.FindAll(ctx)
+	user, _ := auth.UserFromContext(ctx)
+	var nodes []model.NodeDO
+	var err error
+	edgeUser := user != nil && user.OwnerType == auth.OwnerTypeEdge && user.OwnerID != ""
+	if s.isCenter() && edgeUser {
+		nodes, err = s.cooperatingNodes(ctx, user.OwnerID)
+	} else {
+		nodes, err = s.nodeRepo.FindAll(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}
-
+	statuses := s.batchDomainStatus(ctx, nodes)
 	result := make([]NodeVO, 0, len(nodes))
 	for i := range nodes {
-		result = append(result, *s.toNodeVO(&nodes[i]))
+		vo := s.baseNodeVO(&nodes[i])
+		if st, ok := statuses[nodes[i].NodeID]; ok {
+			vo.NodeStatus = st
+		}
+		if s.isCenter() || (user != nil && user.OwnerID == nodes[i].NodeID) {
+			s.fillListExtras(ctx, vo)
+		}
+		result = append(result, *vo)
 	}
 	return result, nil
 }
 
-// ListTeeNodes retrieves all TEE-capable nodes. A node is TEE-capable when its
-// Mode bitfield includes TEE (NodeDO.Mode: 0=mpc, 1=tee, 2=mpc&tee), i.e. mode
-// 1 or 2. Used by the frontend project/tee/list endpoint to pick TEE nodes.
+// PageNodes returns a page of nodes (Java NodeServiceImpl.queryPage).
+func (s *NodeService) PageNodes(ctx context.Context, req *PageNodeRequest) (*NodePageVO, error) {
+	page, size := normalizePage(firstPositive(req.Page, req.PageNumber), firstPositive(req.Size, req.PageSize))
+	q := s.db.WithContext(ctx).Model(&model.NodeDO{})
+	if kw := strings.TrimSpace(req.Search); kw != "" {
+		like := "%" + kw + "%"
+		q = q.Where("name LIKE ? OR node_id LIKE ?", like, like)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, err
+	}
+	var nodes []model.NodeDO
+	order := "gmt_create DESC"
+	for k, v := range req.Sort {
+		col := map[string]string{"gmtCreate": "gmt_create", "gmtModified": "gmt_modified", "nodeName": "name", "nodeId": "node_id"}[k]
+		if col != "" {
+			dir := "ASC"
+			if strings.EqualFold(v, "descending") || strings.EqualFold(v, "desc") {
+				dir = "DESC"
+			}
+			order = col + " " + dir
+		}
+	}
+	if err := q.Order(order).Offset((page - 1) * size).Limit(size).Find(&nodes).Error; err != nil {
+		return nil, err
+	}
+	list := make([]NodeVO, 0, len(nodes))
+	for i := range nodes {
+		vo := s.nodeVOWithKuscia(ctx, &nodes[i])
+		list = append(list, *vo)
+	}
+	return &NodePageVO{List: list, Total: total}, nil
+}
+
+// ListTeeNodes retrieves all TEE-capable nodes (mode 1 = tee, 2 = mpc&tee).
 func (s *NodeService) ListTeeNodes(ctx context.Context) ([]NodeVO, error) {
 	nodes, err := s.nodeRepo.FindAll(ctx)
 	if err != nil {
 		return nil, err
 	}
-
 	result := make([]NodeVO, 0)
 	for i := range nodes {
 		if nodes[i].Mode == 1 || nodes[i].Mode == 2 {
-			result = append(result, *s.toNodeVO(&nodes[i]))
+			result = append(result, *s.baseNodeVO(&nodes[i]))
 		}
 	}
 	return result, nil
 }
 
-// DeleteNode deletes a node by ID and removes all associated routes atomically.
+// DeleteNode deletes a node (Java NodeManager.deleteNode(nodeId)):
+// embedded nodes are protected; nodes used by a project, or (AUTONOMY) listed in a
+// reviewing PROJECT_CREATE approval, cannot be deleted; the node row, its
+// permission and all routes (both directions, DB + Kuscia) are removed and the
+// Kuscia domain deleted. A Kuscia delete failure rolls back the DB changes.
 func (s *NodeService) DeleteNode(ctx context.Context, nodeID string) error {
 	node, err := s.nodeRepo.FindByNodeID(ctx, nodeID)
-	if err != nil {
+	if err != nil || node == nil {
 		return ErrNodeNotFound
 	}
+	if node.Type == nodeTypeEmbedded {
+		return bizErr(errcode.SystemValidationError, "default node can not delete")
+	}
+	roleCode := auth.RoleEdgeNode
+	if s.isAutonomy() {
+		roleCode = auth.RoleP2PNode
+	}
 
-	// Delete node and associated routes atomically to avoid orphan records.
+	if s.hasKuscia() {
+		exists, err := s.kusciaClient.DomainExists(ctx, nodeID)
+		if err != nil {
+			return bizWrap(errcode.NodeDeleteError, err, "")
+		}
+		if !exists {
+			// Java: "node is not exist! but delete anyway"
+			return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if err := tx.Delete(&model.NodeDO{}, node.ID).Error; err != nil {
+					return err
+				}
+				if err := tx.Unscoped().Where("src_node_id = ? OR dst_node_id = ?", nodeID, nodeID).Delete(&model.NodeRouteDO{}).Error; err != nil {
+					return err
+				}
+				return tx.Where("user_key = ? AND target_code = ?", nodeID, roleCode).Delete(&model.SysUserPermissionRelDO{}).Error
+			})
+		}
+	}
+
+	if err := s.checkNodeNotInUse(ctx, nodeID, s.isAutonomy()); err != nil {
+		return err
+	}
+
+	var routes []model.NodeRouteDO
+	_ = s.db.WithContext(ctx).Where("src_node_id = ? OR dst_node_id = ?", nodeID, nodeID).Find(&routes).Error
+
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("src_node_id = ? OR dst_node_id = ?", nodeID, nodeID).Delete(&model.NodeRouteDO{}).Error; err != nil {
+		if err := tx.Unscoped().Where("src_node_id = ? OR dst_node_id = ?", nodeID, nodeID).Delete(&model.NodeRouteDO{}).Error; err != nil {
 			return err
 		}
-		return tx.Delete(&model.NodeDO{}, node.ID).Error
+		if err := tx.Where("user_key = ? AND target_code = ?", nodeID, roleCode).Delete(&model.SysUserPermissionRelDO{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&model.NodeDO{}, node.ID).Error; err != nil {
+			return err
+		}
+		if s.hasKuscia() {
+			for _, r := range routes {
+				if err := s.kusciaClient.DeleteDomainRoute(ctx, r.SrcNodeID, r.DstNodeID); err != nil {
+					s.log.Warn("delete kuscia route failed", zap.String("src", r.SrcNodeID), zap.String("dst", r.DstNodeID), zap.Error(err))
+				}
+			}
+			if err := s.kusciaClient.DeleteDomain(ctx, nodeID); err != nil && !kuscia.IsNotFound(err) {
+				return bizWrap(errcode.NodeDeleteError, err, "")
+			}
+		}
+		return nil
 	})
 }
 
-// GenerateToken generates a deployment token for a node.
-func (s *NodeService) GenerateToken(ctx context.Context, nodeID string) (string, error) {
-	node, err := s.nodeRepo.FindByNodeID(ctx, nodeID)
+// checkNodeNotInUse: project occupancy + reviewing approvals (Java deleteNode/checkBeforeDelete).
+func (s *NodeService) checkNodeNotInUse(ctx context.Context, nodeID string, checkApprovals bool) error {
+	var cnt int64
+	if err := s.db.WithContext(ctx).Model(&model.ProjectNodeDO{}).Where("node_id = ?", nodeID).Count(&cnt).Error; err != nil {
+		return err
+	}
+	if cnt > 0 {
+		return bizErr(errcode.NodeDeleteError, "node have job running")
+	}
+	if !checkApprovals {
+		return nil
+	}
+	reviewing, err := s.nodeInReviewingProject(ctx, nodeID)
 	if err != nil {
-		return "", ErrNodeNotFound
+		return err
 	}
-
-	token := uuid.New().String()
-	node.Token = token
-	if err := s.nodeRepo.Update(ctx, node); err != nil {
-		return "", err
+	if reviewing {
+		return bizErr(errcode.NodeDeleteError, "node have project reviewing")
 	}
-
-	return token, nil
+	return nil
 }
 
-// CreateRouteRequest represents a route creation request.
+// projectStatusReviewing is Java ProjectStatusEnum.REVIEWING.
+const projectStatusReviewing = 0
+
+func (s *NodeService) nodeInReviewingProject(ctx context.Context, nodeID string) (bool, error) {
+	var configs []model.ProjectApprovalConfigDO
+	err := s.db.WithContext(ctx).
+		Where("type = ? AND project_id IN (?)", "PROJECT_CREATE",
+			s.db.Model(&model.ProjectDO{}).Select("project_id").Where("status = ?", projectStatusReviewing)).
+		Find(&configs).Error
+	if err != nil {
+		return false, err
+	}
+	for _, c := range configs {
+		if strings.Contains(c.Parties, nodeID) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// GetNodeToken returns the lite deploy token from Kuscia deploy_token_statuses
+// (Java NodeManager.getNodeToken). With refresh (or no stored token) the
+// latest `unused` token is written back to the node row.
+func (s *NodeService) GetNodeToken(ctx context.Context, nodeID string, refresh bool) (*NodeTokenVO, error) {
+	node, err := s.nodeRepo.FindByNodeID(ctx, nodeID)
+	if err != nil || node == nil {
+		return nil, ErrNodeNotFound
+	}
+	if !s.hasKuscia() {
+		return nil, bizErr(errcode.KusciaRpcError, "kuscia client not configured")
+	}
+	resp, err := s.kusciaClient.QueryDomain(ctx, nodeID)
+	if err != nil {
+		return nil, bizWrap(errcode.NodeTokenError, err, "")
+	}
+	tokens := resp.Data.DeployTokenStatuses
+	if len(tokens) == 0 {
+		return nil, bizErr(errcode.NodeTokenIsEmptyError, "kuscia return empty token")
+	}
+	vo := &NodeTokenVO{}
+	stored := node.Token
+	for _, t := range tokens {
+		if refresh || stored == "" {
+			if t.State == kuscia.DeployTokenUnused {
+				node.Token = t.Token
+				*vo = NodeTokenVO{Token: t.Token, TokenStatus: t.State, LastTransitionTime: t.LastTransitionTime}
+			}
+		} else if stored == t.Token {
+			*vo = NodeTokenVO{Token: t.Token, TokenStatus: t.State, LastTransitionTime: t.LastTransitionTime}
+		}
+	}
+	if node.Token != stored {
+		if err := s.nodeRepo.Update(ctx, node); err != nil {
+			return nil, err
+		}
+	}
+	return vo, nil
+}
+
+// --- Go-only node/route/* (delegates to NodeRouteService) ---
+
+// CreateRouteRequest represents a route creation request (Go-only node/route/create).
 type CreateRouteRequest struct {
-	SrcNodeID     string `json:"src_node_id" binding:"required"`
-	DstNodeID     string `json:"dst_node_id" binding:"required"`
-	SrcNetAddress string `json:"src_net_address"`
-	DstNetAddress string `json:"dst_net_address"`
-}
-
-// RouteVO represents a route view object.
-type RouteVO struct {
-	RouteID       string `json:"route_id"`
 	SrcNodeID     string `json:"src_node_id"`
 	DstNodeID     string `json:"dst_node_id"`
 	SrcNetAddress string `json:"src_net_address"`
 	DstNetAddress string `json:"dst_net_address"`
+	// camelCase aliases (Java CreateNodeRouterRequest)
+	SrcNodeIDAlt     string `json:"srcNodeId"`
+	DstNodeIDAlt     string `json:"dstNodeId"`
+	SrcNetAddressAlt string `json:"srcNetAddress"`
+	DstNetAddressAlt string `json:"dstNetAddress"`
+	RouteType        string `json:"routeType"` // FullDuplex (default) / HalfDuplex
 }
 
-// CreateRoute creates a new node route (bidirectional).
+func (r *CreateRouteRequest) normalize() {
+	r.SrcNodeID = firstNonEmpty(r.SrcNodeID, r.SrcNodeIDAlt)
+	r.DstNodeID = firstNonEmpty(r.DstNodeID, r.DstNodeIDAlt)
+	r.SrcNetAddress = firstNonEmpty(r.SrcNetAddress, r.SrcNetAddressAlt)
+	r.DstNetAddress = firstNonEmpty(r.DstNetAddress, r.DstNetAddressAlt)
+}
+
+// RouteVO represents a route view object (Go-only node/route/list).
+type RouteVO struct {
+	RouteID       string `json:"routeId"`
+	SrcNodeID     string `json:"srcNodeId"`
+	DstNodeID     string `json:"dstNodeId"`
+	SrcNetAddress string `json:"srcNetAddress"`
+	DstNetAddress string `json:"dstNetAddress"`
+}
+
+// CreateRoute creates a route (FullDuplex by default) via NodeRouteService.
 func (s *NodeService) CreateRoute(ctx context.Context, req *CreateRouteRequest) error {
-	// Check if route already exists
-	existing, err := s.routeRepo.FindByPair(ctx, req.SrcNodeID, req.DstNodeID)
-	if err == nil && existing != nil {
-		return ErrRouteAlreadyExists
-	}
-
-	routeID := uuid.New().String()[:8]
-
-	// Create forward route
-	forward := &model.NodeRouteDO{
-		RouteID:       routeID,
-		SrcNodeID:     req.SrcNodeID,
-		DstNodeID:     req.DstNodeID,
-		SrcNetAddress: req.SrcNetAddress,
-		DstNetAddress: req.DstNetAddress,
-	}
-	if err := s.routeRepo.Create(ctx, forward); err != nil {
-		return err
-	}
-
-	// Create reverse route
-	reverse := &model.NodeRouteDO{
-		RouteID:       routeID,
-		SrcNodeID:     req.DstNodeID,
-		DstNodeID:     req.SrcNodeID,
-		SrcNetAddress: req.DstNetAddress,
-		DstNetAddress: req.SrcNetAddress,
-	}
-	if err := s.routeRepo.Create(ctx, reverse); err != nil {
-		// Rollback the forward route to avoid leaving an orphan record
-		_ = s.routeRepo.Delete(ctx, forward.ID)
-		return err
-	}
-
-	// Register route in Kuscia (best-effort)
-	if s.kusciaClient != nil {
-		_ = s.kusciaClient.CreateDomainRoute(ctx, &kuscia.CreateDomainRouteRequest{
-			Source:                req.SrcNodeID,
-			Destination:           req.DstNodeID,
-			SourceNetAddress:      req.SrcNetAddress,
-			DestinationNetAddress: req.DstNetAddress,
-		})
-	}
-
-	return nil
+	req.normalize()
+	return s.Routes().CreateRoute(ctx, req)
 }
 
-// ListRoutes retrieves all routes for a node.
+// ListRoutes retrieves all routes whose source is nodeID.
 func (s *NodeService) ListRoutes(ctx context.Context, nodeID string) ([]RouteVO, error) {
 	routes, err := s.routeRepo.FindBySrcNodeID(ctx, nodeID)
 	if err != nil {
 		return nil, err
 	}
-
 	result := make([]RouteVO, 0, len(routes))
 	for i := range routes {
 		result = append(result, RouteVO{
@@ -306,245 +684,258 @@ func (s *NodeService) ListRoutes(ctx context.Context, nodeID string) ([]RouteVO,
 	return result, nil
 }
 
-// DeleteRoute deletes a route between two nodes.
-// Bug56 fix: wrap forward + reverse route deletion in a transaction to prevent
-// orphan records when the reverse deletion fails.
+// DeleteRoute deletes the route pair src<->dst (DB + Kuscia, both directions).
 func (s *NodeService) DeleteRoute(ctx context.Context, srcNodeID, dstNodeID string) error {
-	route, err := s.routeRepo.FindByPair(ctx, srcNodeID, dstNodeID)
-	if err != nil {
-		return ErrRouteNotFound
-	}
-
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Delete forward route
-		if err := tx.Delete(&model.NodeRouteDO{}, route.ID).Error; err != nil {
-			return err
-		}
-		// Delete reverse route (if exists)
-		return tx.Where("src_node_id = ? AND dst_node_id = ?", dstNodeID, srcNodeID).
-			Delete(&model.NodeRouteDO{}).Error
-	})
+	return s.Routes().DeletePair(ctx, srcNodeID, dstNodeID)
 }
 
-// RefreshNode returns the refreshed status of a node.
-func (s *NodeService) RefreshNode(ctx context.Context, nodeID string) (*NodeVO, error) {
-	node, err := s.nodeRepo.FindByNodeID(ctx, nodeID)
-	if err != nil {
-		return nil, ErrNodeNotFound
+// --- VO building ---
+
+// fmtTime renders a timestamp as RFC3339 (Java DateTimes.toRfc3339).
+func fmtTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
 	}
-	return s.toNodeVO(node), nil
+	return t.Format(time.RFC3339)
 }
 
-func (s *NodeService) toNodeVO(node *model.NodeDO) *NodeVO {
-	status := "Ready"
-	gmtCreate := ""
-	if !node.GmtCreate.IsZero() {
-		gmtCreate = node.GmtCreate.Format("2006-01-02 15:04:05")
+func (s *NodeService) baseNodeVO(node *model.NodeDO) *NodeVO {
+	protocol := node.Protocol
+	if protocol == "" {
+		protocol = s.protocol
 	}
-	return &NodeVO{
+	vo := &NodeVO{
 		NodeID:        node.NodeID,
 		NodeName:      node.Name,
-		Name:          node.Name,
-		Auth:          node.Auth,
-		Description:   node.Description,
+		InstID:        node.InstID,
 		ControlNodeID: node.ControlNodeID,
+		MasterNodeID:  node.MasterNodeID,
+		Description:   node.Description,
 		NetAddress:    node.NetAddress,
+		Token:         node.Token,
+		NodeStatus:    kuscia.DomainStatusNotReady,
 		Type:          node.Type,
 		Mode:          node.Mode,
-		MasterNodeID:  node.MasterNodeID,
-		NodeStatus:    status,
-		Status:        status,
-		GmtCreate:     gmtCreate,
+		GmtCreate:     fmtTime(node.GmtCreate),
+		GmtModified:   fmtTime(node.GmtModified),
+		Protocol:      protocol,
+		IsMainNode:    node.NodeID != "" && node.NodeID == s.localNodeID(),
 	}
+	if !s.hasKuscia() {
+		// Offline mode: no Kuscia to ask, keep the historical Go default.
+		vo.NodeStatus = kuscia.DomainStatusReady
+	}
+	return vo
 }
 
-// --- Node Result (camelCase) DTOs aligned with the frontend contract ---
-
-// ListNodeResultRequest represents a node result list request (frontend contract).
-type ListNodeResultRequest struct {
-	OwnerID         string   `json:"ownerId"`
-	PageSize        int      `json:"pageSize"`
-	PageNumber      int      `json:"pageNumber"`
-	NodeNamesFilter []string `json:"nodeNamesFilter"`
-	KindFilters     []string `json:"kindFilters"`
-	NameFilter      string   `json:"nameFilter"`
-	TimeSortingRule string   `json:"timeSortingRule"`
-	TeeNodeID       string   `json:"teeNodeId"`
-}
-
-// NodeResultsCompatVO represents a single node result entry (frontend contract).
-type NodeResultsCompatVO struct {
-	DomainDataID      string `json:"domainDataId,omitempty"`
-	DatasourceID      string `json:"datasourceId,omitempty"`
-	DatasourceType    string `json:"datasourceType,omitempty"`
-	ProductName       string `json:"productName,omitempty"`
-	DatatableType     string `json:"datatableType,omitempty"`
-	SourceProjectID   string `json:"sourceProjectId,omitempty"`
-	SourceProjectName string `json:"sourceProjectName,omitempty"`
-	RelativeURI       string `json:"relativeUri,omitempty"`
-	JobID             string `json:"jobId,omitempty"`
-	TrainFlow         string `json:"trainFlow,omitempty"`
-	PullFromTeeStatus string `json:"pullFromTeeStatus,omitempty"`
-	PullFromTeeErrMsg string `json:"pullFromTeeErrMsg,omitempty"`
-	GmtCreate         string `json:"gmtCreate,omitempty"`
-	ComputeMode       string `json:"computeMode,omitempty"`
-}
-
-// NodeAllResultsCompatVO groups a result with its owning node (frontend contract).
-type NodeAllResultsCompatVO struct {
-	NodeResultsVO *NodeResultsCompatVO `json:"nodeResultsVO,omitempty"`
-	NodeID        string               `json:"nodeId,omitempty"`
-	NodeName      string               `json:"nodeName,omitempty"`
-}
-
-// AllNodeResultsListCompatVO represents the node result list response (frontend contract).
-type AllNodeResultsListCompatVO struct {
-	NodeAllResultsVOList []NodeAllResultsCompatVO `json:"nodeAllResultsVOList"`
-	TotalNodeResultNums  int                      `json:"totalNodeResultNums"`
-}
-
-// GetNodeResultDetailRequest represents a node result detail request (frontend contract).
-type GetNodeResultDetailRequest struct {
-	NodeID       string `json:"nodeId" binding:"required"`
-	DomainDataID string `json:"domainDataId" binding:"required"`
-	DataType     string `json:"dataType"`
-	DataVendor   string `json:"dataVendor"`
-}
-
-// NodeResultDetailCompatVO represents a node result detail response (frontend contract).
-type NodeResultDetailCompatVO struct {
-	NodeResultsVO     *NodeResultsCompatVO `json:"nodeResultsVO,omitempty"`
-	TableColumnVOList []TableColumnCompat  `json:"tableColumnVOList"`
-	Datasource        string               `json:"datasource,omitempty"`
-}
-
-// ListNodeResults lists results across nodes via Kuscia DomainData (best-effort, degrades to empty).
-func (s *NodeService) ListNodeResults(ctx context.Context, req *ListNodeResultRequest) (*AllNodeResultsListCompatVO, error) {
-	vo := &AllNodeResultsListCompatVO{NodeAllResultsVOList: make([]NodeAllResultsCompatVO, 0)}
-
-	nodes, err := s.nodeRepo.FindAll(ctx)
-	if err != nil {
-		return vo, nil
+// fillFromDomain applies a QueryDomain response (Java fillNodeDTOByKResp).
+func fillFromDomain(vo *NodeVO, d *kuscia.DomainInfo) {
+	vo.NodeStatus = kuscia.DomainStatusNotReady
+	if d.Cert == "" {
+		vo.Cert = certUnconfirmed
+	} else {
+		vo.Cert = certConfigured
 	}
-
-	nameSet := make(map[string]bool, len(req.NodeNamesFilter))
-	for _, n := range req.NodeNamesFilter {
-		nameSet[n] = true
-	}
-	kindSet := make(map[string]bool, len(req.KindFilters))
-	for _, k := range req.KindFilters {
-		kindSet[k] = true
-	}
-
-	results := make([]NodeAllResultsCompatVO, 0)
-	for _, node := range nodes {
-		if len(nameSet) > 0 && !nameSet[node.Name] && !nameSet[node.NodeID] {
-			continue
-		}
-		if s.kusciaClient == nil {
-			continue
-		}
-
-		items, err := s.kusciaClient.ListDomainData(ctx, node.NodeID)
-		if err != nil {
-			continue // degrade: skip unreachable node
-		}
-
-		for _, item := range items {
-			if len(kindSet) > 0 && !kindSet[item.Type] {
-				continue
-			}
-			if req.NameFilter != "" && !strings.Contains(item.Name, req.NameFilter) {
-				continue
-			}
-			results = append(results, NodeAllResultsCompatVO{
-				NodeID:   node.NodeID,
-				NodeName: node.Name,
-				NodeResultsVO: &NodeResultsCompatVO{
-					DomainDataID:  item.DomainDataID,
-					DatasourceID:  item.DatasourceID,
-					DatatableType: item.Type,
-					ProductName:   item.Name,
-					RelativeURI:   item.RelativeURI,
-				},
-			})
-		}
-	}
-
-	vo.TotalNodeResultNums = len(results)
-
-	if req.PageSize > 0 {
-		page := req.PageNumber
-		if page < 1 {
-			page = 1
-		}
-		start := (page - 1) * req.PageSize
-		if start > len(results) {
-			start = len(results)
-		}
-		end := start + req.PageSize
-		if end > len(results) {
-			end = len(results)
-		}
-		results = results[start:end]
-	}
-
-	vo.NodeAllResultsVOList = results
-	return vo, nil
-}
-
-// GetNodeResultDetail retrieves a single node result detail via Kuscia (best-effort, degrades to minimal).
-func (s *NodeService) GetNodeResultDetail(ctx context.Context, req *GetNodeResultDetailRequest) (*NodeResultDetailCompatVO, error) {
-	vo := &NodeResultDetailCompatVO{
-		NodeResultsVO:     &NodeResultsCompatVO{DomainDataID: req.DomainDataID},
-		TableColumnVOList: make([]TableColumnCompat, 0),
-	}
-
-	if s.kusciaClient == nil {
-		return vo, nil
-	}
-
-	resp, err := s.kusciaClient.QueryDomainData(ctx, req.NodeID, req.DomainDataID)
-	if err != nil {
-		return vo, nil // degrade: return minimal VO
-	}
-
-	vo.NodeResultsVO.DatasourceID = resp.Data.DatasourceID
-	vo.NodeResultsVO.DatatableType = resp.Data.Type
-	vo.NodeResultsVO.ProductName = resp.Data.Name
-	vo.NodeResultsVO.RelativeURI = resp.Data.RelativeURI
-	vo.Datasource = resp.Data.DatasourceID
-
-	for _, c := range resp.Data.Columns {
-		vo.TableColumnVOList = append(vo.TableColumnVOList, TableColumnCompat{
-			ColName:    c.Name,
-			ColType:    c.Type,
-			ColComment: c.Description,
+	vo.CertText = d.Cert
+	vo.NodeRole = d.Role
+	vo.NodeInstances = make([]NodeInstanceVO, 0, len(d.NodeStatuses))
+	for _, n := range d.NodeStatuses {
+		vo.NodeInstances = append(vo.NodeInstances, NodeInstanceVO{
+			Name: n.Name, Status: n.Status, Version: n.Version,
+			LastHeartbeatTime: n.LastHeartbeatTime, LastTransitionTime: n.LastTransitionTime,
 		})
+		if n.Status == kuscia.DomainStatusReady {
+			vo.NodeStatus = kuscia.DomainStatusReady
+		}
 	}
+	if len(d.DeployTokenStatuses) > 0 {
+		if vo.Token == "" {
+			for _, t := range d.DeployTokenStatuses {
+				if t.State == kuscia.DeployTokenUnused {
+					vo.Token = t.Token
+					vo.TokenStatus = t.State
+				}
+			}
+		} else {
+			for _, t := range d.DeployTokenStatuses {
+				if t.Token == vo.Token {
+					vo.TokenStatus = t.State
+				}
+			}
+		}
+	}
+}
 
+// nodeVOWithKuscia builds a NodeVO and fills it from Kuscia QueryDomain (default
+// channel); an empty stored token is written back (Java fillByGrpcDomainQuery).
+func (s *NodeService) nodeVOWithKuscia(ctx context.Context, node *model.NodeDO) *NodeVO {
+	vo := s.baseNodeVO(node)
+	if s.hasKuscia() {
+		if resp, err := s.kusciaClient.QueryDomain(ctx, node.NodeID); err == nil {
+			fillFromDomain(vo, &resp.Data)
+		}
+	}
+	vo.NodeAuthenticationCode = buildNodeAuthenticationCode(vo)
+	if node.Token == "" && vo.Token != "" {
+		node.Token = vo.Token
+		_ = s.nodeRepo.Update(ctx, node)
+	}
+	return vo
+}
+
+// nodeVOP2P mirrors Java getNodeDTOP2P: inst info, main-node flag,
+// allowDeletion, and Kuscia data via the node's own channel when registered.
+func (s *NodeService) nodeVOP2P(ctx context.Context, node *model.NodeDO) (*NodeVO, error) {
+	vo := s.baseNodeVO(node)
+	if node.InstID != "" {
+		var inst model.InstDO
+		if err := s.db.WithContext(ctx).Where("inst_id = ?", node.InstID).First(&inst).Error; err != nil {
+			return nil, bizErr(errcode.InstNotExists, "")
+		}
+		vo.InstName = inst.Name
+	}
+	if vo.IsMainNode {
+		vo.AllowDeletion = false
+	} else {
+		var cnt int64
+		_ = s.db.WithContext(ctx).Model(&model.NodeRouteDO{}).
+			Where("src_node_id = ? OR dst_node_id = ?", node.NodeID, node.NodeID).Count(&cnt).Error
+		vo.AllowDeletion = cnt == 0
+	}
+	if s.hasKuscia() {
+		p := s.Pool()
+		if p != nil && p.IsRegistered(node.NodeID) {
+			if resp, err := p.Get(node.NodeID).QueryDomain(ctx, node.NodeID); err == nil {
+				fillFromDomain(vo, &resp.Data)
+			}
+		} else if resp, err := s.kusciaClient.QueryDomain(ctx, node.NodeID); err == nil {
+			vo.CertText = resp.Data.Cert
+		}
+	}
+	vo.NodeAuthenticationCode = buildNodeAuthenticationCode(vo)
 	return vo, nil
 }
 
-// updateDataProxyForDomain sets access_directly=false for all datasources of a domain.
-// This forces data access through the DataProxy service (best-effort).
-// Corresponds to Java: DataProxyService.updateDataSourceUseDataProxyByDomainId
-func (s *NodeService) updateDataProxyForDomain(ctx context.Context, domainID string) {
-	if s.kusciaClient == nil {
-		return
+// buildNodeAuthenticationCode mirrors Java NodeVO.buildNodeAuthenticationCode.
+func buildNodeAuthenticationCode(vo *NodeVO) string {
+	code := map[string]string{
+		"masterNodeId":  vo.MasterNodeID,
+		"dstNodeId":     vo.NodeID,
+		"dstNetAddress": vo.NetAddress,
+		"name":          vo.NodeName,
+		"certText":      vo.CertText,
 	}
-	dataSources, err := s.kusciaClient.ListDomainDataSource(ctx, domainID)
+	if vo.InstID != "" && vo.InstName != "" {
+		code["instId"] = vo.InstID
+		code["instName"] = vo.InstName
+	}
+	b, _ := json.Marshal(code)
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+// batchDomainStatus returns Ready/NotReady per node via Kuscia BatchQueryDomain.
+func (s *NodeService) batchDomainStatus(ctx context.Context, nodes []model.NodeDO) map[string]string {
+	out := make(map[string]string, len(nodes))
+	if !s.hasKuscia() || len(nodes) == 0 {
+		return out
+	}
+	ids := make([]string, 0, len(nodes))
+	for _, n := range nodes {
+		ids = append(ids, n.NodeID)
+	}
+	domains, err := s.kusciaClient.BatchQueryDomain(ctx, ids)
 	if err != nil {
-		return // best-effort, ignore errors
+		// Java queries one domain per call; a missing domain fails the whole
+		// batch, so fall back to per-node queries.
+		for _, id := range ids {
+			if d, err := s.kusciaClient.BatchQueryDomain(ctx, []string{id}); err == nil {
+				domains = append(domains, d...)
+			}
+		}
 	}
-	accessDirectlyFalse := false
-	for _, ds := range dataSources {
-		if ds.AccessDirectly {
-			_ = s.kusciaClient.UpdateDomainDataSource(ctx, &kuscia.UpdateDomainDataSourceRequest{
-				DomainID:       ds.DomainID,
-				DatasourceID:   ds.DatasourceID,
-				AccessDirectly: &accessDirectlyFalse,
+	for i := range domains {
+		if domains[i].IsReady() {
+			out[domains[i].DomainID] = kuscia.DomainStatusReady
+		} else {
+			out[domains[i].DomainID] = kuscia.DomainStatusNotReady
+		}
+	}
+	return out
+}
+
+func (s *NodeService) fillListExtras(ctx context.Context, vo *NodeVO) {
+	var routes []model.NodeRouteDO
+	if err := s.db.WithContext(ctx).Where("src_node_id = ?", vo.NodeID).Find(&routes).Error; err == nil && len(routes) > 0 {
+		for _, r := range routes {
+			vo.NodeRoutes = append(vo.NodeRoutes, NodeRouteBriefVO{
+				RouteID: r.RouteID, SrcNodeID: r.SrcNodeID, DstNodeID: r.DstNodeID,
+				SrcNetAddress: r.SrcNetAddress, DstNetAddress: r.DstNetAddress,
 			})
 		}
 	}
+	var cnt int64
+	if err := s.db.WithContext(ctx).Model(&model.ProjectResultDO{}).Where("node_id = ?", vo.NodeID).Count(&cnt).Error; err == nil {
+		vo.ResultCount = &cnt
+	}
+	if s.hasKuscia() {
+		if items, err := s.kusciaClient.ListDomainData(ctx, vo.NodeID); err == nil {
+			for _, it := range items {
+				if it.Type != "" && it.Type != "table" {
+					continue
+				}
+				vo.Datatables = append(vo.Datatables, NodeDatatableVO{DatatableID: it.DomainDataID, DatatableName: it.Name})
+			}
+		}
+	}
+}
+
+// cooperatingNodes: the node itself plus the destinations of its routes (Java listCooperatingNode).
+func (s *NodeService) cooperatingNodes(ctx context.Context, nodeID string) ([]model.NodeDO, error) {
+	ids := map[string]bool{nodeID: true}
+	routes, err := s.routeRepo.FindBySrcNodeID(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range routes {
+		ids[r.DstNodeID] = true
+	}
+	keys := make([]string, 0, len(ids))
+	for k := range ids {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	var nodes []model.NodeDO
+	err = s.db.WithContext(ctx).Where("node_id IN ?", keys).Find(&nodes).Error
+	return nodes, err
+}
+
+// updateDataProxyForDomain forces DataProxy access for a domain's datasources (best-effort).
+func (s *NodeService) updateDataProxyForDomain(ctx context.Context, domainID string) {
+	s.mu.RLock()
+	dp := s.dataProxy
+	s.mu.RUnlock()
+	if dp != nil {
+		dp.UpdateDomain(ctx, domainID)
+	}
+}
+
+// --- small helpers ---
+
+func firstPositive(vs ...int) int {
+	for _, v := range vs {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func normalizePage(page, size int) (int, int) {
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 1000 {
+		size = 10
+	}
+	return page, size
 }

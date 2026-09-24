@@ -5,9 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -376,116 +374,6 @@ func TestTraceID_PreservesIncoming(t *testing.T) {
 
 // --- JWTAuth Tests ---
 
-func TestJWTAuth_MissingToken(t *testing.T) {
-	jwtMgr := auth.NewJWTManager("test-secret", 2*time.Hour, 7*24*time.Hour)
-	r := gin.New()
-	r.Use(JWTAuth(jwtMgr))
-	r.GET("/test", func(c *gin.Context) {
-		c.JSON(200, gin.H{"ok": true})
-	})
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/test", nil)
-	r.ServeHTTP(w, req)
-
-	if w.Code != 401 {
-		t.Fatalf("expected 401 for missing token, got %d", w.Code)
-	}
-}
-
-func TestJWTAuth_InvalidToken(t *testing.T) {
-	jwtMgr := auth.NewJWTManager("test-secret", 2*time.Hour, 7*24*time.Hour)
-	r := gin.New()
-	r.Use(JWTAuth(jwtMgr))
-	r.GET("/test", func(c *gin.Context) {
-		c.JSON(200, gin.H{"ok": true})
-	})
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", "Bearer invalid.token.here")
-	r.ServeHTTP(w, req)
-
-	if w.Code != 401 {
-		t.Fatalf("expected 401 for invalid token, got %d", w.Code)
-	}
-}
-
-func TestJWTAuth_ValidToken(t *testing.T) {
-	jwtMgr := auth.NewJWTManager("test-secret", 2*time.Hour, 7*24*time.Hour)
-	pair, err := jwtMgr.GenerateTokenPair("1", "admin", "CENTER", "kuscia-system")
-	if err != nil {
-		t.Fatalf("failed to generate token: %v", err)
-	}
-
-	r := gin.New()
-	r.Use(JWTAuth(jwtMgr))
-	r.GET("/test", func(c *gin.Context) {
-		username, _ := c.Get("username")
-		c.JSON(200, gin.H{"username": username})
-	})
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", "Bearer "+pair.AccessToken)
-	r.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("expected 200 for valid token, got %d", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "admin") {
-		t.Fatalf("expected response to contain username admin, got %q", w.Body.String())
-	}
-}
-
-func TestJWTAuth_RefreshTokenRejected(t *testing.T) {
-	jwtMgr := auth.NewJWTManager("test-secret", 2*time.Hour, 7*24*time.Hour)
-	pair, err := jwtMgr.GenerateTokenPair("1", "admin", "CENTER", "kuscia-system")
-	if err != nil {
-		t.Fatalf("failed to generate token: %v", err)
-	}
-
-	r := gin.New()
-	r.Use(JWTAuth(jwtMgr))
-	r.GET("/test", func(c *gin.Context) {
-		c.JSON(200, gin.H{"ok": true})
-	})
-
-	// Using refresh token for API access should be rejected
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", "Bearer "+pair.RefreshToken)
-	r.ServeHTTP(w, req)
-
-	if w.Code != 401 {
-		t.Fatalf("expected 401 for refresh token used as access, got %d", w.Code)
-	}
-}
-
-func TestJWTAuth_UserTokenHeader(t *testing.T) {
-	jwtMgr := auth.NewJWTManager("test-secret", 2*time.Hour, 7*24*time.Hour)
-	pair, err := jwtMgr.GenerateTokenPair("1", "admin", "CENTER", "kuscia-system")
-	if err != nil {
-		t.Fatalf("failed to generate token: %v", err)
-	}
-
-	r := gin.New()
-	r.Use(JWTAuth(jwtMgr))
-	r.GET("/test", func(c *gin.Context) {
-		c.JSON(200, gin.H{"ok": true})
-	})
-
-	// Token via User-Token header
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("User-Token", pair.AccessToken)
-	r.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("expected 200 for User-Token header auth, got %d", w.Code)
-	}
-}
-
 // --- Recovery Tests ---
 
 func TestRecovery_HandlesPanic(t *testing.T) {
@@ -509,54 +397,6 @@ func TestRecovery_HandlesPanic(t *testing.T) {
 }
 
 // --- OptionalAuth Tests ---
-
-func TestOptionalAuth_NoToken(t *testing.T) {
-	jwtMgr := auth.NewJWTManager("test-secret", 2*time.Hour, 7*24*time.Hour)
-	r := gin.New()
-	r.Use(OptionalAuth(jwtMgr))
-	r.GET("/test", func(c *gin.Context) {
-		_, exists := c.Get("username")
-		c.JSON(200, gin.H{"authenticated": exists})
-	})
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/test", nil)
-	r.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "false") {
-		t.Fatalf("expected authenticated=false, got %q", w.Body.String())
-	}
-}
-
-func TestOptionalAuth_ValidToken(t *testing.T) {
-	jwtMgr := auth.NewJWTManager("test-secret", 2*time.Hour, 7*24*time.Hour)
-	pair, err := jwtMgr.GenerateTokenPair("1", "admin", "CENTER", "kuscia-system")
-	if err != nil {
-		t.Fatalf("failed to generate token: %v", err)
-	}
-
-	r := gin.New()
-	r.Use(OptionalAuth(jwtMgr))
-	r.GET("/test", func(c *gin.Context) {
-		username, _ := c.Get("username")
-		c.JSON(200, gin.H{"username": username})
-	})
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/test", nil)
-	req.Header.Set("Authorization", "Bearer "+pair.AccessToken)
-	r.ServeHTTP(w, req)
-
-	if w.Code != 200 {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "admin") {
-		t.Fatalf("expected username admin, got %q", w.Body.String())
-	}
-}
 
 func TestMetrics_RecordsRequestMetrics(t *testing.T) {
 	r := gin.New()

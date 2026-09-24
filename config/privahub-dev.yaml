@@ -5,6 +5,14 @@ server:
   mode: "master"
   http_port: 8080
   inner_port: 9001
+  # Dev: relaxed bursts so local e2e runs can log in / create repeatedly
+  # (production keeps the Java RateLimitUtil burst of 1).
+  rate_limit:
+    login_burst: 20
+    user_burst: 10
+  # OpenAPI document at GET /api/v1alpha1/docs (login required unless public).
+  api_docs:
+    enabled: true
 
 database:
   driver: "sqlite"
@@ -40,3 +48,9 @@ observability:
 
 auth:
   jwt_secret: "dev-secret-do-not-use-in-production"
+
+# Data management (datasource / datatable / upload). See pkg/config/data.go.
+data:
+  # Dev: allow MinIO / MySQL / feature-service endpoints on localhost & LAN.
+  ip_block:
+    enable: false

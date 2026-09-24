@@ -2,11 +2,14 @@ package service
 
 import (
 	"context"
-	"crypto/hmac"
 	"errors"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
+	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"gorm.io/gorm"
 )
 
@@ -21,6 +24,21 @@ type UserService struct {
 	permRepo repository.SysUserPermissionRepository
 	nodeRepo repository.SysUserNodeRepository
 	db       *gorm.DB // used for transactional operations
+
+	// updatePwd lockout policy (Java secretpad.reset-password-error-*).
+	resetMaxAttempts int
+	resetLock        time.Duration
+	now              func() time.Time
+}
+
+// SetResetPasswordPolicy configures the updatePwd failure lockout.
+func (s *UserService) SetResetPasswordPolicy(maxAttempts int, lock time.Duration) {
+	if maxAttempts > 0 {
+		s.resetMaxAttempts = maxAttempts
+	}
+	if lock > 0 {
+		s.resetLock = lock
+	}
 }
 
 // NewUserService creates a new UserService.
@@ -35,19 +53,25 @@ func NewUserService(
 		permRepo: permRepo,
 		nodeRepo: nodeRepo,
 		db:       db,
+
+		resetMaxAttempts: 5,
+		resetLock:        60 * time.Minute,
+		now:              time.Now,
 	}
 }
 
 // --- Request / Response DTOs ---
 
-// CreateUserRequest represents a user creation request.
+// CreateUserRequest represents a user creation request. PasswordHash (SHA-256
+// hex, preferred) or Password (plaintext, hashed server side) is required.
 type CreateUserRequest struct {
-	Name      string   `json:"name" binding:"required"`
-	Password  string   `json:"password" binding:"required"`
-	OwnerType string   `json:"owner_type"`
-	OwnerID   string   `json:"owner_id"`
-	RoleCodes []string `json:"role_codes"`
-	NodeIDs   []string `json:"node_ids"`
+	Name         string   `json:"name" binding:"required"`
+	Password     string   `json:"password"`
+	PasswordHash string   `json:"passwordHash"`
+	OwnerType    string   `json:"owner_type"`
+	OwnerID      string   `json:"owner_id"`
+	RoleCodes    []string `json:"role_codes"`
+	NodeIDs      []string `json:"node_ids"`
 }
 
 // UpdateUserRequest represents a user update request.
@@ -59,10 +83,24 @@ type UpdateUserRequest struct {
 	NodeIDs   []string `json:"node_ids"`
 }
 
-// ResetPasswordRequest represents a password reset request.
+// ResetPasswordRequest represents an admin password reset request.
+// NewPasswordHash (SHA-256 hex) is preferred; NewPassword is hashed server side.
 type ResetPasswordRequest struct {
-	Name        string `json:"name" binding:"required"`
-	NewPassword string `json:"new_password" binding:"required"`
+	Name            string `json:"name" binding:"required"`
+	NewPassword     string `json:"new_password"`
+	NewPasswordHash string `json:"newPasswordHash"`
+}
+
+// clientPasswordHash returns the stored-form hash from a client hash (SHA-256
+// hex) or, failing that, hashes a plaintext password.
+func clientPasswordHash(hash, plain string) string {
+	if hexHash.MatchString(hash) {
+		return strings.ToLower(hash)
+	}
+	if plain != "" {
+		return HashPassword(plain)
+	}
+	return ""
 }
 
 // UserVO represents a user view object.
@@ -93,6 +131,10 @@ func (s *UserService) CreateUser(ctx context.Context, req *CreateUserRequest) (*
 	if existing != nil {
 		return nil, ErrUserAlreadyExists
 	}
+	passwordHash := clientPasswordHash(req.PasswordHash, req.Password)
+	if passwordHash == "" {
+		return nil, ErrPasswordRequired
+	}
 
 	ownerType := req.OwnerType
 	if ownerType == "" {
@@ -105,7 +147,7 @@ func (s *UserService) CreateUser(ctx context.Context, req *CreateUserRequest) (*
 
 	user := &model.UserAccountsDO{
 		Name:         req.Name,
-		PasswordHash: HashPassword(req.Password),
+		PasswordHash: passwordHash,
 		OwnerType:    ownerType,
 		OwnerID:      ownerID,
 	}
@@ -296,8 +338,14 @@ func (s *UserService) ResetPassword(ctx context.Context, req *ResetPasswordReque
 	if err != nil {
 		return ErrUserNotFound
 	}
-
-	return s.userRepo.UpdatePassword(ctx, req.Name, HashPassword(req.NewPassword))
+	h := clientPasswordHash(req.NewPasswordHash, req.NewPassword)
+	if h == "" {
+		return ErrPasswordRequired
+	}
+	if err := s.userRepo.UpdatePassword(ctx, req.Name, h); err != nil {
+		return err
+	}
+	return ClearUserSessions(ctx, s.db, req.Name)
 }
 
 // GetUser retrieves a user by name.
@@ -309,26 +357,74 @@ func (s *UserService) GetUser(ctx context.Context, name string) (*UserVO, error)
 	return s.toUserVO(ctx, user), nil
 }
 
-// UpdatePasswordRequest represents a password update request (self-service).
+// UpdatePasswordRequest is the Java UserUpdatePwdRequest. Name is always
+// taken from the session by the handler. OldPasswordHashSm3 is optional and
+// only used for legacy (Java, SM3-hashed) accounts.
 type UpdatePasswordRequest struct {
-	Name        string `json:"name" binding:"required"`
-	OldPassword string `json:"old_password" binding:"required"`
-	NewPassword string `json:"new_password" binding:"required"`
+	Name                string `json:"name"`
+	OldPasswordHash     string `json:"oldPasswordHash"`
+	NewPasswordHash     string `json:"newPasswordHash"`
+	ConfirmPasswordHash string `json:"confirmPasswordHash"`
+	OldPasswordHashSm3  string `json:"oldPasswordHashSm3"`
 }
 
-// UpdatePassword updates a user's password with old password verification.
+// UpdatePassword implements Java UserServiceImpl.updatePwd: reset-lock check,
+// new==confirm, new!=old, old hash verification with failure lockout, and on
+// success clears all sessions of the user. Errors are *AuthError.
 func (s *UserService) UpdatePassword(ctx context.Context, req *UpdatePasswordRequest) error {
+	if req.OldPasswordHash == "" || req.NewPasswordHash == "" || req.ConfirmPasswordHash == "" {
+		return newAuthError(ErrPasswordRequired, errcode.SystemValidationError, "oldPasswordHash/newPasswordHash/confirmPasswordHash required")
+	}
 	user, err := s.userRepo.FindByName(ctx, req.Name)
-	if err != nil {
-		return ErrUserNotFound
+	if err != nil || user == nil {
+		return newAuthError(ErrUserNotFound, errcode.AuthUserNotFound, "0")
+	}
+	now := s.now()
+	if user.GmtPasswdResetRelease != nil {
+		if user.GmtPasswdResetRelease.After(now) {
+			if user.PasswdResetFailedAttempts != nil && *user.PasswdResetFailedAttempts >= s.resetMaxAttempts {
+				return newAuthError(ErrUserLocked, errcode.AuthUserIsLocked, minutesLeft(*user.GmtPasswdResetRelease, now))
+			}
+		} else {
+			// Lock expired: release it and start counting again.
+			user.GmtPasswdResetRelease = nil
+			user.PasswdResetFailedAttempts = nil
+			if err := s.userRepo.Update(ctx, user); err != nil {
+				return err
+			}
+		}
+	}
+	if req.NewPasswordHash != req.ConfirmPasswordHash {
+		return newAuthError(ErrInvalidPassword, errcode.UserUpdatePasswordErrorInconsistent)
+	}
+	if req.OldPasswordHash == req.NewPasswordHash {
+		return newAuthError(ErrInvalidPassword, errcode.UserUpdatePasswordErrorSame)
+	}
+	stored := strings.ToLower(user.PasswordHash)
+	if constEq(strings.ToLower(req.OldPasswordHash), stored) ||
+		(req.OldPasswordHashSm3 != "" && constEq(strings.ToLower(req.OldPasswordHashSm3), stored)) {
+		user.GmtPasswdResetRelease = nil
+		user.PasswdResetFailedAttempts = nil
+		user.PasswordHash = strings.ToLower(req.NewPasswordHash)
+		if err := s.userRepo.Update(ctx, user); err != nil {
+			return err
+		}
+		return ClearUserSessions(ctx, s.db, user.Name)
 	}
 
-	// Verify old password using constant-time comparison to prevent timing attacks
-	if !hmac.Equal([]byte(HashPassword(req.OldPassword)), []byte(user.PasswordHash)) {
-		return errors.New("old password incorrect")
+	attempts := 1
+	if user.PasswdResetFailedAttempts != nil {
+		attempts = *user.PasswdResetFailedAttempts + 1
 	}
-
-	return s.userRepo.UpdatePassword(ctx, req.Name, HashPassword(req.NewPassword))
+	user.PasswdResetFailedAttempts = &attempts
+	if attempts >= s.resetMaxAttempts {
+		release := now.Add(s.resetLock)
+		user.GmtPasswdResetRelease = &release
+		_ = s.userRepo.Update(ctx, user)
+		return newAuthError(ErrUserLocked, errcode.AuthResetPasswordIsLocked, strconv.Itoa(int(s.resetLock.Minutes())))
+	}
+	_ = s.userRepo.Update(ctx, user)
+	return newAuthError(ErrInvalidPassword, errcode.AuthUserPasswordError, strconv.Itoa(s.resetMaxAttempts-attempts))
 }
 
 func (s *UserService) toUserVO(ctx context.Context, user *model.UserAccountsDO) *UserVO {

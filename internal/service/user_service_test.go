@@ -20,6 +20,7 @@ func setupUserTestDB(t *testing.T) *gorm.DB {
 		&model.UserAccountsDO{},
 		&model.SysUserPermissionRelDO{},
 		&model.SysUserNodeRelDO{},
+		&model.UserTokensDO{},
 	)
 	if err != nil {
 		t.Fatalf("failed to migrate: %v", err)

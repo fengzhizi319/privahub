@@ -34,9 +34,12 @@ func TestEnvService_PlatformChecks(t *testing.T) {
 		isP2pEdge  bool
 	}{
 		{"center", true, false, false, false},
-		{"autonomy", false, true, false, false},
+		{"master", true, false, false, false},
+		{"autonomy", false, true, false, true},
+		{"P2P", false, true, false, true},
 		{"lite", false, false, true, false},
-		{"p2p_edge", false, false, false, true},
+		{"EDGE", false, false, true, false},
+		{"p2p_edge", false, true, false, true},
 	}
 
 	for _, tt := range tests {
@@ -103,7 +106,8 @@ func TestEnvService_IsNodeInCurrentInst_Autonomy(t *testing.T) {
 }
 
 func TestEnvService_SetEmbeddedNodes(t *testing.T) {
-	svc := NewEnvService("autonomy", "alice", "inst-1", nil)
+	// Java: embedded nodes only exist on the CENTER platform.
+	svc := NewEnvService("center", "alice", "inst-1", nil)
 
 	svc.SetEmbeddedNodes([]string{"n1", "n2"})
 	if !svc.IsEmbeddedNode("n1") {
@@ -166,8 +170,11 @@ func TestEnvService_GetEnv(t *testing.T) {
 	svc := NewEnvService("autonomy", "alice", "inst-1", nil)
 	env := svc.GetEnv()
 
-	if env.PlatformType != "autonomy" {
-		t.Errorf("expected platform_type 'autonomy', got %q", env.PlatformType)
+	if env.PlatformType != "AUTONOMY" {
+		t.Errorf("expected platformType 'AUTONOMY', got %q", env.PlatformType)
+	}
+	if env.PlatformNodeID != "alice" {
+		t.Errorf("expected platformNodeId 'alice', got %q", env.PlatformNodeID)
 	}
 	if env.NodeID != "alice" {
 		t.Errorf("expected node_id 'alice', got %q", env.NodeID)
@@ -181,8 +188,21 @@ func TestEnvService_GetEnv(t *testing.T) {
 	if !env.IsAutonomy {
 		t.Error("expected IsAutonomy true")
 	}
-	if env.IsP2pEdge {
-		t.Error("expected IsP2pEdge false")
+	if !env.IsP2pEdge {
+		t.Error("expected IsP2pEdge true (alias of autonomy)")
+	}
+}
+
+func TestEnvService_EmbeddedOnlyOnCenter(t *testing.T) {
+	c := NewEnvService("master", "kuscia-system", "", nil)
+	c.SetEmbeddedNodes(DefaultEmbeddedNodes)
+	if !c.IsEmbeddedNode("tee") || !c.IsCurrentNodeEnvironment("alice") {
+		t.Error("center should treat alice/bob/tee as embedded")
+	}
+	e := NewEnvService("edge", "alice", "", nil)
+	e.SetEmbeddedNodes(DefaultEmbeddedNodes)
+	if e.IsEmbeddedNode("bob") {
+		t.Error("edge platform has no embedded nodes")
 	}
 }
 
@@ -195,10 +215,14 @@ func TestNormalizePlatformType_Comprehensive(t *testing.T) {
 		{"master", PlatformCenter},
 		{"CENTER", PlatformCenter},
 		{"autonomy", PlatformAutonomy},
-		{"lite", PlatformLite},
-		{"p2p_edge", PlatformP2PEdge},
-		{"p2pedge", PlatformP2PEdge},
-		{"edge", PlatformP2PEdge},
+		{"AUTONOMY", PlatformAutonomy},
+		{"p2p", PlatformAutonomy},
+		{"lite", PlatformEdge},
+		{"EDGE", PlatformEdge},
+		{"p2p_edge", PlatformAutonomy},
+		{"p2pedge", PlatformAutonomy},
+		{"edge", PlatformEdge},
+		{"TEST", PlatformTest},
 		{"unknown", PlatformCenter}, // default
 		{"", PlatformCenter},        // default
 	}

@@ -13,6 +13,8 @@ type UserAccountsDO struct {
 	GmtPasswdResetRelease     *time.Time `json:"gmt_passwd_reset_release"`
 	FailedAttempts            *int       `json:"failed_attempts"`
 	LockedInvalidTime         *time.Time `json:"locked_invalid_time"`
+	// InstID mirrors Java AccountsDO.instId (P2P institution of the user).
+	InstID string `gorm:"type:varchar(64);not null;default:''" json:"inst_id"`
 }
 
 func (UserAccountsDO) TableName() string { return "user_accounts" }
@@ -20,10 +22,14 @@ func (UserAccountsDO) TableName() string { return "user_accounts" }
 // UserTokensDO represents a user session token.
 type UserTokensDO struct {
 	BaseDO
-	Name        string     `gorm:"type:varchar(128);not null" json:"name"`
-	Token       string     `gorm:"type:varchar(64)" json:"token"`
-	GmtToken    *time.Time `json:"gmt_token"`
-	SessionData string     `gorm:"type:text" json:"session_data"`
+	Name string `gorm:"type:varchar(128);not null" json:"name"`
+	// Token holds the full access token (a JWT, well over 64 chars).
+	Token    string     `gorm:"type:text" json:"token"`
+	GmtToken *time.Time `json:"gmt_token"`
+	// SessionData is the JSON UserContext snapshot (Java UserContextDTO).
+	SessionData string `gorm:"type:text" json:"session_data"`
+	// SessionID binds the access/refresh token pair (JWT "sid" claim).
+	SessionID string `gorm:"type:varchar(64);index" json:"session_id"`
 }
 
 func (UserTokensDO) TableName() string { return "user_tokens" }

@@ -13,7 +13,8 @@ database:
 kuscia:
   namespace: "${NODE_ID}"
   api_address: "${KUSCIA_API_ADDRESS:127.0.0.1}"
-  api_port: 8083
+  api_port: 8083  # KusciaAPI gRPC port
+  http_port: 8082 # KusciaAPI HTTP port (used by privahub)
   protocol: "${KUSCIA_PROTOCOL:tls}"
   gateway: "${KUSCIA_GW_ADDRESS:127.0.0.1:1080}"
   nodes:
@@ -29,3 +30,10 @@ observability:
 
 auth:
   jwt_secret: "${JWT_SECRET:change-me-in-production}"
+
+# Center -> edge data sync (SSE client, Java EdgeSyncTask) and EDGE request
+# forwarding (Java EdgeRequestFilter). Defaults mirror Java application-edge.yaml;
+# see pkg/config/sync.go for all keys (tables, edge_forward, edge_include ...).
+sync:
+  edge_enabled: true
+  edge_reconnect_interval: 5s

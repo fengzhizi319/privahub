@@ -121,7 +121,16 @@ export PRIVAHUB_DATABASE_DSN="user:pass@tcp(localhost:3306)/secretpad"
 
 ### 3.4 Profile 配置
 
-通过 `PRIVAHUB_PROFILE` 环境变量加载 profile 配置：
+通过 `PRIVAHUB_PROFILE` 环境变量加载 profile 配置。**未设置 profile 即视为生产环境**：
+启动时拒绝示例 `auth.jwt_secret`（及长度 < 16 的值）、示例 `crypto.aes_key`
+（`12345678901234567890123456789012`）和 `auth.enabled=false`，并提示所需环境变量：
+
+```bash
+export PRIVAHUB_AUTH_JWT_SECRET="$(openssl rand -hex 32)"
+export PRIVAHUB_CRYPTO_AES_KEY="$(openssl rand -hex 16)"   # 32 字节
+```
+
+只有 `dev` / `test` / `local` profile 保留内置开发默认值（开发密钥、admin/12345678、`/metrics` 公开）。
 
 ```bash
 # 开发环境
@@ -264,7 +273,14 @@ spec:
 
 ### 5.2 Prometheus 指标
 
-指标端点: `http://localhost:8080/metrics`
+指标端点: `http://localhost:8080/metrics`，访问控制由 `observability.metrics_access` 决定：
+
+| 取值 | 行为 |
+|------|------|
+| `public` | 不限制（dev/test profile 默认） |
+| `restricted` | 生产默认：仅回环地址、`observability.metrics_allowed_cidrs` 中的来源，或携带 `Authorization: Bearer <observability.metrics_token>` 的请求 |
+| `auth` | 需要登录会话 |
+| `disabled` | 不提供该端点 |
 
 关键指标:
 
@@ -342,8 +358,16 @@ curl http://localhost:8080/debug/pprof/goroutine?debug=1
 
 ### 8.1 生产环境检查清单
 
-- [ ] 修改 `auth.jwt_secret` 为强随机字符串
+- [ ] 设置 `PRIVAHUB_AUTH_JWT_SECRET` / `PRIVAHUB_CRYPTO_AES_KEY`（未设置 profile 时示例值会被拒绝启动）
 - [ ] 修改默认管理员密码
+- [ ] inner 端口（9001）默认只绑定 127.0.0.1；需要让 Kuscia 网关跨主机/容器访问而改为 `0.0.0.0` 时，
+      必须配置 `server.inner_auth`（否则拒绝启动），至少一种：
+  - `token` / `token_file`：共享密钥，请求头 `X-Privahub-Inner-Token`；本平台经网关发出的节点间调用会自动携带，
+    所有互通的平台需配置相同的值（≥16 字符）；
+  - `allowed_cidrs`：来源 IP 白名单（直接对端地址，一般为 Kuscia 网关 / Envoy 所在网段，不信任 X-Forwarded-For）；
+  - `tls.cert_file` / `tls.key_file` / `tls.client_ca_file`：inner 监听启用 mTLS，要求客户端证书。
+  同时配置多种时全部生效。
+- [ ] `/metrics` 保持 `observability.metrics_access: restricted`（默认）或 `auth`
 - [ ] 配置 `middleware.IPWhitelist` 限制访问来源
 - [ ] 启用 HTTPS (通过反向代理)
 - [ ] 设置 `log_format: json` 便于日志分析

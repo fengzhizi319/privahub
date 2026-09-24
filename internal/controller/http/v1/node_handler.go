@@ -1,15 +1,13 @@
 package v1
 
 import (
-	"time"
-
 	"github.com/fengzhizi319/privahub/internal/service"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/response"
 	"github.com/gin-gonic/gin"
 )
 
-// NodeHandler handles node-related HTTP requests.
+// NodeHandler handles node-related HTTP requests (Java NodeController).
 type NodeHandler struct {
 	nodeService *service.NodeService
 }
@@ -19,221 +17,182 @@ func NewNodeHandler(nodeService *service.NodeService) *NodeHandler {
 	return &NodeHandler{nodeService: nodeService}
 }
 
-// Create handles node creation.
+// Create handles node/create. Returns the server-generated nodeId (string).
 func (h *NodeHandler) Create(c *gin.Context) {
 	var req service.CreateNodeRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
-
-	node, err := h.nodeService.CreateNode(c.Request.Context(), &req)
+	nodeID, err := h.nodeService.CreateNode(nodeReqCtx(c), &req)
 	if err != nil {
-		switch err {
-		case service.ErrNodeAlreadyExists:
-			response.FailWithMsg(c, errcode.AlreadyExists, "node already exists")
-		default:
-			response.Fail(c, errcode.SystemError)
-		}
+		failNodeErr(c, err)
 		return
 	}
-
-	response.OK(c, node)
+	response.OK(c, nodeID)
 }
 
-// Update handles node update.
+// Update handles node/update (Java: netAddress).
 func (h *NodeHandler) Update(c *gin.Context) {
 	var req service.UpdateNodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
-
-	if err := h.nodeService.UpdateNode(c.Request.Context(), &req); err != nil {
-		if err == service.ErrNodeNotFound {
-			response.FailWithMsg(c, errcode.NotFound, "node not found")
-			return
-		}
-		response.Fail(c, errcode.SystemError)
+	if err := h.nodeService.UpdateNode(nodeReqCtx(c), &req); err != nil {
+		failNodeErr(c, err)
 		return
 	}
-
-	response.OKEmpty(c)
+	response.OK(c, firstNonEmptyStr(req.NodeID, req.NodeIDAlt))
 }
 
-// Get handles node detail retrieval.
+// Get handles node/get.
 func (h *NodeHandler) Get(c *gin.Context) {
-	var req struct {
-		NodeID string `json:"node_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var req nodeIDBody
+	if err := c.ShouldBindJSON(&req); err != nil || req.id() == "" {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
-
-	node, err := h.nodeService.GetNode(c.Request.Context(), req.NodeID)
+	node, err := h.nodeService.GetNode(nodeReqCtx(c), req.id())
 	if err != nil {
-		response.FailWithMsg(c, errcode.NotFound, "node not found")
+		failNodeErr(c, err)
 		return
 	}
-
 	response.OK(c, node)
 }
 
-// List handles node list retrieval.
+// List handles node/list: full NodeVO list (Java returns a bare array).
 func (h *NodeHandler) List(c *gin.Context) {
-	nodes, err := h.nodeService.ListNodes(c.Request.Context())
+	nodes, err := h.nodeService.ListNodes(nodeReqCtx(c))
 	if err != nil {
-		response.Fail(c, errcode.SystemError)
+		failNodeErr(c, err)
 		return
 	}
-
-	response.OK(c, gin.H{"list": nodes, "nodes": nodes, "total": len(nodes)})
+	response.OK(c, nodes)
 }
 
-// Delete handles node deletion.
-func (h *NodeHandler) Delete(c *gin.Context) {
-	var req struct {
-		NodeID string `json:"node_id" binding:"required"`
+// Page handles node/page: {list, total}.
+func (h *NodeHandler) Page(c *gin.Context) {
+	var req service.PageNodeRequest
+	_ = c.ShouldBindJSON(&req)
+	page, err := h.nodeService.PageNodes(nodeReqCtx(c), &req)
+	if err != nil {
+		failNodeErr(c, err)
+		return
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
+	response.OK(c, page)
+}
+
+// Delete handles node/delete.
+func (h *NodeHandler) Delete(c *gin.Context) {
+	var req nodeIDBody
+	if err := c.ShouldBindJSON(&req); err != nil || req.id() == "" {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
-
-	if err := h.nodeService.DeleteNode(c.Request.Context(), req.NodeID); err != nil {
-		if err == service.ErrNodeNotFound {
-			response.FailWithMsg(c, errcode.NotFound, "node not found")
-			return
-		}
-		response.Fail(c, errcode.SystemError)
+	if err := h.nodeService.DeleteNode(nodeReqCtx(c), req.id()); err != nil {
+		failNodeErr(c, err)
 		return
 	}
-
 	response.OKEmpty(c)
 }
 
-// Token handles node deployment token generation.
-func (h *NodeHandler) Token(c *gin.Context) {
-	var req struct {
-		NodeID string `json:"node_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
+// Token handles node/token: the Kuscia deploy token (no refresh).
+func (h *NodeHandler) Token(c *gin.Context) { h.token(c, false) }
+
+// NewToken handles node/newToken: refresh from Kuscia's unused deploy tokens.
+func (h *NodeHandler) NewToken(c *gin.Context) { h.token(c, true) }
+
+func (h *NodeHandler) token(c *gin.Context, refresh bool) {
+	var req nodeIDBody
+	if err := c.ShouldBindJSON(&req); err != nil || req.id() == "" {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
-
-	token, err := h.nodeService.GenerateToken(c.Request.Context(), req.NodeID)
+	vo, err := h.nodeService.GetNodeToken(nodeReqCtx(c), req.id(), refresh)
 	if err != nil {
-		if err == service.ErrNodeNotFound {
-			response.FailWithMsg(c, errcode.NotFound, "node not found")
-			return
-		}
-		response.Fail(c, errcode.SystemError)
+		failNodeErr(c, err)
 		return
 	}
-
-	response.OK(c, gin.H{
-		"token":                token,
-		"token_status":         "Available",
-		"last_transition_time": time.Now().Format("2006-01-02 15:04:05"),
-	})
+	response.OK(c, vo)
 }
 
-// CreateRoute handles route creation.
+// CreateRoute handles Go-only node/route/create (delegates to NodeRouteService).
 func (h *NodeHandler) CreateRoute(c *gin.Context) {
 	var req service.CreateRouteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
-
-	if err := h.nodeService.CreateRoute(c.Request.Context(), &req); err != nil {
-		if err == service.ErrRouteAlreadyExists {
-			response.FailWithMsg(c, errcode.AlreadyExists, "route already exists")
-			return
-		}
-		response.Fail(c, errcode.SystemError)
+	if err := h.nodeService.CreateRoute(nodeReqCtx(c), &req); err != nil {
+		failNodeErr(c, err)
 		return
 	}
-
 	response.OKEmpty(c)
 }
 
-// ListRoutes handles route list retrieval.
+// ListRoutes handles Go-only node/route/list.
 func (h *NodeHandler) ListRoutes(c *gin.Context) {
-	var req struct {
-		NodeID string `json:"node_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var req nodeIDBody
+	if err := c.ShouldBindJSON(&req); err != nil || req.id() == "" {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
-
-	routes, err := h.nodeService.ListRoutes(c.Request.Context(), req.NodeID)
+	routes, err := h.nodeService.ListRoutes(nodeReqCtx(c), req.id())
 	if err != nil {
-		response.Fail(c, errcode.SystemError)
+		failNodeErr(c, err)
 		return
 	}
-
 	response.OK(c, gin.H{"routes": routes})
 }
 
-// DeleteRoute handles route deletion.
+// DeleteRoute handles Go-only node/route/delete (both directions).
 func (h *NodeHandler) DeleteRoute(c *gin.Context) {
 	var req struct {
-		SrcNodeID string `json:"src_node_id" binding:"required"`
-		DstNodeID string `json:"dst_node_id" binding:"required"`
+		SrcNodeID    string `json:"src_node_id"`
+		DstNodeID    string `json:"dst_node_id"`
+		SrcNodeIDAlt string `json:"srcNodeId"`
+		DstNodeIDAlt string `json:"dstNodeId"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
-
-	if err := h.nodeService.DeleteRoute(c.Request.Context(), req.SrcNodeID, req.DstNodeID); err != nil {
-		if err == service.ErrRouteNotFound {
-			response.FailWithMsg(c, errcode.NotFound, "route not found")
-			return
-		}
-		response.Fail(c, errcode.SystemError)
+	src, dst := firstNonEmptyStr(req.SrcNodeID, req.SrcNodeIDAlt), firstNonEmptyStr(req.DstNodeID, req.DstNodeIDAlt)
+	if src == "" || dst == "" {
+		response.Fail(c, errcode.ParamError)
 		return
 	}
-
+	if err := h.nodeService.DeleteRoute(nodeReqCtx(c), src, dst); err != nil {
+		failNodeErr(c, err)
+		return
+	}
 	response.OKEmpty(c)
 }
 
-// Refresh handles node status refresh.
+// Refresh handles node/refresh.
 func (h *NodeHandler) Refresh(c *gin.Context) {
-	var req struct {
-		NodeID    string `json:"nodeId"`
-		NodeIDAlt string `json:"node_id"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		req.NodeID = ""
-	}
-	nodeID := req.NodeID
-	if nodeID == "" {
-		nodeID = req.NodeIDAlt
-	}
-
-	node, err := h.nodeService.RefreshNode(c.Request.Context(), nodeID)
-	if err != nil {
-		if err == service.ErrNodeNotFound {
-			response.FailWithMsg(c, errcode.NotFound, "node not found")
-			return
-		}
-		response.Fail(c, errcode.SystemError)
+	var req nodeIDBody
+	if err := c.ShouldBindJSON(&req); err != nil || req.id() == "" {
+		response.Fail(c, errcode.ParamError)
 		return
 	}
-
+	node, err := h.nodeService.RefreshNode(nodeReqCtx(c), req.id())
+	if err != nil {
+		failNodeErr(c, err)
+		return
+	}
 	response.OK(c, node)
 }
 
 // ResultList handles node result list retrieval.
 func (h *NodeHandler) ResultList(c *gin.Context) {
 	var req service.ListNodeResultRequest
+	// Java: @Valid @RequestBody -> a missing / malformed body is a
+	// validation error (202011100), not an empty query.
 	if err := c.ShouldBindJSON(&req); err != nil {
-		req = service.ListNodeResultRequest{}
+		response.Fail(c, errcode.ParamError)
+		return
 	}
 
 	vo, err := h.nodeService.ListNodeResults(c.Request.Context(), &req)
@@ -260,4 +219,13 @@ func (h *NodeHandler) ResultDetail(c *gin.Context) {
 	}
 
 	response.OK(c, vo)
+}
+
+func firstNonEmptyStr(vs ...string) string {
+	for _, v := range vs {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }

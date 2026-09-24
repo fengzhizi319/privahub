@@ -143,7 +143,9 @@ privahub/
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `PRIVAHUB_PROFILE` | 配置 profile | (空) |
+| `PRIVAHUB_PROFILE` | 配置 profile；空 = 生产（拒绝示例密钥与 auth.enabled=false），本地开发用 `dev` | (空) |
+| `PRIVAHUB_AUTH_JWT_SECRET` | JWT 密钥（生产必填，≥16 字符且非示例值） | — |
+| `PRIVAHUB_CRYPTO_AES_KEY` | AES-256 密钥（生产不可为示例值） | — |
 | `PRIVAHUB_SERVER_HTTP_PORT` | HTTP 端口 | 8080 |
 | `PRIVAHUB_SERVER_INNER_PORT` | 内部端口 | 9001 |
 | `PRIVAHUB_KUSCIA_API_ADDRESS` | Kuscia 地址 | 127.0.0.1 |

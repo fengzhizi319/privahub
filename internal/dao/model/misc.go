@@ -30,7 +30,7 @@ type ProjectReportDO struct {
 	BaseDO
 	ProjectID string `gorm:"uniqueIndex:upk_project_report_id;type:varchar(64);not null" json:"project_id"`
 	ReportID  string `gorm:"uniqueIndex:upk_project_report_id;type:varchar(64);not null" json:"report_id"`
-	Content   string `gorm:"type:varchar(64);not null" json:"content"`
+	Content   string `gorm:"type:text;not null" json:"content"`
 }
 
 func (ProjectReportDO) TableName() string { return "project_report" }
@@ -44,8 +44,8 @@ type ProjectReadDataDO struct {
 	Hash       string `gorm:"type:varchar(64);not null;default:''" json:"hash"`
 	Task       string `gorm:"type:varchar(64);not null;default:''" json:"task"`
 	GrapNodeID string `gorm:"type:varchar(64);not null;default:''" json:"grap_node_id"`
-	Content    string `gorm:"type:varchar(64);not null" json:"content"`
-	Raw        string `gorm:"type:varchar(64);not null" json:"raw"`
+	Content    string `gorm:"type:text;not null" json:"content"`
+	Raw        string `gorm:"type:text;not null" json:"raw"`
 }
 
 func (ProjectReadDataDO) TableName() string { return "project_read_data" }

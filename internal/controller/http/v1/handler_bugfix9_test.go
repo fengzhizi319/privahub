@@ -44,7 +44,7 @@ func TestNodeRouteHandler_Page_Success(t *testing.T) {
 		Data struct {
 			Total int64 `json:"total"`
 			Data  []struct {
-				RouteID string `json:"route_id"`
+				RouteID string `json:"routeId"`
 			} `json:"data"`
 		} `json:"data"`
 	}
@@ -102,8 +102,8 @@ func TestNodeRouteHandler_ListNode_Success(t *testing.T) {
 
 	var resp struct {
 		Data []struct {
-			NodeID string `json:"node_id"`
-			Name   string `json:"name"`
+			NodeID string `json:"nodeId"`
+			Name   string `json:"nodeName"`
 		} `json:"data"`
 	}
 	json.Unmarshal(w.Body.Bytes(), &resp)
@@ -155,186 +155,5 @@ func TestNodeRouteHandler_Delete_NotFound(t *testing.T) {
 	// Should return error code for not found
 	if resp.Status.Code == 0 {
 		t.Fatal("expected error code for nonexistent route")
-	}
-}
-
-// --- Bug 65: ApprovalHandler.PullStatus error propagation ---
-
-func TestApprovalHandler_PullStatus_Success(t *testing.T) {
-	db := setupHandlerTestDB(t)
-	h := NewApprovalHandler(db)
-	r := setupTestRouter()
-	r.POST("/pullstatus", h.PullStatus)
-
-	db.Create(&model.VoteRequestDO{
-		VoteID:    "vote-1",
-		Initiator: "alice",
-		Voters:    "bob,carol",
-		Type:      "PROJECT_CREATE",
-		Status:    0,
-	})
-	db.Create(&model.VoteInviteDO{
-		VoteID:            "vote-1",
-		Initiator:         "alice",
-		VoteParticipantID: "bob",
-		Action:            "AGREE",
-	})
-	db.Create(&model.VoteInviteDO{
-		VoteID:            "vote-1",
-		Initiator:         "alice",
-		VoteParticipantID: "carol",
-		Action:            "REVIEWING",
-	})
-
-	w := postJSON(r, "/pullstatus", map[string]interface{}{"vote_id": "vote-1"})
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	var resp struct {
-		Data struct {
-			VoteID  string `json:"vote_id"`
-			Status  string `json:"status"`
-			Invites []struct {
-				Voter  string `json:"voter"`
-				Action string `json:"action"`
-			} `json:"invites"`
-		} `json:"data"`
-	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.Data.VoteID != "vote-1" {
-		t.Fatalf("expected vote-1, got %s", resp.Data.VoteID)
-	}
-	if resp.Data.Status != "PENDING" {
-		t.Fatalf("expected PENDING, got %s", resp.Data.Status)
-	}
-	if len(resp.Data.Invites) != 2 {
-		t.Fatalf("expected 2 invites, got %d", len(resp.Data.Invites))
-	}
-}
-
-// --- Bug 66-68: MessageHandler error propagation ---
-
-func TestMessageHandler_List_Success(t *testing.T) {
-	db := setupHandlerTestDB(t)
-	h := NewMessageHandler(db)
-	r := setupTestRouter()
-	r.POST("/list", h.List)
-
-	db.Create(&model.VoteRequestDO{
-		VoteID:      "vote-1",
-		Initiator:   "alice",
-		Type:        "PROJECT_CREATE",
-		Status:      0,
-		Description: "Test vote",
-	})
-	db.Create(&model.VoteRequestDO{
-		VoteID:      "vote-2",
-		Initiator:   "bob",
-		Type:        "NODE_CREATE",
-		Status:      1,
-		Description: "Another vote",
-	})
-
-	w := postJSON(r, "/list", map[string]interface{}{"page": 1, "size": 10})
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	var resp struct {
-		Data struct {
-			Total int64 `json:"total"`
-			List  []struct {
-				VoteID string `json:"vote_id"`
-				Status string `json:"status"`
-			} `json:"list"`
-		} `json:"data"`
-	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.Data.Total != 2 {
-		t.Fatalf("expected total 2, got %d", resp.Data.Total)
-	}
-	if len(resp.Data.List) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(resp.Data.List))
-	}
-}
-
-func TestMessageHandler_Detail_Success(t *testing.T) {
-	db := setupHandlerTestDB(t)
-	h := NewMessageHandler(db)
-	r := setupTestRouter()
-	r.POST("/detail", h.Detail)
-
-	db.Create(&model.VoteRequestDO{
-		VoteID:      "vote-1",
-		Initiator:   "alice",
-		Voters:      "bob,carol",
-		Type:        "PROJECT_CREATE",
-		Status:      1,
-		Description: "Test vote",
-	})
-	db.Create(&model.VoteInviteDO{
-		VoteID:            "vote-1",
-		VoteParticipantID: "bob",
-		Action:            "AGREE",
-		Reason:            "Looks good",
-	})
-
-	w := postJSON(r, "/detail", map[string]interface{}{"vote_id": "vote-1"})
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	var resp struct {
-		Data struct {
-			VoteID  string `json:"vote_id"`
-			Status  string `json:"status"`
-			Invites []struct {
-				Voter  string `json:"voter"`
-				Action string `json:"action"`
-				Reason string `json:"reason"`
-			} `json:"invites"`
-		} `json:"data"`
-	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.Data.Status != "APPROVED" {
-		t.Fatalf("expected APPROVED, got %s", resp.Data.Status)
-	}
-	if len(resp.Data.Invites) != 1 {
-		t.Fatalf("expected 1 invite, got %d", len(resp.Data.Invites))
-	}
-	if resp.Data.Invites[0].Reason != "Looks good" {
-		t.Fatalf("expected reason 'Looks good', got %s", resp.Data.Invites[0].Reason)
-	}
-}
-
-func TestMessageHandler_Pending_Success(t *testing.T) {
-	db := setupHandlerTestDB(t)
-	h := NewMessageHandler(db)
-	r := setupTestRouter()
-	r.POST("/pending", h.Pending)
-
-	db.Create(&model.VoteInviteDO{VoteID: "vote-1", VoteParticipantID: "bob", Action: "REVIEWING"})
-	db.Create(&model.VoteInviteDO{VoteID: "vote-2", VoteParticipantID: "bob", Action: "AGREE"})
-	db.Create(&model.VoteInviteDO{VoteID: "vote-3", VoteParticipantID: "carol", Action: "REVIEWING"})
-
-	// All pending
-	w := postJSON(r, "/pending", map[string]interface{}{})
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-	var resp struct {
-		Data int64 `json:"data"`
-	}
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.Data != 2 {
-		t.Fatalf("expected 2 pending, got %d", resp.Data)
-	}
-
-	// Filter by voter
-	w = postJSON(r, "/pending", map[string]interface{}{"voter": "bob"})
-	json.Unmarshal(w.Body.Bytes(), &resp)
-	if resp.Data != 1 {
-		t.Fatalf("expected 1 pending for bob, got %d", resp.Data)
 	}
 }

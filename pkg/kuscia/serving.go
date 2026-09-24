@@ -9,11 +9,29 @@ import (
 
 // ServingParty represents a party in a serving deployment.
 type ServingParty struct {
-	DomainID          string `json:"domain_id"`
-	Role              string `json:"role"`
-	AppImage          string `json:"app_image"`
-	Replicas          int32  `json:"replicas,omitempty"`
-	ServiceNamePrefix string `json:"service_name_prefix,omitempty"`
+	DomainID          string                 `json:"domain_id"`
+	Role              string                 `json:"role"`
+	AppImage          string                 `json:"app_image"`
+	Replicas          int32                  `json:"replicas,omitempty"`
+	UpdateStrategy    *ServingUpdateStrategy `json:"update_strategy,omitempty"`
+	Resources         []ServingResource      `json:"resources,omitempty"`
+	ServiceNamePrefix string                 `json:"service_name_prefix,omitempty"`
+}
+
+// ServingResource is a per-container resource config (serving.proto Resource).
+type ServingResource struct {
+	ContainerName string `json:"container_name,omitempty"`
+	MinCPU        string `json:"min_cpu,omitempty"`
+	MaxCPU        string `json:"max_cpu,omitempty"`
+	MinMemory     string `json:"min_memory,omitempty"`
+	MaxMemory     string `json:"max_memory,omitempty"`
+}
+
+// ServingUpdateStrategy is serving.proto UpdateStrategy.
+type ServingUpdateStrategy struct {
+	Type           string `json:"type,omitempty"` // Recreate / RollingUpdate
+	MaxSurge       string `json:"max_surge,omitempty"`
+	MaxUnavailable string `json:"max_unavailable,omitempty"`
 }
 
 // CreateServingRequest represents a Kuscia serving creation request.
@@ -39,6 +57,15 @@ type PartyServingStatus struct {
 	AvailableReplicas   int32  `json:"available_replicas"`
 	UnavailableReplicas int32  `json:"unavailable_replicas"`
 	CreateTime          string `json:"create_time"`
+	// Endpoints are the party's service endpoints (serving.proto ServingPartyEndpoint).
+	Endpoints []ServingPartyEndpoint `json:"endpoints,omitempty"`
+}
+
+// ServingPartyEndpoint is serving.proto ServingPartyEndpoint.
+type ServingPartyEndpoint struct {
+	PortName string `json:"port_name"`
+	Scope    string `json:"scope,omitempty"`
+	Endpoint string `json:"endpoint"`
 }
 
 // ServingStatusDetail represents detailed serving status.

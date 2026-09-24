@@ -28,6 +28,8 @@ type ProjectJobTaskDO struct {
 	ErrMsg      string `gorm:"type:text" json:"err_msg"`
 	GraphNodeID string `gorm:"type:varchar(64)" json:"graph_node_id"`
 	GraphNode   string `gorm:"type:text" json:"graph_node"`
+	// ExtraInfo is the JSON task extra info ({"progress":0.5}), Java ProjectTaskDO.extraInfo.
+	ExtraInfo string `gorm:"type:text" json:"extra_info"`
 }
 
 func (ProjectJobTaskDO) TableName() string { return "project_job_task" }

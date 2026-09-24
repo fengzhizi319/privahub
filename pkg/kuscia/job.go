@@ -74,7 +74,8 @@ type QueryJobResponse struct {
 
 // StopJobRequest represents a Kuscia StopJob API request.
 type StopJobRequest struct {
-	JobID string `json:"job_id"`
+	JobID  string `json:"job_id"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // StopJobResponse represents a Kuscia StopJob API response.
@@ -150,6 +151,12 @@ func (c *Client) StopJob(ctx context.Context, jobID string) error {
 		return fmt.Errorf("kuscia: stop job %s failed: [%d] %s", jobID, resp.Status.Code, resp.Status.Message)
 	}
 	return nil
+}
+
+// StopJobWithReason stops a running job with a reason.
+func (c *Client) StopJobWithReason(ctx context.Context, jobID, reason string) error {
+	var resp StopJobResponse
+	return c.doRequest(ctx, "/api/v1/job/stop", &StopJobRequest{JobID: jobID, Reason: reason}, &resp)
 }
 
 // DeleteJob deletes a job.

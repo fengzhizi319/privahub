@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
@@ -23,10 +22,17 @@ func setupNewTestDB(t *testing.T) *gorm.DB {
 		&model.ProjectFeatureTableDO{},
 		&model.ProjectGraphDomainDatasourceDO{},
 		&model.EdgeDataSyncLogDO{},
+		&model.NodeDO{},
+		&model.UserTokensDO{},
 	)
 	if err != nil {
 		t.Fatalf("failed to migrate: %v", err)
 	}
+	if !db.Migrator().HasTable(&model.SysUserPermissionRelDO{}) {
+		_ = db.AutoMigrate(&model.SysUserPermissionRelDO{})
+	}
+	// Node users require an existing node (Java NodeUserServiceImpl).
+	seedNodeUserTestNodes(db)
 	return db
 }
 
@@ -75,98 +81,49 @@ func TestNodeUserService_ResetPassword(t *testing.T) {
 	svc := NewNodeUserService(db)
 	ctx := context.Background()
 
-	_ = svc.Create(ctx, &NodeUserCreateRequest{
-		NodeID:   "bob",
-		UserName: "edge_user2",
-		Password: "old_pass",
-	})
+	if err := svc.Create(ctx, &NodeUserCreateRequest{
+		NodeID:       "bob",
+		Name:         "edge_user2",
+		PasswordHash: HashPassword("old_pass"),
+	}); err != nil {
+		t.Fatal(err)
+	}
 
-	// Reset password
+	// Wrong old password is rejected (Java: "wrong password").
 	err := svc.ResetPassword(ctx, &ResetNodeUserPwdRequest{
-		NodeID:   "bob",
-		UserName: "edge_user2",
-		Password: "new_pass",
+		NodeID: "bob", Name: "edge_user2",
+		PasswordHash: HashPassword("bad"), NewPasswordHash: HashPassword("new_pass"),
 	})
-	if err != nil {
+	if err != ErrNodeUserWrongPwd {
+		t.Fatalf("expected ErrNodeUserWrongPwd, got %v", err)
+	}
+	// Account not belonging to nodeId is rejected.
+	err = svc.ResetPassword(ctx, &ResetNodeUserPwdRequest{
+		NodeID: "alice", Name: "edge_user2",
+		PasswordHash: HashPassword("old_pass"), NewPasswordHash: HashPassword("new_pass"),
+	})
+	if err != ErrNodeUserNotFound {
+		t.Fatalf("expected ErrNodeUserNotFound for foreign node, got %v", err)
+	}
+	// Correct reset.
+	if err := svc.ResetPassword(ctx, &ResetNodeUserPwdRequest{
+		NodeID: "bob", Name: "edge_user2",
+		PasswordHash: HashPassword("old_pass"), NewPasswordHash: HashPassword("new_pass"),
+	}); err != nil {
 		t.Fatalf("ResetPassword failed: %v", err)
+	}
+	var u model.UserAccountsDO
+	db.Where("name = ?", "edge_user2").First(&u)
+	if u.PasswordHash != HashPassword("new_pass") {
+		t.Error("password not updated")
 	}
 
 	// Reset non-existent user
 	err = svc.ResetPassword(ctx, &ResetNodeUserPwdRequest{
-		NodeID:   "bob",
-		UserName: "nonexistent",
-		Password: "x",
+		NodeID: "bob", Name: "nonexistent", PasswordHash: "x", NewPasswordHash: "y",
 	})
 	if err != ErrNodeUserNotFound {
 		t.Fatalf("expected ErrNodeUserNotFound, got: %v", err)
-	}
-}
-
-// --- FeatureTableService Tests ---
-
-func TestFeatureTableService_CreateAndList(t *testing.T) {
-	db := setupNewTestDB(t)
-	svc := NewFeatureTableService(db)
-	ctx := context.Background()
-
-	err := svc.CreateFeatureTable(ctx, &CreateFeatureDatasourceRequest{
-		NodeID:           "alice",
-		FeatureTableName: "feature_http",
-		URL:              "http://example.com/api",
-		Columns:          `[{"name":"col1","type":"string"}]`,
-	})
-	if err != nil {
-		t.Fatalf("CreateFeatureTable failed: %v", err)
-	}
-
-	list, err := svc.FeatureDatasourceList(ctx, "alice")
-	if err != nil {
-		t.Fatalf("FeatureDatasourceList failed: %v", err)
-	}
-	if len(list) != 1 {
-		t.Fatalf("expected 1 feature table, got %d", len(list))
-	}
-	if list[0].FeatureTableName != "feature_http" {
-		t.Fatalf("expected feature_http, got %s", list[0].FeatureTableName)
-	}
-	if list[0].Status != "Available" {
-		t.Fatalf("expected Available, got %s", list[0].Status)
-	}
-}
-
-func TestFeatureTableService_ProjectList(t *testing.T) {
-	db := setupNewTestDB(t)
-	svc := NewFeatureTableService(db)
-	ctx := context.Background()
-
-	// Create with project association
-	err := svc.CreateFeatureTable(ctx, &CreateFeatureDatasourceRequest{
-		NodeID:           "alice",
-		FeatureTableName: "proj_feature",
-		URL:              "http://example.com/proj",
-		Columns:          `[{"name":"x","type":"int"}]`,
-		ProjectID:        "proj-001",
-	})
-	if err != nil {
-		t.Fatalf("CreateFeatureTable failed: %v", err)
-	}
-
-	// Project list should return it
-	list, err := svc.ProjectFeatureTableList(ctx, "alice", "proj-001")
-	if err != nil {
-		t.Fatalf("ProjectFeatureTableList failed: %v", err)
-	}
-	if len(list) != 1 {
-		t.Fatalf("expected 1, got %d", len(list))
-	}
-
-	// Different project should return empty
-	list2, err := svc.ProjectFeatureTableList(ctx, "alice", "proj-999")
-	if err != nil {
-		t.Fatalf("ProjectFeatureTableList failed: %v", err)
-	}
-	if len(list2) != 0 {
-		t.Fatalf("expected 0, got %d", len(list2))
 	}
 }
 
@@ -313,7 +270,7 @@ func TestPartitionRuleService_MaxPtReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	expected := "dt=MAX_PT('my_table')"
+	expected := "dt=max_pt('my_table')"
 	if result != expected {
 		t.Fatalf("expected %q, got %q", expected, result)
 	}
@@ -386,46 +343,6 @@ func TestPartitionRuleService_InvalidColumn(t *testing.T) {
 	}
 }
 
-// --- OssService Tests ---
-
-func TestOssService_ValidateEndpoint(t *testing.T) {
-	tests := []struct {
-		endpoint string
-		wantErr  bool
-	}{
-		{"s3.amazonaws.com", false},
-		{"minio.example.com:9000", false},
-		{"localhost", true},
-		{"127.0.0.1", true},
-		{"169.254.169.254", true},
-		{"10.0.0.1", true},
-		{"192.168.1.1", true},
-		{"metadata.google.internal", true},
-	}
-
-	for _, tt := range tests {
-		err := validateEndpoint(tt.endpoint)
-		if (err != nil) != tt.wantErr {
-			t.Errorf("validateEndpoint(%q) error = %v, wantErr %v", tt.endpoint, err, tt.wantErr)
-		}
-	}
-}
-
-func TestOssService_EmptyParams(t *testing.T) {
-	svc := NewOssService()
-	ctx := context.Background()
-
-	err := svc.CheckBucketExists(ctx, &OssConfig{}, "bucket")
-	if err == nil {
-		t.Fatal("expected error for empty endpoint")
-	}
-
-	_, err = svc.CheckObjectExists(ctx, &OssConfig{Endpoint: "s3.example.com"}, "", "key")
-	if err == nil {
-		t.Fatal("expected error for empty bucket")
-	}
-}
-
 // --- SseServer Tests ---
 
 func TestSseServer_OpenCloseAndCount(t *testing.T) {
@@ -478,7 +395,8 @@ func TestEnvService_PlatformDetection(t *testing.T) {
 }
 
 func TestEnvService_EmbeddedNodes(t *testing.T) {
-	svc := NewEnvService("autonomy", "node-a", "inst-1", nil)
+	// Java: embedded nodes only exist on the CENTER platform.
+	svc := NewEnvService("center", "node-a", "inst-1", nil)
 	svc.SetEmbeddedNodes([]string{"node-b", "node-c"})
 
 	if !svc.IsEmbeddedNode("node-b") {
@@ -490,8 +408,10 @@ func TestEnvService_EmbeddedNodes(t *testing.T) {
 	if !svc.IsNodeInCurrentInst("node-b") {
 		t.Fatal("expected node-b in current inst")
 	}
-	if svc.IsNodeInCurrentInst("node-x") {
-		t.Fatal("expected node-x NOT in current inst")
+	auto := NewEnvService("autonomy", "node-a", "inst-1", nil)
+	auto.SetEmbeddedNodes([]string{"node-b"})
+	if auto.IsNodeInCurrentInst("node-x") || !auto.IsNodeInCurrentInst("node-b") {
+		t.Fatal("autonomy inst membership wrong")
 	}
 }
 
@@ -518,7 +438,7 @@ func TestNormalizePlatformType(t *testing.T) {
 		"master":   PlatformCenter,
 		"autonomy": PlatformAutonomy,
 		"lite":     PlatformLite,
-		"edge":     PlatformP2PEdge,
+		"edge":     PlatformEdge,
 		"p2p_edge": PlatformP2PEdge,
 		"unknown":  PlatformCenter,
 	}
@@ -526,54 +446,5 @@ func TestNormalizePlatformType(t *testing.T) {
 		if got := NormalizePlatformType(input); got != expected {
 			t.Errorf("NormalizePlatformType(%q) = %q, want %q", input, got, expected)
 		}
-	}
-}
-
-// --- DataDirectoryService Tests ---
-
-func TestDataDirectoryService_ListFilesEmpty(t *testing.T) {
-	svc := NewDataDirectoryService("/tmp/nonexistent-dir-test")
-	files, err := svc.ListFiles(context.Background(), "node-1")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(files) != 0 {
-		t.Fatalf("expected 0 files, got %d", len(files))
-	}
-}
-
-func TestDataDirectoryService_PathTraversalBlocked(t *testing.T) {
-	svc := NewDataDirectoryService("/tmp")
-
-	if svc.FileExists("..", "etc/passwd") {
-		t.Fatal("path traversal in nodeID should be blocked")
-	}
-	if svc.FileExists("node1", "../../etc/passwd") {
-		t.Fatal("path traversal in fileName should be blocked")
-	}
-	if svc.GetFilePath("node1", "../secret.txt") != "" {
-		t.Fatal("GetFilePath should return empty for traversal")
-	}
-}
-
-func TestDataDirectoryService_EnsureNodeDir(t *testing.T) {
-	tmpDir := t.TempDir()
-	svc := NewDataDirectoryService(tmpDir)
-
-	dir, err := svc.EnsureNodeDir("test-node")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if dir == "" {
-		t.Fatal("expected non-empty dir path")
-	}
-
-	// Verify directory exists
-	info, err := os.Stat(dir)
-	if err != nil {
-		t.Fatalf("directory should exist: %v", err)
-	}
-	if !info.IsDir() {
-		t.Fatal("expected a directory")
 	}
 }

@@ -144,23 +144,3 @@ func (s *GraphDatasourceService) ListByProject(ctx context.Context, projectID st
 	}
 	return result, nil
 }
-
-// ListByDomain lists datasource IDs bound to a domain.
-func (s *GraphDatasourceService) ListByDomain(ctx context.Context, domainID string) ([]string, error) {
-	var bindings []model.ProjectGraphDomainDatasourceDO
-	if err := s.db.WithContext(ctx).
-		Where("domain_id = ?", domainID).
-		Find(&bindings).Error; err != nil {
-		return nil, err
-	}
-
-	seen := make(map[string]bool)
-	result := make([]string, 0)
-	for _, b := range bindings {
-		if !seen[b.DatasourceID] {
-			seen[b.DatasourceID] = true
-			result = append(result, b.DatasourceID)
-		}
-	}
-	return result, nil
-}

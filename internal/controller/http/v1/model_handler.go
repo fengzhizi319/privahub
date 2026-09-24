@@ -1,318 +1,224 @@
 package v1
 
 import (
+	"strings"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/fengzhizi319/privahub/internal/controller/http/middleware"
 	"github.com/fengzhizi319/privahub/internal/service"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
 	"github.com/fengzhizi319/privahub/pkg/response"
-	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 )
 
-// ModelHandler handles model and serving HTTP requests.
+// ModelHandler handles model export / management / serving requests
+// (Java ModelExportController + ModelManagementController).
 type ModelHandler struct {
 	modelService *service.ModelService
-	kusciaClient *kuscia.Client
 }
 
-// NewModelHandler creates a new ModelHandler.
-func NewModelHandler(modelService *service.ModelService, kusciaClient *kuscia.Client) *ModelHandler {
-	return &ModelHandler{modelService: modelService, kusciaClient: kusciaClient}
+// NewModelHandler creates a new ModelHandler. The Kuscia client argument is
+// kept for wiring compatibility; Kuscia calls go through the service.
+func NewModelHandler(modelService *service.ModelService, _ *kuscia.Client) *ModelHandler {
+	return &ModelHandler{modelService: modelService}
 }
 
-// --- Model Endpoints ---
-
-// ListModels handles model list retrieval.
-func (h *ModelHandler) ListModels(c *gin.Context) {
-	var req service.ModelListRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		req = service.ModelListRequest{}
+// requireField is Java @NotBlank (whitespace-only values are blank too).
+func requireField(c *gin.Context, v, name string) bool {
+	if strings.TrimSpace(v) == "" {
+		response.FailWithMsg(c, errcode.ParamError, name+" must not be blank")
+		return false
 	}
-
-	models, err := h.modelService.ListModels(c.Request.Context(), &req)
-	if err != nil {
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OK(c, gin.H{"modelPacks": models, "list": models})
+	return true
 }
 
-// ModelDetail handles model detail retrieval.
-func (h *ModelHandler) ModelDetail(c *gin.Context) {
-	var req service.ModelDetailRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
+// --- ModelExportController ---
 
-	vo, err := h.modelService.GetModelDetail(c.Request.Context(), &req)
-	if err != nil {
-		if err == service.ErrModelNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
-		}
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OK(c, vo)
-}
-
-// DeleteModel handles model deletion.
-func (h *ModelHandler) DeleteModel(c *gin.Context) {
-	var req service.DeleteModelRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	if err := h.modelService.DeleteModel(c.Request.Context(), &req); err != nil {
-		if err == service.ErrModelNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
-		}
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OKEmpty(c)
-}
-
-// ExportModel handles model export.
-func (h *ModelHandler) ExportModel(c *gin.Context) {
-	var req struct {
-		ModelID string `json:"model_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	path, err := h.modelService.ExportModel(c.Request.Context(), req.ModelID)
-	if err != nil {
-		if err == service.ErrModelNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
-		}
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OK(c, gin.H{"export_path": path})
-}
-
-// --- Serving Endpoints ---
-
-// CreateServing handles serving creation.
-func (h *ModelHandler) CreateServing(c *gin.Context) {
-	var req service.CreateServingRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	vo, err := h.modelService.CreateServing(c.Request.Context(), &req)
-	if err != nil {
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OK(c, vo)
-}
-
-// ListServings handles serving list retrieval.
-func (h *ModelHandler) ListServings(c *gin.Context) {
-	var req service.ServingListRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		req = service.ServingListRequest{}
-	}
-
-	servings, err := h.modelService.ListServings(c.Request.Context(), &req)
-	if err != nil {
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OK(c, servings)
-}
-
-// ServingDetail handles serving detail retrieval.
-func (h *ModelHandler) ServingDetail(c *gin.Context) {
-	var req service.ServingDetailRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	vo, err := h.modelService.GetServingDetail(c.Request.Context(), &req)
-	if err != nil {
-		if err == service.ErrServingNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
-		}
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OK(c, vo)
-}
-
-// DeleteServing handles serving deletion.
-func (h *ModelHandler) DeleteServing(c *gin.Context) {
-	var req service.DeleteServingRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	if err := h.modelService.DeleteServing(c.Request.Context(), &req); err != nil {
-		if err == service.ErrServingNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
-		}
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OKEmpty(c)
-}
-
-// --- Model Export Extended Endpoints ---
-
-// Pack handles model packing (triggers async pack job).
+// Pack handles POST /model/pack.
 func (h *ModelHandler) Pack(c *gin.Context) {
-	var req struct {
-		ModelID   string `json:"modelId" binding:"required"`
-		ProjectID string `json:"projectId"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+	var req service.ModelExportPackageRequest
+	if !bind(c, &req) || !requireField(c, req.ProjectID, "projectId") || !middleware.RequireProjectAccess(c, req.ProjectID) {
 		return
 	}
-
-	// Verify model exists
-	_, err := h.modelService.GetModelDetail(c.Request.Context(), &service.ModelDetailRequest{ModelID: req.ModelID})
+	resp, err := h.modelService.ExportModel(operatorCtx(c), &req)
 	if err != nil {
-		if err == service.ErrModelNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
-		}
-		response.Fail(c, errcode.SystemError)
+		failService(c, err, errcode.ModelExportFailed)
 		return
 	}
-
-	// Trigger a Kuscia job for model packing
-	packJobID := uuid.New().String()[:8]
-	if h.kusciaClient != nil {
-		kusciaReq := &kuscia.CreateJobRequest{
-			JobID:     packJobID,
-			Initiator: "alice",
-			Tasks: []kuscia.TaskConfig{
-				{
-					AppImage: "secretflow-image",
-					Alias:    "model_pack_" + req.ModelID,
-					Parties: []kuscia.Party{
-						{DomainID: "alice", Role: "guest"},
-					},
-				},
-			},
-			CustomFields: map[string]string{
-				"model_id": req.ModelID,
-				"action":   "pack",
-			},
-		}
-		if _, err := h.kusciaClient.CreateJob(c.Request.Context(), kusciaReq); err != nil {
-			// Kuscia unreachable — return pack task ID anyway for tracking
-			response.OK(c, gin.H{
-				"model_id":    req.ModelID,
-				"pack_job_id": packJobID,
-				"status":      "packing",
-				"warning":     "kuscia unreachable",
-			})
-			return
-		}
-	}
-
-	response.OK(c, gin.H{
-		"model_id":    req.ModelID,
-		"pack_job_id": packJobID,
-		"status":      "packing",
-	})
+	response.OK(c, resp)
 }
 
-// PackStatus handles model pack status query.
+// PackStatus handles POST /model/status.
 func (h *ModelHandler) PackStatus(c *gin.Context) {
-	var req struct {
-		ModelID string `json:"modelId" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+	var req service.ModelExportStatusRequest
+	if !bind(c, &req) || !requireField(c, req.JobID, "jobId") || !requireField(c, req.ProjectID, "projectId") ||
+		!middleware.RequireProjectAccess(c, req.ProjectID) {
 		return
 	}
-
-	response.OK(c, gin.H{
-		"model_id": req.ModelID,
-		"status":   "succeeded",
-	})
-}
-
-// ModelPartyPath handles model party path query.
-func (h *ModelHandler) ModelPartyPath(c *gin.Context) {
-	var req struct {
-		ProjectID            string `json:"projectId"`
-		ProjectIDAlt         string `json:"project_id"`
-		GraphNodeID          string `json:"graphNodeId"`
-		GraphNodeIDAlt       string `json:"graph_node_id"`
-		GraphNodeOutPutID    string `json:"graphNodeOutPutId"`
-		GraphNodeOutPutIDAlt string `json:"graph_node_out_put_id"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	projectID := req.ProjectID
-	if projectID == "" {
-		projectID = req.ProjectIDAlt
-	}
-	graphNodeID := req.GraphNodeID
-	if graphNodeID == "" {
-		graphNodeID = req.GraphNodeIDAlt
-	}
-	outputID := req.GraphNodeOutPutID
-	if outputID == "" {
-		outputID = req.GraphNodeOutPutIDAlt
-	}
-
-	// Frontend validates the response as a bare array (z.array(ModelPartyPathResponseSchema)).
-	parties, err := h.modelService.GetModelPartyPath(c.Request.Context(), projectID, graphNodeID, outputID)
+	dto, err := h.modelService.QueryModelExport(operatorCtx(c), &req)
 	if err != nil {
-		response.Fail(c, errcode.SystemError)
+		failService(c, err, errcode.ModelExportFailed)
 		return
 	}
-
-	response.OK(c, parties)
+	response.OK(c, dto)
 }
 
-// Discard handles model discard (soft delete / archive).
+// ModelPartyPath handles POST /model/modelPartyPath.
+func (h *ModelHandler) ModelPartyPath(c *gin.Context) {
+	var req service.ModelPartyPathRequest
+	// Java ModelPartyPathRequest: projectId, graphNodeId, graphNodeOutPutId are @NotBlank.
+	if !bind(c, &req) || !requireField(c, req.ProjectID, "projectId") || !requireField(c, req.GraphNodeID, "graphNodeId") ||
+		!requireField(c, req.GraphNodeOutPutID, "graphNodeOutPutId") || !middleware.RequireProjectAccess(c, req.ProjectID) {
+		return
+	}
+	out, err := h.modelService.ModelPartyPath(operatorCtx(c), &req)
+	if err != nil {
+		failService(c, err, errcode.ModelExportFailed)
+		return
+	}
+	response.OK(c, out)
+}
+
+// --- ModelManagementController ---
+
+type modelIDRequest struct {
+	ModelID   string `json:"modelId"`
+	ProjectID string `json:"projectId"`
+	NodeID    string `json:"nodeId"`
+}
+
+type servingIDRequest struct {
+	ServingID string `json:"servingId"`
+}
+
+// Page handles POST /model/page.
+func (h *ModelHandler) Page(c *gin.Context) {
+	var req service.QueryModelPageRequest
+	if !bind(c, &req) || !requireField(c, req.ProjectID, "projectId") || !middleware.RequireProjectAccess(c, req.ProjectID) {
+		return
+	}
+	vo, err := h.modelService.ModelPackPage(operatorCtx(c), &req)
+	if err != nil {
+		failService(c, err, nil)
+		return
+	}
+	response.OK(c, vo)
+}
+
+// Detail handles POST /model/detail.
+func (h *ModelHandler) Detail(c *gin.Context) {
+	var req modelIDRequest
+	if !bind(c, &req) || !requireField(c, req.ModelID, "modelId") || !requireField(c, req.ProjectID, "projectId") ||
+		!middleware.RequireProjectAccess(c, req.ProjectID) {
+		return
+	}
+	vo, err := h.modelService.ModelPackDetail(operatorCtx(c), req.ModelID, req.ProjectID)
+	if err != nil {
+		failService(c, err, nil)
+		return
+	}
+	response.OK(c, vo)
+}
+
+// Info handles POST /model/info.
+func (h *ModelHandler) Info(c *gin.Context) {
+	var req modelIDRequest
+	if !bind(c, &req) || !requireField(c, req.ModelID, "modelId") || !requireField(c, req.ProjectID, "projectId") ||
+		!middleware.RequireProjectAccess(c, req.ProjectID) {
+		return
+	}
+	vo, err := h.modelService.ModelPackInfo(operatorCtx(c), req.ModelID, req.ProjectID)
+	if err != nil {
+		failService(c, err, nil)
+		return
+	}
+	response.OK(c, vo)
+}
+
+// CreateServing handles POST /model/serving/create.
+func (h *ModelHandler) CreateServing(c *gin.Context) {
+	var req service.CreateModelServingRequest
+	if !bind(c, &req) || !requireField(c, req.ModelID, "modelId") || !requireField(c, req.ProjectID, "projectId") {
+		return
+	}
+	if msg := service.ValidateServingPartyConfigs(req.PartyConfigs); msg != "" {
+		response.FailWithMsg(c, errcode.ParamError, msg)
+		return
+	}
+	if !middleware.RequireProjectAccess(c, req.ProjectID) {
+		return
+	}
+	if err := h.modelService.CreateModelServing(operatorCtx(c), &req); err != nil {
+		failService(c, err, nil)
+		return
+	}
+	response.OKEmpty(c)
+}
+
+// requireOwnerProject checks project access for a model/serving resolved by
+// id (Java has no DataResource on these endpoints; unknown ids fall through
+// to the service's not-found error).
+func requireOwnerProject(c *gin.Context, projectID string) bool {
+	if projectID == "" {
+		return true
+	}
+	return middleware.RequireProjectAccess(c, projectID)
+}
+
+// ServingDetail handles POST /model/serving/detail.
+func (h *ModelHandler) ServingDetail(c *gin.Context) {
+	var req servingIDRequest
+	if !bind(c, &req) || !requireField(c, req.ServingID, "servingId") ||
+		!requireOwnerProject(c, h.modelService.ServingProjectID(c.Request.Context(), req.ServingID)) {
+		return
+	}
+	vo, err := h.modelService.QueryModelServingDetail(operatorCtx(c), req.ServingID)
+	if err != nil {
+		failService(c, err, nil)
+		return
+	}
+	response.OK(c, vo)
+}
+
+// DeleteServing handles POST /model/serving/delete.
+func (h *ModelHandler) DeleteServing(c *gin.Context) {
+	var req servingIDRequest
+	if !bind(c, &req) || !requireField(c, req.ServingID, "servingId") ||
+		!requireOwnerProject(c, h.modelService.ServingProjectID(c.Request.Context(), req.ServingID)) {
+		return
+	}
+	if err := h.modelService.DeleteModelServing(operatorCtx(c), req.ServingID); err != nil {
+		failService(c, err, nil)
+		return
+	}
+	response.OKEmpty(c)
+}
+
+// Discard handles POST /model/discard.
 func (h *ModelHandler) Discard(c *gin.Context) {
-	var req struct {
-		ModelID string `json:"modelId" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+	var req modelIDRequest
+	if !bind(c, &req) || !requireField(c, req.ModelID, "modelId") ||
+		!requireOwnerProject(c, h.modelService.ModelProjectID(c.Request.Context(), req.ModelID)) {
 		return
 	}
-
-	if err := h.modelService.DeleteModel(c.Request.Context(), &service.DeleteModelRequest{ModelID: req.ModelID}); err != nil {
-		if err == service.ErrModelNotFound {
-			response.Fail(c, errcode.NotFound)
-			return
-		}
-		response.Fail(c, errcode.SystemError)
+	if err := h.modelService.DiscardModelPack(operatorCtx(c), req.ModelID); err != nil {
+		failService(c, err, nil)
 		return
 	}
+	response.OKEmpty(c)
+}
 
+// Delete handles POST /model/delete.
+func (h *ModelHandler) Delete(c *gin.Context) {
+	var req modelIDRequest
+	if !bind(c, &req) || !requireField(c, req.ModelID, "modelId") ||
+		!requireOwnerProject(c, h.modelService.ModelProjectID(c.Request.Context(), req.ModelID)) {
+		return
+	}
+	if err := h.modelService.DeleteModelPack(operatorCtx(c), req.NodeID, req.ModelID); err != nil {
+		failService(c, err, nil)
+		return
+	}
 	response.OKEmpty(c)
 }

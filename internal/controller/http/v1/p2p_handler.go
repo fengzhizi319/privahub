@@ -1,299 +1,136 @@
 package v1
 
 import (
-	"context"
-	"time"
-
-	"github.com/fengzhizi319/privahub/internal/dao/model"
+	"github.com/fengzhizi319/privahub/internal/controller/http/middleware"
+	"github.com/fengzhizi319/privahub/internal/service/votehandler"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
-	"github.com/fengzhizi319/privahub/pkg/kuscia"
 	"github.com/fengzhizi319/privahub/pkg/response"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
-// P2PHandler handles P2P mode HTTP requests with real DB + Kuscia integration.
+// P2PHandler is Java P2PProjectController (/p2p/project/*) +
+// P2pNodeController (/p2p/node/*).
 type P2PHandler struct {
-	db           *gorm.DB
-	kusciaClient *kuscia.Client
-	log          *zap.Logger
+	db  *gorm.DB
+	svc *votehandler.P2PService
+	log *zap.Logger
 }
 
 // NewP2PHandler creates a new P2PHandler.
-func NewP2PHandler(db *gorm.DB, kusciaClient *kuscia.Client, log *zap.Logger) *P2PHandler {
-	return &P2PHandler{db: db, kusciaClient: kusciaClient, log: log}
+func NewP2PHandler(db *gorm.DB, svc *votehandler.P2PService, log *zap.Logger) *P2PHandler {
+	if log == nil {
+		log = zap.NewNop()
+	}
+	return &P2PHandler{db: db, svc: svc, log: log}
 }
 
-// ProjectCreate handles P2P project creation.
+// ProjectCreate is POST p2p/project/create → {projectId}.
 func (h *P2PHandler) ProjectCreate(c *gin.Context) {
-	var req struct {
-		Name        string   `json:"name" binding:"required"`
-		Description string   `json:"description"`
-		ComputeMode string   `json:"compute_mode"`
-		NodeIDs     []string `json:"node_ids"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+	var req votehandler.P2PCreateProjectRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Name == "" {
+		response.FailWithMsg(c, errcode.SystemValidationError, "name is required")
 		return
 	}
-
-	projectID := uuid.New().String()[:8]
-	computeMode := req.ComputeMode
-	if computeMode == "" {
-		computeMode = "p2p"
-	}
-
-	project := &model.ProjectDO{
-		ProjectID:   projectID,
-		Name:        req.Name,
-		Description: req.Description,
-		ComputeMode: computeMode,
-		ComputeFunc: "ALL",
-		OwnerID:     "admin",
-	}
-
-	ctx := c.Request.Context()
-
-	// Bug44 fix: wrap project + node associations in a transaction for atomicity.
-	if err := h.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(project).Error; err != nil {
-			return err
-		}
-		for _, nodeID := range req.NodeIDs {
-			pn := &model.ProjectNodeDO{ProjectID: projectID, NodeID: nodeID}
-			if err := tx.Create(pn).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OK(c, gin.H{"project_id": projectID})
-}
-
-// ProjectList handles P2P project list.
-func (h *P2PHandler) ProjectList(c *gin.Context) {
-	result, err := h.buildP2pProjectList(c.Request.Context())
+	id, err := h.svc.CreateProject(nodeReqCtx(c), &req)
 	if err != nil {
-		response.Fail(c, errcode.SystemError)
+		failNodeErr(c, err)
 		return
 	}
-
-	response.OK(c, result)
+	response.OK(c, gin.H{"projectId": id})
 }
 
-// buildP2pProjectList queries P2P projects and builds the frontend-facing bare array.
-func (h *P2PHandler) buildP2pProjectList(ctx context.Context) ([]gin.H, error) {
-	var projects []model.ProjectDO
-	if err := h.db.WithContext(ctx).
-		Where("compute_mode = ?", "p2p").
-		Order("gmt_create DESC").Find(&projects).Error; err != nil {
-		return nil, err
+// ProjectList is POST p2p/project/list → ProjectVO[].
+func (h *P2PHandler) ProjectList(c *gin.Context) {
+	list, err := h.svc.ListProjects(nodeReqCtx(c))
+	if err != nil {
+		failNodeErr(c, err)
+		return
 	}
-
-	result := make([]gin.H, 0, len(projects))
-	for _, p := range projects {
-		result = append(result, gin.H{
-			"project_id":   p.ProjectID,
-			"name":         p.Name,
-			"description":  p.Description,
-			"compute_mode": p.ComputeMode,
-			"status":       p.Status,
-			"gmt_create":   p.GmtCreate.Format("2006-01-02 15:04:05"),
-		})
-	}
-	return result, nil
+	response.OK(c, list)
 }
 
-// ProjectUpdate handles P2P project update.
+// ProjectUpdate is POST p2p/project/update {projectId, name, description}
+// (@DataResource projectId PROJECT_ID; owner only).
 func (h *P2PHandler) ProjectUpdate(c *gin.Context) {
 	var req struct {
-		ProjectID   string `json:"project_id" binding:"required"`
+		ProjectID   string `json:"projectId"`
 		Name        string `json:"name"`
 		Description string `json:"description"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+	if err := c.ShouldBindJSON(&req); err != nil || req.ProjectID == "" {
+		response.FailWithMsg(c, errcode.SystemValidationError, "projectId must not be blank")
 		return
 	}
-
-	ctx := c.Request.Context()
-	updates := map[string]interface{}{}
-	if req.Name != "" {
-		updates["name"] = req.Name
+	if !middleware.RequireProjectAccess(c, req.ProjectID) {
+		return
 	}
-	if req.Description != "" {
-		updates["description"] = req.Description
+	if err := h.svc.UpdateProject(nodeReqCtx(c), req.ProjectID, req.Name, req.Description); err != nil {
+		failNodeErr(c, err)
+		return
 	}
-
-	if len(updates) > 0 {
-		if err := h.db.WithContext(ctx).Model(&model.ProjectDO{}).
-			Where("project_id = ?", req.ProjectID).Updates(updates).Error; err != nil {
-			response.Fail(c, errcode.SystemError)
-			return
-		}
-	}
-
 	response.OKEmpty(c)
 }
 
-// ProjectArchive handles P2P project archive.
+// ProjectArchive is POST p2p/project/archive {projectId} (owner, REVIEWING only).
 func (h *P2PHandler) ProjectArchive(c *gin.Context) {
 	var req struct {
-		ProjectID string `json:"project_id" binding:"required"`
+		ProjectID string `json:"projectId"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+	if err := c.ShouldBindJSON(&req); err != nil || req.ProjectID == "" {
+		response.FailWithMsg(c, errcode.SystemValidationError, "projectId must not be blank")
 		return
 	}
-
-	if err := h.db.WithContext(c.Request.Context()).Model(&model.ProjectDO{}).
-		Where("project_id = ?", req.ProjectID).Update("status", 1).Error; err != nil {
-		response.Fail(c, errcode.SystemError)
+	if err := h.svc.ArchiveProject(nodeReqCtx(c), req.ProjectID); err != nil {
+		failNodeErr(c, err)
 		return
 	}
-
-	// Frontend validates the response as a bare ProjectVO array (z.array); return the refreshed list.
-	result, err := h.buildP2pProjectList(c.Request.Context())
-	if err != nil {
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	response.OK(c, result)
-}
-
-// ProjectParticipants handles P2P project participants retrieval.
-func (h *P2PHandler) ProjectParticipants(c *gin.Context) {
-	var req struct {
-		ProjectID string `json:"project_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	ctx := c.Request.Context()
-	var projectNodes []model.ProjectNodeDO
-	// Bug46 fix: check the DB error instead of silently ignoring it.
-	if err := h.db.WithContext(ctx).Where("project_id = ?", req.ProjectID).Find(&projectNodes).Error; err != nil {
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
-	participants := make([]gin.H, 0, len(projectNodes))
-	for _, pn := range projectNodes {
-		var node model.NodeDO
-		if err := h.db.WithContext(ctx).Where("node_id = ?", pn.NodeID).First(&node).Error; err == nil {
-			participants = append(participants, gin.H{
-				"node_id":     node.NodeID,
-				"node_name":   node.Name,
-				"net_address": node.NetAddress,
-			})
-		} else {
-			participants = append(participants, gin.H{"node_id": pn.NodeID})
-		}
-	}
-
-	response.OK(c, gin.H{"participants": participants})
-}
-
-// NodeCreate handles P2P node creation with Kuscia domain registration.
-func (h *P2PHandler) NodeCreate(c *gin.Context) {
-	var req struct {
-		NodeID  string `json:"node_id" binding:"required"`
-		Name    string `json:"name" binding:"required"`
-		Address string `json:"address"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	ctx := c.Request.Context()
-	node := &model.NodeDO{
-		NodeID:        req.NodeID,
-		Name:          req.Name,
-		NetAddress:    req.Address,
-		ControlNodeID: req.NodeID,
-		Type:          "normal",
-		MasterNodeID:  "master",
-	}
-
-	if err := h.db.WithContext(ctx).Create(node).Error; err != nil {
-		response.Fail(c, errcode.AlreadyExists)
-		return
-	}
-
-	// Register domain in Kuscia (best-effort)
-	if h.kusciaClient != nil {
-		_ = h.kusciaClient.CreateDomain(ctx, &kuscia.CreateDomainRequest{
-			DomainID: req.NodeID,
-			Role:     "normal",
-		})
-	}
-
-	response.OK(c, gin.H{"node_id": req.NodeID})
-}
-
-// NodeDelete handles P2P node deletion with Kuscia domain cleanup.
-func (h *P2PHandler) NodeDelete(c *gin.Context) {
-	var req struct {
-		NodeID string `json:"node_id" binding:"required"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	ctx := c.Request.Context()
-
-	// Delete from Kuscia (best-effort)
-	if h.kusciaClient != nil {
-		_ = h.kusciaClient.DeleteDomain(ctx, req.NodeID)
-	}
-
-	// Delete node and associated routes from DB atomically
-	if err := h.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("node_id = ?", req.NodeID).Delete(&model.NodeDO{}).Error; err != nil {
-			return err
-		}
-		return tx.Where("src_node_id = ? OR dst_node_id = ?", req.NodeID, req.NodeID).Delete(&model.NodeRouteDO{}).Error
-	}); err != nil {
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
 	response.OKEmpty(c)
 }
 
-// DataSync handles P2P data synchronization from remote nodes.
-func (h *P2PHandler) DataSync(c *gin.Context) {
+// ProjectParticipants is POST p2p/project/participants {voteId}.
+func (h *P2PHandler) ProjectParticipants(c *gin.Context) {
 	var req struct {
-		TableName string `json:"table_name"`
-		Data      string `json:"data"`
-		Action    string `json:"action"`
+		VoteID string `json:"voteId"`
 	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.VoteID == "" {
+		response.FailWithMsg(c, errcode.SystemValidationError, "voteId must not be blank")
+		return
+	}
+	vo, err := h.svc.Participants(nodeReqCtx(c), req.VoteID)
+	if err != nil {
+		failNodeErr(c, err)
+		return
+	}
+	response.OK(c, vo)
+}
+
+// NodeCreate is POST p2p/node/create (Java P2pCreateNodeRequest) → nodeId.
+func (h *P2PHandler) NodeCreate(c *gin.Context) {
+	var req votehandler.P2PCreateNodeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+		response.FailWithMsg(c, errcode.SystemValidationError, err.Error())
 		return
 	}
-
-	// Bug45 fix: use actual timestamp instead of hardcoded "now" string,
-	// and propagate the DB error instead of silently ignoring it.
-	syncLog := &model.EdgeDataSyncLogDO{
-		SyncTableName:  req.TableName,
-		LastUpdateTime: time.Now().Format("2006-01-02 15:04:05"),
-	}
-	if err := h.db.WithContext(c.Request.Context()).Save(syncLog).Error; err != nil {
-		response.Fail(c, errcode.SystemError)
+	id, err := h.svc.CreateNode(nodeReqCtx(c), &req)
+	if err != nil {
+		failNodeErr(c, err)
 		return
 	}
+	response.OK(c, id)
+}
 
+// NodeDelete is POST p2p/node/delete {routerId}.
+func (h *P2PHandler) NodeDelete(c *gin.Context) {
+	var req routerIDBody
+	if err := c.ShouldBindJSON(&req); err != nil || req.id() == "" {
+		response.FailWithMsg(c, errcode.SystemValidationError, "routerId must not be blank")
+		return
+	}
+	if err := h.svc.DeleteNodeRoute(nodeReqCtx(c), req.id()); err != nil {
+		failNodeErr(c, err)
+		return
+	}
 	response.OKEmpty(c)
 }

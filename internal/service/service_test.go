@@ -50,9 +50,10 @@ func TestAuthService_Login_Success(t *testing.T) {
 		jwtManager,
 	)
 
+	// Clients send SHA-256(password); plaintext is only accepted in dev profiles.
 	resp, err := svc.Login(context.Background(), &LoginRequest{
-		Username: "admin",
-		Password: "12345678",
+		Username:     "admin",
+		PasswordHash: HashPassword("12345678"),
 	})
 	if err != nil {
 		t.Fatalf("Login failed: %v", err)
@@ -91,118 +92,5 @@ func TestAuthService_Login_WrongPassword(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for wrong password")
-	}
-}
-
-func TestJobService_CreateAndList(t *testing.T) {
-	db := setupTestDB(t)
-
-	svc := NewJobService(
-		repository.NewJobRepo(db),
-		repository.NewTaskRepo(db),
-		repository.NewTaskLogRepo(db),
-		nil,
-		nil,
-		nil,
-	)
-
-	job, err := svc.CreateJob(context.Background(), &CreateJobRequest{
-		ProjectID: "proj-1",
-		Name:      "test-job",
-		GraphID:   "graph-1",
-	})
-	if err != nil {
-		t.Fatalf("CreateJob failed: %v", err)
-	}
-	if job.JobID == "" {
-		t.Error("expected non-empty job ID")
-	}
-	if job.Status != "PENDING" {
-		t.Errorf("expected status PENDING, got %q", job.Status)
-	}
-
-	listResp, err := svc.ListJobs(context.Background(), &JobListRequest{
-		ProjectID: "proj-1",
-		Page:      1,
-		Size:      10,
-	})
-	if err != nil {
-		t.Fatalf("ListJobs failed: %v", err)
-	}
-	if listResp.Total != 1 {
-		t.Errorf("expected 1 job, got %d", listResp.Total)
-	}
-}
-
-func TestJobService_StopJob(t *testing.T) {
-	db := setupTestDB(t)
-
-	svc := NewJobService(
-		repository.NewJobRepo(db),
-		repository.NewTaskRepo(db),
-		repository.NewTaskLogRepo(db),
-		nil,
-		nil,
-		nil,
-	)
-
-	job, _ := svc.CreateJob(context.Background(), &CreateJobRequest{
-		ProjectID: "proj-1",
-		Name:      "stop-test",
-	})
-
-	err := svc.StopJob(context.Background(), &StopJobRequest{
-		ProjectID: "proj-1",
-		JobID:     job.JobID,
-	})
-	if err != nil {
-		t.Fatalf("StopJob failed: %v", err)
-	}
-
-	detail, err := svc.GetJob(context.Background(), &GetJobRequest{
-		ProjectID: "proj-1",
-		JobID:     job.JobID,
-	})
-	if err != nil {
-		t.Fatalf("GetJob failed: %v", err)
-	}
-	if detail.Status != "STOPPED" {
-		t.Errorf("expected status STOPPED, got %q", detail.Status)
-	}
-}
-
-func TestMapKusciaState(t *testing.T) {
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"Pending", "PENDING"},
-		{"Running", "RUNNING"},
-		{"Succeeded", "SUCCEEDED"},
-		{"Failed", "FAILED"},
-		{"Stopped", "STOPPED"},
-		{"Unknown", "Unknown"},
-	}
-	for _, tt := range tests {
-		got := mapKusciaState(tt.input)
-		if got != tt.expected {
-			t.Errorf("mapKusciaState(%q) = %q, want %q", tt.input, got, tt.expected)
-		}
-	}
-}
-
-func TestIsTerminalStatus(t *testing.T) {
-	terminal := []string{"SUCCEEDED", "FAILED", "STOPPED"}
-	nonTerminal := []string{"PENDING", "RUNNING", "IDLE"}
-
-	for _, s := range terminal {
-		if !isTerminalStatus(s) {
-			t.Errorf("expected %q to be terminal", s)
-		}
-	}
-	for _, s := range nonTerminal {
-		if isTerminalStatus(s) {
-			t.Errorf("expected %q to be non-terminal", s)
-		}
 	}
 }

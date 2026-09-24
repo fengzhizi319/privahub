@@ -39,6 +39,11 @@ type NodeDO struct {
 	Type          string `gorm:"type:varchar(10);default:'normal'" json:"type"`
 	Mode          int    `gorm:"default:0;not null" json:"mode"` // 0:mpc 1:tee 2:mpc&tee
 	MasterNodeID  string `gorm:"type:varchar(64);default:'master'" json:"master_node_id"`
+	// Java NodeDO fields used by inst (P2P) node management.
+	InstID         string `gorm:"type:varchar(64);index;default:''" json:"inst_id"`
+	InstToken      string `gorm:"type:text" json:"-"`                                  // signed inst token (JWT)
+	InstTokenState string `gorm:"type:varchar(16);default:''" json:"inst_token_state"` // UNUSED / USED
+	Protocol       string `gorm:"type:varchar(16);default:''" json:"protocol"`         // tls / mtls / notls
 }
 
 func (NodeDO) TableName() string { return "node" }

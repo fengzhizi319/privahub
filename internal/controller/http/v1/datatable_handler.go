@@ -8,7 +8,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// DatatableHandler handles datatable-related HTTP requests.
+// DatatableHandler handles /api/v1alpha1/datatable/* (Java DatatableController
+// plus Go-only register/detail/grant/fed/create).
 type DatatableHandler struct {
 	datatableService *service.DatatableService
 	kusciaClient     *kuscia.Client
@@ -19,69 +20,47 @@ func NewDatatableHandler(datatableService *service.DatatableService, kusciaClien
 	return &DatatableHandler{datatableService: datatableService, kusciaClient: kusciaClient}
 }
 
-// Register handles datatable registration.
+// Register handles Go-only datatable registration into a project.
 func (h *DatatableHandler) Register(c *gin.Context) {
 	var req service.RegisterDatatableRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
-
 	vo, err := h.datatableService.RegisterDatatable(c.Request.Context(), &req)
 	if err != nil {
-		response.Fail(c, errcode.SystemError)
+		failDataErr(c, err, errcode.SystemError)
 		return
 	}
-
 	response.OK(c, vo)
 }
 
-// List handles datatable list retrieval.
+// List handles POST /datatable/list.
+// Request: {ownerId, pageSize, pageNumber, statusFilter?, datatableNameFilter?, types?[], nodeNamesFilter?[], teeNodeId?}
+// Response: {datatableNodeVOList[{datatableVO, nodeId, nodeName}], totalDatatableNums}
 func (h *DatatableHandler) List(c *gin.Context) {
 	var req service.ListDatatableRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		req = service.ListDatatableRequest{}
+		response.FailWithMsg(c, errcode.ParamError, err.Error())
+		return
 	}
-
-	datatables, err := h.datatableService.ListDatatables(c.Request.Context(), &req)
+	vo, err := h.datatableService.ListDatatablesByOwnerID(c.Request.Context(), &req)
 	if err != nil {
-		response.Fail(c, errcode.SystemError)
+		failDataErr(c, err, errcode.DatatableQueryDatatableFailed)
 		return
 	}
-
-	response.OK(c, datatables)
-}
-
-// Detail handles datatable detail retrieval.
-func (h *DatatableHandler) Detail(c *gin.Context) {
-	var req service.GetDatatableRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
-		return
-	}
-
-	vo, err := h.datatableService.GetDatatable(c.Request.Context(), &req)
-	if err != nil {
-		if err == service.ErrDatatableNotFound {
-			response.Fail(c, errcode.DatatableNotFound)
-			return
-		}
-		response.Fail(c, errcode.SystemError)
-		return
-	}
-
 	response.OK(c, vo)
 }
 
-// Delete handles datatable deletion.
-func (h *DatatableHandler) Delete(c *gin.Context) {
-	var req service.DeleteDatatableRequest
+// Detail handles the Go-only project datatable detail.
+func (h *DatatableHandler) Detail(c *gin.Context) {
+	var req service.ProjectDatatableDetailRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
-
-	if err := h.datatableService.DeleteDatatable(c.Request.Context(), &req); err != nil {
+	vo, err := h.datatableService.GetProjectDatatable(c.Request.Context(), &req)
+	if err != nil {
 		if err == service.ErrDatatableNotFound {
 			response.Fail(c, errcode.DatatableNotFound)
 			return
@@ -89,98 +68,101 @@ func (h *DatatableHandler) Delete(c *gin.Context) {
 		response.Fail(c, errcode.SystemError)
 		return
 	}
+	response.OK(c, vo)
+}
 
+// Delete handles POST /datatable/delete (no project id required).
+// Request: {nodeId, datatableId, datasourceType?, datasourceId?, relativeUri?, teeNodeId?, type?}
+func (h *DatatableHandler) Delete(c *gin.Context) {
+	var req service.DeleteDatatableRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.FailWithMsg(c, errcode.ParamError, err.Error())
+		return
+	}
+	if err := h.datatableService.DeleteDatatable(c.Request.Context(), &req); err != nil {
+		failDataErr(c, err, errcode.DatatableDeleteDatatableFailed)
+		return
+	}
 	response.OKEmpty(c)
 }
 
-// Grant handles datatable grant via Kuscia DomainData grant API.
+// Grant handles the Go-only datatable grant via Kuscia DomainDataGrant. Kuscia
+// failures are returned as errors (not OK).
 func (h *DatatableHandler) Grant(c *gin.Context) {
 	var req service.GrantDatatableRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
-
-	// Grant domain data access to target node via Kuscia
-	if h.kusciaClient != nil {
-		grantReq := &kuscia.GrantDomainDataRequest{
-			DomainID:     req.NodeID,
-			DomainDataID: req.DatatableID,
-			GrantDomain:  req.TargetNode,
-		}
-		if err := h.kusciaClient.GrantDomainData(c.Request.Context(), grantReq); err != nil {
-			// Best-effort: Kuscia may be unreachable in dev mode
-			response.OK(c, gin.H{"granted": false, "reason": err.Error()})
-			return
-		}
+	grantID, err := h.datatableService.GrantDatatable(c.Request.Context(), &req)
+	if err != nil {
+		failDataErr(c, err, errcode.DatatableCreateDatatableGrantFailed)
+		return
 	}
-
-	response.OK(c, gin.H{"granted": true})
+	response.OK(c, gin.H{"granted": true, "domaindatagrant_id": grantID})
 }
 
-// CreateFedTable handles federated table creation.
+// CreateFedTable handles federated table creation (Go-only).
 func (h *DatatableHandler) CreateFedTable(c *gin.Context) {
 	var req service.CreateFedTableRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.Fail(c, errcode.ParamError)
 		return
 	}
-
 	vo, err := h.datatableService.CreateFedTable(c.Request.Context(), &req)
 	if err != nil {
 		response.Fail(c, errcode.SystemError)
 		return
 	}
-
 	response.OK(c, vo)
 }
 
-// Create handles datatable creation (frontend contract).
+// Create handles POST /datatable/create.
+// Request: {ownerId, nodeIds[], datatableName, datasourceId, datasourceName, datasourceType: LOCAL|OSS|ODPS|MYSQL|HTTP,
+// desc?, relativeUri, columns[{colName,colType,colComment}], partition?{type,fields[{name,type,comment}]}, nullStrs?[]}
+// Response: {dataTableNodeInfos[{nodeId,domainDataId}], failedCreatedNodes{}}
 func (h *DatatableHandler) Create(c *gin.Context) {
 	var req service.CreateDatatableCompatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+		response.FailWithMsg(c, errcode.ParamError, err.Error())
 		return
 	}
-
 	vo, err := h.datatableService.CreateDatatableCompat(c.Request.Context(), &req)
 	if err != nil {
-		response.Fail(c, errcode.SystemError)
+		failDataErr(c, err, errcode.DatatableCreateFailed)
 		return
 	}
-
 	response.OK(c, vo)
 }
 
-// Get handles datatable detail retrieval (frontend contract).
+// Get handles POST /datatable/get.
+// Request: {nodeId, datatableId, datasourceType?, type?, teeNodeId?}
+// Response: {datatableVO{...}, nodeId, nodeName}
 func (h *DatatableHandler) Get(c *gin.Context) {
 	var req service.GetDatatableCompatRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+		response.FailWithMsg(c, errcode.ParamError, err.Error())
 		return
 	}
-
 	vo, err := h.datatableService.GetDatatableCompat(c.Request.Context(), &req)
 	if err != nil {
-		response.Fail(c, errcode.SystemError)
+		failDataErr(c, err, errcode.DatatableQueryDatatableFailed)
 		return
 	}
-
 	response.OK(c, vo)
 }
 
-// PushToTee handles pushing a datatable to TEE.
+// PushToTee handles POST /datatable/pushToTee.
+// Request: {nodeId, datatableId, teeNodeId?, datasourceId?, relativeUri?}
 func (h *DatatableHandler) PushToTee(c *gin.Context) {
 	var req service.PushDatatableToTeeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.Fail(c, errcode.ParamError)
+		response.FailWithMsg(c, errcode.ParamError, err.Error())
 		return
 	}
-
 	if err := h.datatableService.PushDatatableToTee(c.Request.Context(), &req); err != nil {
-		response.Fail(c, errcode.SystemError)
+		failDataErr(c, err, errcode.DatatableCreateTeeJobFailed)
 		return
 	}
-
 	response.OKEmpty(c)
 }

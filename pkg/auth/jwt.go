@@ -49,6 +49,9 @@ type Claims struct {
 	OwnerType string    `json:"owner_type"` // CENTER | EDGE | PARTNER
 	OwnerID   string    `json:"owner_id"`   // Owning node/institution ID
 	TokenType TokenType `json:"token_type"` // access | refresh
+	// SessionID ties an access/refresh pair to one user_tokens row so that
+	// logout (row deletion) also invalidates the refresh token.
+	SessionID string `json:"sid,omitempty"`
 }
 
 // TokenPair contains both access and refresh tokens.
@@ -78,17 +81,22 @@ func NewJWTManager(secret string, accessExpiry, refreshExpiry time.Duration) *JW
 
 // GenerateTokenPair generates both access and refresh tokens for a user.
 func (m *JWTManager) GenerateTokenPair(userID, username, ownerType, ownerID string) (*TokenPair, error) {
+	return m.GenerateTokenPairWithSession(userID, username, ownerType, ownerID, "")
+}
+
+// GenerateTokenPairWithSession generates a token pair bound to a session ID.
+func (m *JWTManager) GenerateTokenPairWithSession(userID, username, ownerType, ownerID, sessionID string) (*TokenPair, error) {
 	now := time.Now()
 	accessExpiresAt := now.Add(m.accessTokenExpiry)
 
 	// Generate access token
-	accessToken, err := m.generateToken(userID, username, ownerType, ownerID, AccessToken, accessExpiresAt)
+	accessToken, err := m.generateToken(userID, username, ownerType, ownerID, sessionID, AccessToken, accessExpiresAt)
 	if err != nil {
 		return nil, err
 	}
 
 	// Generate refresh token
-	refreshToken, err := m.generateToken(userID, username, ownerType, ownerID, RefreshToken, now.Add(m.refreshTokenExpiry))
+	refreshToken, err := m.generateToken(userID, username, ownerType, ownerID, sessionID, RefreshToken, now.Add(m.refreshTokenExpiry))
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +110,7 @@ func (m *JWTManager) GenerateTokenPair(userID, username, ownerType, ownerID stri
 }
 
 // generateToken creates a single JWT token.
-func (m *JWTManager) generateToken(userID, username, ownerType, ownerID string, tokenType TokenType, expiresAt time.Time) (string, error) {
+func (m *JWTManager) generateToken(userID, username, ownerType, ownerID, sessionID string, tokenType TokenType, expiresAt time.Time) (string, error) {
 	claims := &Claims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        uuid.New().String(),
@@ -115,6 +123,7 @@ func (m *JWTManager) generateToken(userID, username, ownerType, ownerID string, 
 		OwnerType: ownerType,
 		OwnerID:   ownerID,
 		TokenType: tokenType,
+		SessionID: sessionID,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -162,8 +171,11 @@ func (m *JWTManager) RefreshAccessToken(refreshTokenString string) (*TokenPair, 
 		return nil, ErrInvalidToken
 	}
 
-	return m.GenerateTokenPair(claims.UserID, claims.Username, claims.OwnerType, claims.OwnerID)
+	return m.GenerateTokenPairWithSession(claims.UserID, claims.Username, claims.OwnerType, claims.OwnerID, claims.SessionID)
 }
+
+// AccessTokenExpiry returns the configured access token lifetime.
+func (m *JWTManager) AccessTokenExpiry() time.Duration { return m.accessTokenExpiry }
 
 // Context keys for storing auth information.
 type contextKey string

@@ -92,22 +92,6 @@ type UserTokensRepository interface {
 	DeleteByName(ctx context.Context, name string) error
 }
 
-// VoteRequestRepository provides access to vote request data.
-type VoteRequestRepository interface {
-	BaseRepository[model.VoteRequestDO]
-	FindByVoteID(ctx context.Context, voteID string) (*model.VoteRequestDO, error)
-	FindByInitiator(ctx context.Context, initiator string) ([]model.VoteRequestDO, error)
-	FindByVoter(ctx context.Context, voter string) ([]model.VoteRequestDO, error)
-}
-
-// VoteInviteRepository provides access to vote invitation data.
-type VoteInviteRepository interface {
-	BaseRepository[model.VoteInviteDO]
-	FindByVoteID(ctx context.Context, voteID string) ([]model.VoteInviteDO, error)
-	FindByParticipant(ctx context.Context, participantID string) ([]model.VoteInviteDO, error)
-	FindByVoteAndParticipant(ctx context.Context, voteID, participantID string) (*model.VoteInviteDO, error)
-}
-
 // SysResourceRepository provides access to system resource data.
 type SysResourceRepository interface {
 	BaseRepository[model.SysResourceDO]

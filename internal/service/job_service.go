@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
+	"github.com/fengzhizi319/privahub/internal/graphjob"
+	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
-	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // Job service errors.
@@ -16,14 +19,16 @@ var (
 	ErrJobNotFound = errors.New("job not found")
 )
 
-// JobService handles Kuscia job management.
+// JobService handles project job queries and control (Java ProjectServiceImpl
+// job part: listProjectJob / getProjectJob / stopProjectJob / task logs / output).
 type JobService struct {
 	jobRepo       repository.JobRepository
 	taskRepo      repository.TaskRepository
 	taskLogRepo   repository.TaskLogRepository
 	graphRepo     repository.GraphRepository
 	graphNodeRepo repository.GraphNodeRepository
-	kusciaClient  *kuscia.Client
+	kuscia        GraphKusciaAPI
+	db            *gorm.DB
 }
 
 // NewJobService creates a new JobService.
@@ -34,6 +39,7 @@ func NewJobService(
 	graphRepo repository.GraphRepository,
 	graphNodeRepo repository.GraphNodeRepository,
 	kusciaClient *kuscia.Client,
+	db *gorm.DB,
 ) *JobService {
 	return &JobService{
 		jobRepo:       jobRepo,
@@ -41,506 +47,410 @@ func NewJobService(
 		taskLogRepo:   taskLogRepo,
 		graphRepo:     graphRepo,
 		graphNodeRepo: graphNodeRepo,
-		kusciaClient:  kusciaClient,
+		kuscia:        toGraphKuscia(kusciaClient),
+		db:            db,
 	}
 }
 
-// --- Request / Response DTOs ---
+// SetKuscia overrides the Kuscia API (tests).
+func (s *JobService) SetKuscia(k GraphKusciaAPI) { s.kuscia = k }
 
-// CreateJobRequest represents a job creation request.
-type CreateJobRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
-	Name         string `json:"name"`
-	GraphID      string `json:"graph_id"`
-	GraphIDAlt   string `json:"graphId"`
-	Edges        string `json:"edges"`
-}
+// --- DTOs ---
 
-// JobVO represents a job view object. Field names follow the Java SecretPad
-// camelCase contract consumed by the frontend (ProjectJobVOSchema).
-type JobVO struct {
-	JobID       string      `json:"jobId"`
-	ProjectID   string      `json:"projectId"`
-	Name        string      `json:"name"`
-	Status      string      `json:"status"`
-	ErrMsg      string      `json:"errMsg,omitempty"`
-	GraphID     string      `json:"graphId,omitempty"`
-	Tasks       []TaskVO    `json:"tasks,omitempty"`
-	GmtCreate   string      `json:"gmtCreate"`
-	GmtModified string      `json:"gmtModified,omitempty"`
-	GmtFinished string      `json:"gmtFinished,omitempty"`
-	Finished    bool        `json:"finished"`
-	Graph       *JobGraphVO `json:"graph,omitempty"`
-}
-
-// TaskVO represents a task view object.
-type TaskVO struct {
-	TaskID      string `json:"taskId"`
-	JobID       string `json:"jobId"`
-	Parties     string `json:"parties,omitempty"`
-	Status      string `json:"status"`
-	ErrMsg      string `json:"errMsg,omitempty"`
-	GraphNodeID string `json:"graphNodeId,omitempty"`
-}
-
-// JobGraphVO is a task-oriented view of the DAG graph attached to a job detail.
-type JobGraphVO struct {
-	GraphID string           `json:"graphId"`
-	Name    string           `json:"name"`
-	Nodes   []JobGraphNodeVO `json:"nodes"`
-}
-
-// JobGraphNodeVO is a graph node enriched with its runtime task status.
-type JobGraphNodeVO struct {
-	GraphNodeID string   `json:"graphNodeId"`
-	CodeName    string   `json:"codeName,omitempty"`
-	Label       string   `json:"label,omitempty"`
-	Status      string   `json:"status,omitempty"`
-	Outputs     []string `json:"outputs,omitempty"`
-}
-
-// JobListRequest represents a job list request. The frontend sends pageNum and
-// pageSize (see getProjectJobs in client.ts); page/size are kept for compatibility.
+// JobListRequest mirrors Java ListProjectJobRequest (page / size are legacy aliases).
 type JobListRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
-	Page         int    `json:"page"`
-	PageAlt      int    `json:"pageNum"`
-	Size         int    `json:"size"`
-	SizeAlt      int    `json:"pageSize"`
+	ProjectID string `json:"projectId"`
+	GraphID   string `json:"graphId"`
+	PageNum   int    `json:"pageNum"`
+	PageSize  int    `json:"pageSize"`
+	Page      int    `json:"page,omitempty"`
+	Size      int    `json:"size,omitempty"`
 }
 
-// JobListResponse represents a paginated job list. The Data field matches the
-// frontend's expected `data` key (see getProjectJobs in client.ts).
+// JobGraphRef is a Go extension on job summaries (graph name for the job list).
+type JobGraphRef struct {
+	GraphID string `json:"graphId"`
+	Name    string `json:"name"`
+}
+
+// ProjectJobSummaryVO mirrors Java ProjectJobSummaryVO.
+type ProjectJobSummaryVO struct {
+	JobID             string       `json:"jobId"`
+	Status            string       `json:"status"`
+	ErrMsg            string       `json:"errMsg,omitempty"`
+	GmtCreate         string       `json:"gmtCreate"`
+	GmtModified       string       `json:"gmtModified,omitempty"`
+	GmtFinished       string       `json:"gmtFinished,omitempty"`
+	TableCount        int64        `json:"tableCount"`
+	ModelCount        int64        `json:"modelCount"`
+	RuleCount         int64        `json:"ruleCount"`
+	ReportCount       int64        `json:"reportCount"`
+	FinishedTaskCount int64        `json:"finishedTaskCount"`
+	TaskCount         int64        `json:"taskCount"`
+	Finished          bool         `json:"finished"`
+	Graph             *JobGraphRef `json:"graph,omitempty"`
+}
+
+// JobListResponse mirrors Java PageResponse (total is a Go extension).
 type JobListResponse struct {
-	Data      []JobVO `json:"data"`
-	Total     int64   `json:"total"`
-	PageSize  int     `json:"pageSize"`
-	PageTotal int     `json:"pageTotal"`
+	PageTotal int                   `json:"pageTotal"`
+	PageSize  int                   `json:"pageSize"`
+	Data      []ProjectJobSummaryVO `json:"data"`
+	Total     int64                 `json:"total"`
 }
 
-// GetJobRequest represents a job detail request.
+// GetJobRequest mirrors GetProjectJobRequest.
 type GetJobRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
-	JobID        string `json:"job_id"`
-	JobIDAlt     string `json:"jobId"`
+	ProjectID string `json:"projectId"`
+	JobID     string `json:"jobId"`
 }
 
-// StopJobRequest represents a job stop request.
+// ProjectJobVO mirrors Java ProjectJobVO.
+type ProjectJobVO struct {
+	JobID       string         `json:"jobId"`
+	Status      string         `json:"status"`
+	ErrMsg      string         `json:"errMsg,omitempty"`
+	GmtCreate   string         `json:"gmtCreate"`
+	GmtModified string         `json:"gmtModified,omitempty"`
+	GmtFinished string         `json:"gmtFinished,omitempty"`
+	Finished    bool           `json:"finished"`
+	Graph       *GraphDetailVO `json:"graph"`
+}
+
+// StopJobRequest mirrors StopProjectJobTaskRequest.
 type StopJobRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
-	JobID        string `json:"job_id"`
-	JobIDAlt     string `json:"jobId"`
-	TaskID       string `json:"task_id"`
-	TaskIDAlt    string `json:"taskId"`
+	ProjectID string `json:"projectId"`
+	JobID     string `json:"jobId"`
+	TaskID    string `json:"taskId,omitempty"`
 }
 
-// GetTaskLogRequest represents a task log request.
+// GetTaskLogRequest mirrors GetProjectJobTaskLogRequest.
 type GetTaskLogRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
-	JobID        string `json:"job_id"`
-	JobIDAlt     string `json:"jobId"`
-	TaskID       string `json:"task_id"`
-	TaskIDAlt    string `json:"taskId"`
+	ProjectID string `json:"projectId"`
+	JobID     string `json:"jobId"`
+	TaskID    string `json:"taskId"`
 }
 
-// GetTaskOutputRequest represents a task output request. Field names follow the
-// Java SecretPad GetProjectJobTaskOutputRequest contract.
+// GetTaskOutputRequest mirrors GetProjectJobTaskOutputRequest.
 type GetTaskOutputRequest struct {
-	ProjectID    string `json:"project_id"`
-	ProjectIDAlt string `json:"projectId"`
-	JobID        string `json:"job_id"`
-	JobIDAlt     string `json:"jobId"`
-	TaskID       string `json:"task_id"`
-	TaskIDAlt    string `json:"taskId"`
-	OutputID     string `json:"output_id"`
-	OutputIDAlt  string `json:"outputId"`
+	ProjectID string `json:"projectId"`
+	JobID     string `json:"jobId"`
+	TaskID    string `json:"taskId"`
+	OutputID  string `json:"outputId"`
 }
 
-// TaskLogVO represents task log entries.
-type TaskLogVO struct {
-	TaskID string   `json:"taskId"`
-	Logs   []string `json:"logs"`
+// --- job lookup (project_job, falling back to project_schedule_job) ---
+
+type jobRecord struct {
+	job   model.ProjectJobDO
+	tasks []model.ProjectJobTaskDO
 }
 
-// TaskOutputVO represents a task's output. Field names follow the frontend
-// GraphNodeOutputVOSchema (type/codeName/meta/...).
-type TaskOutputVO struct {
-	Type      string                 `json:"type,omitempty"`
-	CodeName  string                 `json:"codeName,omitempty"`
-	Meta      map[string]interface{} `json:"meta,omitempty"`
-	JobID     string                 `json:"jobId,omitempty"`
-	TaskID    string                 `json:"taskId,omitempty"`
-	GraphID   string                 `json:"graphID,omitempty"`
-	GmtCreate string                 `json:"gmtCreate,omitempty"`
+func openProjectJob(ctx context.Context, db *gorm.DB, projectID, jobID string) (*jobRecord, error) {
+	rec := &jobRecord{}
+	q := db.WithContext(ctx).Where("job_id = ?", jobID)
+	if projectID != "" {
+		q = q.Where("project_id = ?", projectID)
+	}
+	if err := q.First(&rec.job).Error; err != nil {
+		var sj model.ProjectScheduleJobDO
+		sq := db.WithContext(ctx).Where("job_id = ?", jobID)
+		if projectID != "" {
+			sq = sq.Where("project_id = ?", projectID)
+		}
+		if sq.First(&sj).Error != nil {
+			return nil, padErrBase(ErrJobNotFound, errcode.ProjectJobNotExists)
+		}
+		rec.job = model.ProjectJobDO{
+			BaseDO: sj.BaseDO, ProjectID: sj.ProjectID, JobID: sj.JobID, Name: sj.Name, Status: sj.Status,
+			ErrMsg: sj.ErrMsg, GraphID: sj.GraphID, Edges: sj.Edges, FinishedTime: sj.FinishedTime,
+		}
+	}
+	if err := db.WithContext(ctx).Where("project_id = ? AND job_id = ?", rec.job.ProjectID, jobID).Order("id ASC").Find(&rec.tasks).Error; err != nil {
+		return nil, err
+	}
+	return rec, nil
 }
 
 // --- Service Methods ---
 
-// CreateJob creates a new job and submits it to Kuscia.
-func (s *JobService) CreateJob(ctx context.Context, req *CreateJobRequest) (*JobVO, error) {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
-	}
-	if req.GraphID == "" {
-		req.GraphID = req.GraphIDAlt
-	}
-	jobID := uuid.New().String()[:8]
-
-	job := &model.ProjectJobDO{
-		ProjectID: req.ProjectID,
-		JobID:     jobID,
-		Name:      req.Name,
-		Status:    "PENDING",
-		GraphID:   req.GraphID,
-		Edges:     req.Edges,
-	}
-
-	if err := s.jobRepo.Create(ctx, job); err != nil {
-		return nil, err
-	}
-
-	// Submit to Kuscia if client is available
-	if s.kusciaClient != nil {
-		kusciaReq := &kuscia.CreateJobRequest{
-			JobID:     jobID,
-			Initiator: "alice",
-			Tasks: []kuscia.TaskConfig{
-				{
-					AppImage: "secretflow-image",
-					Alias:    req.Name,
-					Parties: []kuscia.Party{
-						{DomainID: "alice", Role: "guest"},
-						{DomainID: "bob", Role: "host"},
-					},
-				},
-			},
-			CustomFields: map[string]string{
-				"project_id": req.ProjectID,
-				"graph_id":   req.GraphID,
-			},
-		}
-		if _, err := s.kusciaClient.CreateJob(ctx, kusciaReq); err != nil {
-			// Kuscia unreachable — keep job in PENDING, log warning
-			_ = s.jobRepo.UpdateStatus(ctx, jobID, "PENDING", "kuscia unreachable: "+err.Error())
-		}
-	}
-
-	return &JobVO{
-		JobID:     jobID,
-		ProjectID: req.ProjectID,
-		Name:      req.Name,
-		Status:    "PENDING",
-		GmtCreate: job.GmtCreate.Format("2006-01-02 15:04:05"),
-	}, nil
-}
-
-// ListJobs lists jobs for a project with pagination.
+// ListJobs mirrors ProjectServiceImpl.listProjectJob (DB paging, graph filter, counts).
 func (s *JobService) ListJobs(ctx context.Context, req *JobListRequest) (*JobListResponse, error) {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
+	page, size := req.PageNum, req.PageSize
+	if page < 1 {
+		page = req.Page
 	}
-	if req.Page < 1 {
-		req.Page = req.PageAlt
+	if size < 1 {
+		size = req.Size
 	}
-	if req.Size < 1 {
-		req.Size = req.SizeAlt
+	if page < 1 {
+		page = 1
 	}
-	if req.Page < 1 {
-		req.Page = 1
+	if size < 1 {
+		size = 10
 	}
-	if req.Size < 1 || req.Size > 100 {
-		req.Size = 10
+	q := s.db.WithContext(ctx).Model(&model.ProjectJobDO{}).Where("project_id = ?", req.ProjectID)
+	if req.GraphID != "" {
+		q = q.Where("graph_id = ?", req.GraphID)
 	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, err
+	}
+	var jobs []model.ProjectJobDO
+	if err := q.Order("gmt_create DESC").Order("id DESC").Offset((page - 1) * size).Limit(size).Find(&jobs).Error; err != nil {
+		return nil, err
+	}
+	resp := &JobListResponse{PageSize: size, Data: []ProjectJobSummaryVO{}, Total: total}
+	resp.PageTotal = int((total + int64(size) - 1) / int64(size))
+	if len(jobs) == 0 {
+		if resp.PageTotal == 0 {
+			resp.PageTotal = 1
+		}
+		return resp, nil
+	}
+	ids := make([]string, 0, len(jobs))
+	for _, j := range jobs {
+		ids = append(ids, j.JobID)
+	}
+	counts := func(kind string) map[string]int64 {
+		type row struct {
+			JobID string
+			Cnt   int64
+		}
+		var rows []row
+		s.db.WithContext(ctx).Model(&model.ProjectResultDO{}).
+			Select("job_id, COUNT(DISTINCT ref_id) AS cnt").
+			Where("project_id = ? AND job_id IN ? AND kind = ?", req.ProjectID, ids, kind).
+			Group("job_id").Scan(&rows)
+		m := map[string]int64{}
+		for _, r := range rows {
+			m[r.JobID] = r.Cnt
+		}
+		return m
+	}
+	taskCounts := func(status string) map[string]int64 {
+		type row struct {
+			JobID string
+			Cnt   int64
+		}
+		var rows []row
+		tq := s.db.WithContext(ctx).Model(&model.ProjectJobTaskDO{}).Select("job_id, COUNT(*) AS cnt").
+			Where("project_id = ? AND job_id IN ?", req.ProjectID, ids)
+		if status != "" {
+			tq = tq.Where("status = ?", status)
+		}
+		tq.Group("job_id").Scan(&rows)
+		m := map[string]int64{}
+		for _, r := range rows {
+			m[r.JobID] = r.Cnt
+		}
+		return m
+	}
+	tables, models, rules, reports := counts(graphjob.ResultFedTable), counts(graphjob.ResultModel), counts(graphjob.ResultRule), counts(graphjob.ResultReport)
+	finished, all := taskCounts(graphjob.TaskSucceed), taskCounts("")
+	graphNames := map[string]string{}
+	for _, j := range jobs {
+		vo := ProjectJobSummaryVO{
+			JobID:             j.JobID,
+			Status:            graphjob.NormalizeJobStatus(j.Status),
+			ErrMsg:            j.ErrMsg,
+			GmtCreate:         rfc3339(j.GmtCreate),
+			GmtModified:       rfc3339(j.GmtModified),
+			TableCount:        tables[j.JobID],
+			ModelCount:        models[j.JobID],
+			RuleCount:         rules[j.JobID],
+			ReportCount:       reports[j.JobID],
+			FinishedTaskCount: finished[j.JobID],
+			TaskCount:         all[j.JobID],
+			Finished:          graphjob.IsJobFinished(j.Status),
+		}
+		if j.FinishedTime != nil {
+			vo.GmtFinished = rfc3339(*j.FinishedTime)
+		}
+		if j.GraphID != "" {
+			name, ok := graphNames[j.GraphID]
+			if !ok {
+				var g model.ProjectGraphDO
+				if s.db.WithContext(ctx).Where("project_id = ? AND graph_id = ?", j.ProjectID, j.GraphID).First(&g).Error == nil {
+					name = g.Name
+				} else {
+					name = j.Name
+				}
+				graphNames[j.GraphID] = name
+			}
+			vo.Graph = &JobGraphRef{GraphID: j.GraphID, Name: name}
+		}
+		resp.Data = append(resp.Data, vo)
+	}
+	return resp, nil
+}
 
-	jobs, err := s.jobRepo.FindByProjectID(ctx, req.ProjectID)
+// GetJob mirrors ProjectServiceImpl.getProjectJob: the graph is rebuilt from
+// the job's edge snapshot and each task's graph_node snapshot.
+func (s *JobService) GetJob(ctx context.Context, req *GetJobRequest) (*ProjectJobVO, error) {
+	var cnt int64
+	s.db.WithContext(ctx).Model(&model.ProjectDO{}).Where("project_id = ?", req.ProjectID).Count(&cnt)
+	if cnt == 0 {
+		return nil, padErrBase(ErrProjectNotFound, errcode.ProjectNotExists)
+	}
+	rec, err := openProjectJob(ctx, s.db, req.ProjectID, req.JobID)
 	if err != nil {
 		return nil, err
 	}
-
-	// Simple in-memory pagination
-	total := int64(len(jobs))
-	start := (req.Page - 1) * req.Size
-	if start >= len(jobs) {
-		start = len(jobs)
-	}
-	end := start + req.Size
-	if end > len(jobs) {
-		end = len(jobs)
-	}
-
-	result := make([]JobVO, 0, end-start)
-	for _, j := range jobs[start:end] {
-		vo := s.toJobVO(&j, nil)
-		// Populate the graph name so the frontend job list can display it
-		// (getProjectJobs reads j.graph?.name).
-		if s.graphRepo != nil && j.GraphID != "" {
-			if g, gerr := s.graphRepo.FindByProjectAndGraphID(ctx, j.ProjectID, j.GraphID); gerr == nil && g != nil {
-				vo.Graph = &JobGraphVO{GraphID: g.GraphID, Name: g.Name}
-			}
+	var results []model.ProjectResultDO
+	s.db.WithContext(ctx).Where("project_id = ? AND job_id = ?", req.ProjectID, req.JobID).Order("id ASC").Find(&results)
+	byTask := map[string][]ProjectResultBaseVO{}
+	seen := map[string]bool{}
+	for _, r := range results {
+		key := r.TaskID + "|" + r.Kind + "|" + r.RefID // MergedProjectResult merges parties
+		if seen[key] {
+			continue
 		}
-		result = append(result, vo)
+		seen[key] = true
+		byTask[r.TaskID] = append(byTask[r.TaskID], ProjectResultBaseVO{Kind: r.Kind, RefID: r.RefID})
 	}
-
-	pageTotal := int((total + int64(req.Size) - 1) / int64(req.Size))
-
-	return &JobListResponse{
-		Data:      result,
-		Total:     total,
-		PageSize:  req.Size,
-		PageTotal: pageTotal,
-	}, nil
-}
-
-// GetJob retrieves job detail with tasks.
-func (s *JobService) GetJob(ctx context.Context, req *GetJobRequest) (*JobVO, error) {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
-	}
-	if req.JobID == "" {
-		req.JobID = req.JobIDAlt
-	}
-	job, err := s.jobRepo.FindByProjectAndJobID(ctx, req.ProjectID, req.JobID)
-	if err != nil {
-		return nil, ErrJobNotFound
-	}
-
-	tasks, err := s.taskRepo.FindByProjectAndJobID(ctx, req.ProjectID, req.JobID)
-	if err != nil {
-		tasks = nil // non-fatal
-	}
-
-	vo := s.toJobVO(job, tasks)
-	vo.Graph = s.buildJobGraph(ctx, job, tasks)
-	return &vo, nil
-}
-
-// StopJob stops a running job both locally and in Kuscia.
-func (s *JobService) StopJob(ctx context.Context, req *StopJobRequest) error {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
-	}
-	if req.JobID == "" {
-		req.JobID = req.JobIDAlt
-	}
-	if req.TaskID == "" {
-		req.TaskID = req.TaskIDAlt
-	}
-	job, err := s.jobRepo.FindByProjectAndJobID(ctx, req.ProjectID, req.JobID)
-	if err != nil {
-		return ErrJobNotFound
-	}
-
-	// Stop in Kuscia first (best-effort)
-	if s.kusciaClient != nil {
-		_ = s.kusciaClient.StopJob(ctx, req.JobID)
-	}
-
-	// Update job status to STOPPED
-	if err := s.jobRepo.UpdateStatus(ctx, job.JobID, "STOPPED", "stopped by user"); err != nil {
-		return err
-	}
-
-	// Stop specific task or all tasks
-	if req.TaskID != "" {
-		return s.taskRepo.UpdateStatus(ctx, req.TaskID, "STOPPED", "stopped by user")
-	}
-
-	// Stop all running tasks
-	// Bug57 fix: propagate task update errors instead of silently ignoring them.
-	tasks, err := s.taskRepo.FindByJobID(ctx, req.JobID)
-	if err != nil {
-		return err
-	}
-	for _, t := range tasks {
-		if t.Status == "RUNNING" || t.Status == "PENDING" {
-			if err := s.taskRepo.UpdateStatus(ctx, t.TaskID, "STOPPED", "stopped by user"); err != nil {
-				return err
-			}
+	nodes := make([]GraphNodeDetail, 0, len(rec.tasks))
+	for i := range rec.tasks {
+		t := &rec.tasks[i]
+		info := loadTaskNodeInfo(ctx, s.db, t, rec.job.GraphID)
+		if string(info.NodeDef) == "" || string(info.NodeDef) == "null" {
+			info.NodeDef = json.RawMessage("{}")
 		}
+		nodes = append(nodes, GraphNodeDetail{
+			GraphNodeInfo: info,
+			Status:        graphjob.NormalizeTaskStatus(t.Status),
+			JobID:         t.JobID,
+			TaskID:        t.TaskID,
+			Results:       byTask[t.TaskID],
+			Parties:       nodeSimpleInfos(ctx, s.db, taskParties(t)),
+			Progress:      taskProgress(t),
+		})
 	}
-
-	return nil
-}
-
-// GetTaskLogs retrieves logs for a task.
-func (s *JobService) GetTaskLogs(ctx context.Context, req *GetTaskLogRequest) (*TaskLogVO, error) {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
+	edges := graphjob.ParseEdges(rec.job.Edges)
+	if edges == nil {
+		edges = []graphjob.GraphEdge{}
 	}
-	if req.JobID == "" {
-		req.JobID = req.JobIDAlt
+	vo := &ProjectJobVO{
+		JobID:       rec.job.JobID,
+		Status:      graphjob.NormalizeJobStatus(rec.job.Status),
+		ErrMsg:      rec.job.ErrMsg,
+		GmtCreate:   rfc3339(rec.job.GmtCreate),
+		GmtModified: rfc3339(rec.job.GmtModified),
+		Finished:    graphjob.IsJobFinished(rec.job.Status),
+		Graph: &GraphDetailVO{
+			ProjectID: rec.job.ProjectID,
+			GraphID:   rec.job.GraphID,
+			Name:      rec.job.Name,
+			Edges:     edges,
+			Nodes:     nodes,
+		},
 	}
-	if req.TaskID == "" {
-		req.TaskID = req.TaskIDAlt
+	if rec.job.FinishedTime != nil {
+		vo.GmtFinished = rfc3339(*rec.job.FinishedTime)
 	}
-	logs, err := s.taskLogRepo.FindByTaskID(ctx, req.ProjectID, req.JobID, req.TaskID)
-	if err != nil {
-		return nil, err
-	}
-
-	logStrs := make([]string, 0, len(logs))
-	for _, l := range logs {
-		logStrs = append(logStrs, l.Log)
-	}
-
-	return &TaskLogVO{
-		TaskID: req.TaskID,
-		Logs:   logStrs,
-	}, nil
-}
-
-// GetTaskOutput retrieves the output of a job task. It resolves the task's
-// graph node for its codeName and, when Kuscia is reachable, enriches the
-// result with the output's DomainData metadata (type/name/columns). All
-// enrichment steps are best-effort so the endpoint degrades gracefully.
-func (s *JobService) GetTaskOutput(ctx context.Context, req *GetTaskOutputRequest) (*TaskOutputVO, error) {
-	if req.ProjectID == "" {
-		req.ProjectID = req.ProjectIDAlt
-	}
-	if req.JobID == "" {
-		req.JobID = req.JobIDAlt
-	}
-	if req.TaskID == "" {
-		req.TaskID = req.TaskIDAlt
-	}
-	if req.OutputID == "" {
-		req.OutputID = req.OutputIDAlt
-	}
-
-	vo := &TaskOutputVO{
-		JobID:  req.JobID,
-		TaskID: req.TaskID,
-		Type:   "table",
-	}
-
-	// Resolve the task's graph node to obtain the codeName and graph id.
-	if task, err := s.taskRepo.FindByTaskID(ctx, req.TaskID); err == nil && task != nil {
-		if job, jerr := s.jobRepo.FindByProjectAndJobID(ctx, req.ProjectID, req.JobID); jerr == nil && job != nil {
-			vo.GraphID = job.GraphID
-			if s.graphNodeRepo != nil {
-				if node, nerr := s.graphNodeRepo.FindByGraphNodeID(ctx, req.ProjectID, job.GraphID, task.GraphNodeID); nerr == nil && node != nil {
-					vo.CodeName = node.CodeName
-				}
-			}
-		}
-	}
-
-	// Best-effort: query Kuscia DomainData for the output's metadata.
-	if s.kusciaClient != nil && req.OutputID != "" {
-		if resp, err := s.kusciaClient.QueryDomainData(ctx, "alice", req.OutputID); err == nil {
-			if resp.Data.Type != "" {
-				vo.Type = resp.Data.Type
-			}
-			meta := map[string]interface{}{
-				"name":         resp.Data.Name,
-				"datasourceId": resp.Data.DatasourceID,
-			}
-			if len(resp.Data.Columns) > 0 {
-				cols := make([]map[string]string, 0, len(resp.Data.Columns))
-				for _, col := range resp.Data.Columns {
-					cols = append(cols, map[string]string{"name": col.Name, "type": col.Type})
-				}
-				meta["columns"] = cols
-			}
-			vo.Meta = meta
-		}
-	}
-
 	return vo, nil
 }
 
-func (s *JobService) toJobVO(job *model.ProjectJobDO, tasks []model.ProjectJobTaskDO) JobVO {
-	vo := JobVO{
-		JobID:       job.JobID,
-		ProjectID:   job.ProjectID,
-		Name:        job.Name,
-		Status:      job.Status,
-		ErrMsg:      job.ErrMsg,
-		GraphID:     job.GraphID,
-		GmtCreate:   job.GmtCreate.Format("2006-01-02 15:04:05"),
-		GmtModified: job.GmtModified.Format("2006-01-02 15:04:05"),
-		Finished:    job.FinishedTime != nil,
-	}
+// StopJob mirrors ProjectServiceImpl.stopProjectJob (graph owner check).
+func (s *JobService) StopJob(ctx context.Context, req *StopJobRequest) error {
+	return stopProjectJob(ctx, s.db, s.kuscia, req.ProjectID, req.JobID, true)
+}
 
-	if job.FinishedTime != nil {
-		vo.GmtFinished = job.FinishedTime.Format("2006-01-02 15:04:05")
+// stopProjectJob stops a job: RUNNING / INITIALIZED tasks become STOPPED with
+// stop logs, the job becomes STOPPED and Kuscia StopJob is called.
+func stopProjectJob(ctx context.Context, db *gorm.DB, k GraphKusciaAPI, projectID, jobID string, checkOwner bool) error {
+	var job model.ProjectJobDO
+	q := db.WithContext(ctx).Where("job_id = ?", jobID)
+	if projectID != "" {
+		q = q.Where("project_id = ?", projectID)
 	}
-
-	if tasks != nil {
-		vo.Tasks = make([]TaskVO, 0, len(tasks))
+	if err := q.First(&job).Error; err != nil {
+		return padErrBase(ErrJobNotFound, errcode.ProjectJobNotExists)
+	}
+	if checkOwner && job.GraphID != "" {
+		var g model.ProjectGraphDO
+		if err := db.WithContext(ctx).Where("project_id = ? AND graph_id = ?", job.ProjectID, job.GraphID).First(&g).Error; err != nil {
+			return padErrBase(ErrGraphNotFound, errcode.GraphNotExists)
+		}
+		if err := ownerCheck(ctx, &g); err != nil {
+			return err
+		}
+	}
+	if k != nil {
+		// Best effort: a job already gone from Kuscia is still stopped locally.
+		_ = k.StopJob(ctx, jobID)
+	}
+	now := timeNow()
+	return db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var tasks []model.ProjectJobTaskDO
+		if err := tx.Where("project_id = ? AND job_id = ?", job.ProjectID, jobID).Find(&tasks).Error; err != nil {
+			return err
+		}
 		for _, t := range tasks {
-			vo.Tasks = append(vo.Tasks, TaskVO{
-				TaskID:      t.TaskID,
-				JobID:       t.JobID,
-				Parties:     t.Parties,
-				Status:      t.Status,
-				ErrMsg:      t.ErrMsg,
-				GraphNodeID: t.GraphNodeID,
-			})
+			st := graphjob.NormalizeTaskStatus(t.Status)
+			if st != graphjob.TaskRunning && st != graphjob.TaskInitialized {
+				continue
+			}
+			if err := tx.Model(&model.ProjectJobTaskDO{}).Where("id = ?", t.ID).Update("status", graphjob.TaskStopped).Error; err != nil {
+				return err
+			}
+			for _, l := range graphjob.TransitionLogs(now, jobID, t.TaskID, st, graphjob.TaskStopped, nil) {
+				if err := tx.Create(&model.ProjectJobTaskLogDO{ProjectID: job.ProjectID, JobID: jobID, TaskID: t.TaskID, Log: l}).Error; err != nil {
+					return err
+				}
+			}
 		}
-	}
-
-	return vo
+		return tx.Model(&model.ProjectJobDO{}).Where("id = ?", job.ID).
+			Updates(map[string]any{"status": graphjob.JobStopped}).Error
+	})
 }
 
-// buildJobGraph loads the DAG graph bound to the job and enriches each node
-// with its runtime task status. It returns nil (non-fatal) when the graph
-// repositories are unavailable, the job has no graph, or loading fails.
-func (s *JobService) buildJobGraph(ctx context.Context, job *model.ProjectJobDO, tasks []model.ProjectJobTaskDO) *JobGraphVO {
-	if s.graphRepo == nil || s.graphNodeRepo == nil || job.GraphID == "" {
-		return nil
-	}
-
-	graph, err := s.graphRepo.FindByProjectAndGraphID(ctx, job.ProjectID, job.GraphID)
+// GetTaskLogs mirrors ProjectServiceImpl.getProjectJobTaskLogs.
+func (s *JobService) GetTaskLogs(ctx context.Context, req *GetTaskLogRequest) (*GraphNodeTaskLogsVO, error) {
+	rec, err := openProjectJob(ctx, s.db, req.ProjectID, req.JobID)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-
-	nodes, err := s.graphNodeRepo.FindByGraphID(ctx, job.ProjectID, job.GraphID)
-	if err != nil {
-		return nil
-	}
-
-	// Map graph node id -> task status for runtime enrichment.
-	statusByNode := make(map[string]string, len(tasks))
-	for _, t := range tasks {
-		if t.GraphNodeID != "" {
-			statusByNode[t.GraphNodeID] = t.Status
+	var task *model.ProjectJobTaskDO
+	for i := range rec.tasks {
+		if rec.tasks[i].TaskID == req.TaskID {
+			task = &rec.tasks[i]
 		}
 	}
-
-	nodeVOs := make([]JobGraphNodeVO, 0, len(nodes))
-	for _, n := range nodes {
-		nodeVOs = append(nodeVOs, JobGraphNodeVO{
-			GraphNodeID: n.GraphNodeID,
-			CodeName:    n.CodeName,
-			Label:       n.Label,
-			Status:      statusByNode[n.GraphNodeID],
-			Outputs:     splitOutputs(n.Outputs),
-		})
+	if task == nil {
+		return nil, padErr(errcode.ProjectJobTaskNotExists)
 	}
-
-	return &JobGraphVO{
-		GraphID: graph.GraphID,
-		Name:    graph.Name,
-		Nodes:   nodeVOs,
+	logs, err := taskLogLines(ctx, s.db, req.JobID, req.TaskID)
+	if err != nil {
+		return nil, err
 	}
+	prefix := "INFO the jobId=" + req.JobID + ", taskId=" + req.TaskID
+	logs = graphjob.DistinctSpecifyLogs(logs, prefix+" start")
+	logs = graphjob.DistinctSpecifyLogs(logs, prefix+" succeed")
+	return &GraphNodeTaskLogsVO{Status: graphjob.NormalizeTaskStatus(task.Status), Logs: logs}, nil
 }
 
-// splitOutputs parses a node's Outputs field, which is stored as a JSON array
-// string (e.g. `["alice/output-0"]`), into a []string.
-func splitOutputs(raw string) []string {
-	if raw == "" {
-		return nil
+// GetTaskOutput mirrors GraphServiceImpl.getGraphNodeTaskOutputVO(request).
+func (s *JobService) GetTaskOutput(ctx context.Context, req *GetTaskOutputRequest) (*GraphNodeOutputVO, error) {
+	rec, err := openProjectJob(ctx, s.db, req.ProjectID, req.JobID)
+	if err != nil {
+		return nil, err
 	}
-	var out []string
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
-		return nil
+	for i := range rec.tasks {
+		if rec.tasks[i].TaskID == req.TaskID {
+			return newOutputRenderer(s.db, s.kuscia).taskOutput(ctx, &rec.tasks[i], req.OutputID)
+		}
 	}
+	return nil, padErr(errcode.ProjectJobTaskNotExists)
+}
+
+// sortedKeys returns the sorted keys of a set.
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }

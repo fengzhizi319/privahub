@@ -44,9 +44,10 @@ type FeatureTableDO struct {
 	FeatureTableID   string `gorm:"uniqueIndex:upk_feature_table_id;type:varchar(8);not null" json:"feature_table_id"`
 	FeatureTableName string `gorm:"type:varchar(32);not null" json:"feature_table_name"`
 	NodeID           string `gorm:"type:varchar(64);not null" json:"node_id"`
+	DatasourceID     string `gorm:"type:varchar(64);not null;default:'http-data-source'" json:"datasource_id"` // Java UPK.datasourceId
 	Type             string `gorm:"type:varchar(8);not null;default:'HTTP'" json:"type"`
-	Description      string `gorm:"type:varchar(64)" json:"description"`
-	URL              string `gorm:"type:varchar(64);not null" json:"url"`
+	Description      string `gorm:"type:varchar(128)" json:"description"`
+	URL              string `gorm:"type:varchar(256);not null" json:"url"`
 	Columns          string `gorm:"type:text;not null" json:"columns"`
 	Status           string `gorm:"type:varchar(16);not null" json:"status"` // Available / Unavailable
 }
