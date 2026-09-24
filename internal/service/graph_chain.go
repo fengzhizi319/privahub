@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"sort"
 	"strings"
 
@@ -550,7 +551,7 @@ func (s *GraphService) convertKusciaJob(ctx context.Context, cc *chainContext, j
 	return &kuscia.CreateJobRequest{
 		JobID:          job.JobID,
 		Initiator:      initiator,
-		MaxParallelism: int32(job.MaxParallelism),
+		MaxParallelism: clampInt32(job.MaxParallelism),
 		Tasks:          tasks,
 	}, nil
 }
@@ -629,4 +630,16 @@ func (s *GraphService) renderTaskInputConfig(ctx context.Context, cc *chainConte
 	}
 	evalJSON, _ := json.Marshal(eval)
 	return cfg.Marshal(), string(evalJSON), nil
+}
+
+// clampInt32 converts an int to int32, saturating at the int32 bounds so an
+// oversized MaxParallelism cannot wrap to a negative/small value.
+func clampInt32(v int) int32 {
+	if v > math.MaxInt32 {
+		return math.MaxInt32
+	}
+	if v < math.MinInt32 {
+		return math.MinInt32
+	}
+	return int32(v)
 }

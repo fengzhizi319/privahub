@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"strings"
 	"time"
 
 	"github.com/fengzhizi319/privahub/internal/controller/http/middleware"
@@ -60,11 +61,13 @@ func wireAuth(
 	userService *service.UserService,
 	nodeUserService *service.NodeUserService,
 	userHandler *v1.UserHandler,
+	log *zap.Logger,
 ) *service.DataResourceAuth {
 	authService.SetDB(db)
 	authService.SetEnv(env)
 	authService.SetOptions(service.AuthOptions{
 		MaxAttempts:            cfg.Auth.MaxAttempts,
+		AccountMaxAttempts:     cfg.Auth.AccountMaxAttempts,
 		LockDuration:           time.Duration(cfg.Auth.LockMinutes) * time.Minute,
 		SessionIdleTimeout:     cfg.Auth.SessionIdleTimeout,
 		AllowPlaintextPassword: cfg.IsDev(),
@@ -72,13 +75,45 @@ func wireAuth(
 	})
 	userService.SetResetPasswordPolicy(cfg.Auth.ResetPasswordMaxAttempts,
 		time.Duration(cfg.Auth.ResetPasswordLockMinutes)*time.Minute)
+	userService.SetInitialPasswordFile(cfg.Auth.AdminName, cfg.Auth.InitialPasswordFile, log)
+	middleware.SetBrowserSessionConfig(BrowserSessionConfigFromConfig(cfg))
 	nodeUserService.SetRemote(cfg.Kuscia.Gateway, cfg.Server.CenterPlatformService)
 	nodeUserService.SetLocalCenter(env.GetPlatformType() == service.PlatformCenter)
 	userHandler.SetNodeUserService(nodeUserService)
 
+	// Inst tokens are signed with a key derived from the server secret
+	// instead of the (public) inst id.
+	service.SetInstTokenSecret(cfg.Auth.JWTSecret)
+
 	dataAuth := service.NewDataResourceAuth(db, env)
 	middleware.SetDataResourceAuth(dataAuth)
 	return dataAuth
+}
+
+// BrowserSessionConfigFromConfig derives the cookie session settings: Secure
+// from auth.cookie_secure, else server.tls.enabled / behind_tls_proxy, else
+// per request (HTTPS); the CSRF Origin allowlist is server.cors_allowed_origins
+// (same-origin requests always pass; dev profiles without an allowlist skip
+// the Origin check but still require the CSRF token).
+func BrowserSessionConfigFromConfig(cfg *config.Config) middleware.BrowserSessionConfig {
+	bc := middleware.BrowserSessionConfig{
+		Secure:         cfg.Auth.CookieSecure,
+		AllowedOrigins: cfg.Server.CORSAllowedOrigins,
+		AccessMaxAge:   cfg.Auth.AccessTokenExpiry,
+		RefreshMaxAge:  cfg.Auth.RefreshTokenExpiry,
+	}
+	if bc.Secure == nil && cfg.Server.MainPortSecure() {
+		t := true
+		bc.Secure = &t
+	}
+	explicit := 0
+	for _, o := range cfg.Server.CORSAllowedOrigins {
+		if o != "" && o != "*" {
+			explicit++
+		}
+	}
+	bc.AllowAnyOrigin = cfg.IsDev() && explicit == 0
+	return bc
 }
 
 // AuthMiddleware returns the session-backed authentication middleware for
@@ -100,8 +135,13 @@ func (a *App) RBACMiddleware() gin.HandlerFunc {
 // InnerGuardMiddleware enforces server.inner_auth (source allowlist and
 // shared token) on inner-port routes.
 func (a *App) InnerGuardMiddleware() gin.HandlerFunc {
-	token, _ := a.Config.Server.InnerAuth.ResolvedToken() // validated at load
-	return middleware.InnerGuard(a.Config.Server.InnerAuth.AllowedCIDRs, token)
+	ia := a.Config.Server.InnerAuth
+	token, _ := ia.ResolvedToken() // validated at load
+	return middleware.InnerGuardWith(middleware.InnerGuardConfig{
+		AllowedCIDRs: ia.AllowedCIDRs, Token: token,
+		// mTLS: the node identity comes from the client certificate.
+		RequireClientCert: ia.MTLSEnabled(), GatewayNames: ia.TLS.GatewayNames,
+	})
 }
 
 // MetricsHandlers returns the middleware chain for GET /metrics according to
@@ -116,7 +156,14 @@ func (a *App) MetricsHandlers(h gin.HandlerFunc) []gin.HandlerFunc {
 	case config.MetricsAuth:
 		return []gin.HandlerFunc{a.AuthMiddleware(), h}
 	default: // restricted (production default)
-		return []gin.HandlerFunc{middleware.MetricsGuard(o.MetricsAllowedCIDRs, o.MetricsToken), h}
+		srv := a.Config.Server
+		behindProxy := srv.BehindTLSProxy || strings.TrimSpace(srv.TrustedPlatform) != ""
+		for _, p := range srv.TrustedProxies {
+			behindProxy = behindProxy || strings.TrimSpace(p) != ""
+		}
+		return []gin.HandlerFunc{middleware.MetricsGuardWith(middleware.MetricsGuardConfig{
+			AllowedCIDRs: o.MetricsAllowedCIDRs, Token: o.MetricsToken, BehindProxy: behindProxy,
+		}), h}
 	}
 }
 

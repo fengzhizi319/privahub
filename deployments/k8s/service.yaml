@@ -1,0 +1,35 @@
+# Main API + SPA (ingress / frontend only).
+apiVersion: v1
+kind: Service
+metadata:
+  name: privahub
+  namespace: privahub
+  labels:
+    app.kubernetes.io/name: privahub
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: privahub
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+# Inner (node-to-node) API: reachable only from the Kuscia namespace
+# (enforced by networkpolicy.yaml + server.inner_auth). Never expose it via
+# an Ingress or a LoadBalancer.
+apiVersion: v1
+kind: Service
+metadata:
+  name: privahub-inner
+  namespace: privahub
+  labels:
+    app.kubernetes.io/name: privahub
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: privahub
+  ports:
+    - name: inner
+      port: 9001
+      targetPort: inner

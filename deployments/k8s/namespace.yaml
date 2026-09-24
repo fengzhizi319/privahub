@@ -1,0 +1,14 @@
+# Namespace with Pod Security Admission "restricted" enforced.
+# Any pod in this namespace that asks for root, privilege escalation, host
+# namespaces, extra capabilities or a non-default seccomp profile is rejected.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: privahub
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/audit-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/warn-version: latest

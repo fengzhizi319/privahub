@@ -92,6 +92,7 @@ func collectRoutes() ([]route, error) {
 	cfg.Kuscia.PoolFile = filepath.Join(dir, "nodes.json")
 	cfg.Auth.InitialPasswordFile = filepath.Join(dir, "initial-password")
 	cfg.Server.APIDocs.Enabled = true
+	cfg.Audit.SpoolDir = filepath.Join(dir, "audit-spool")
 	log := zap.NewNop()
 	db, err := dao.NewDB(&cfg.Database, log)
 	if err != nil {
@@ -183,10 +184,11 @@ func (g *generator) findHandler(name string) (*packages.Package, ast.Node) {
 		var node ast.Node = fd
 		for _, part := range strings.Split(strings.TrimPrefix(m[3], "."), ".") {
 			n, _ := strconv.Atoi(strings.TrimPrefix(part, "func"))
-			node = nthFuncLit(node, n)
-			if node == nil {
+			lit := nthFuncLit(node, n)
+			if lit == nil {
 				return p, nil
 			}
+			node = lit
 		}
 		return p, node
 	}
@@ -355,6 +357,8 @@ func (g *generator) document(routes []route) map[string]any {
 			op["security"] = []any{map[string]any{"kusciaOrigin": []string{}}}
 		case middleware.AdminOnlyPaths[r.Path]:
 			op["x-admin-only"] = true
+		case middleware.AuditorPaths[r.Path]:
+			op["x-roles"] = []string{"AUDITOR", "ADMIN"}
 		}
 		if r.Method == "POST" || r.Method == "PUT" {
 			ct := "application/json"

@@ -1,0 +1,75 @@
+# Non-secret production configuration. Secrets are injected from the
+# privahub-secrets Secret as PRIVAHUB_* environment variables (see
+# deployment.yaml and docs/security/hardening-guide.md). NEVER put
+# jwt_secret / aes_key / tokens / passwords in this ConfigMap.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: privahub-config
+  namespace: privahub
+  labels:
+    app.kubernetes.io/name: privahub
+data:
+  privahub.yaml: |
+    server:
+      mode: "master"
+      http_port: 8080
+      inner_port: 9001
+      # The Kuscia gateway reaches the inner port from another pod, so it must
+      # listen on all interfaces; inner_auth (token + CIDR allowlist, mTLS
+      # recommended) is then mandatory and enforced at start-up.
+      inner_bind_address: "0.0.0.0"
+      inner_auth:
+        token_file: "/var/run/secrets/privahub/inner-token"
+        allowed_cidrs: ["10.0.0.0/8"]   # TODO: narrow to the Kuscia pod CIDR
+      # TLS is terminated by the ingress controller; only its addresses may
+      # set X-Forwarded-* headers.
+      behind_tls_proxy: true
+      trusted_proxies: ["10.0.0.0/8"]   # TODO: narrow to the ingress controller pod CIDR
+      upload_max_size: 2147483648
+      api_docs:
+        enabled: false
+    database:
+      driver: "sqlite"
+      dsn: "/app/data/privahub.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+    kuscia:
+      namespace: "kuscia-system"
+      api_address: "kuscia-master.kuscia.svc"
+      api_port: 8083
+      http_port: 8082
+      protocol: "mtls"
+      cert_file: "/var/run/secrets/kuscia/client.crt"
+      key_file: "/var/run/secrets/kuscia/client.key"
+      ca_file: "/var/run/secrets/kuscia/ca.crt"
+    observability:
+      log_level: "info"
+      log_format: "json"
+      metrics_access: "restricted"
+      metrics_allowed_cidrs: []        # scrape via Bearer metrics_token instead
+      metrics_token: ""                # injected from Secret (PRIVAHUB_OBSERVABILITY_METRICS_TOKEN)
+    auth:
+      jwt_secret: ""                   # injected: PRIVAHUB_AUTH_JWT_SECRET
+      jwt_previous_secrets: []         # during rotation only, see runbooks/key-rotation.md
+      admin_name: "admin"
+      initial_password_file: "/app/data/initial-admin-password"
+      access_token_expiry: "2h"
+      session_idle_timeout: "30m"
+      max_attempts: 5
+      lock_minutes: 30
+      cookie_secure: true
+    crypto:
+      aes_key: ""                      # injected: PRIVAHUB_CRYPTO_AES_KEY (key version v1)
+      # keys_file: "/run/secrets/privahub/crypto-keys.yaml"  # {v1: ..., v2: ...} from a Secret (0400)
+      #   or PRIVAHUB_CRYPTO_KEY_V2=... per version; rotation: see runbooks/key-rotation.md
+      # active_version: "v2"
+    data:
+      ip_block:
+        enable: true                   # SSRF blocklist for datasource endpoints
+    audit:
+      spool_dir: "/app/audit/spool"
+      archive_dir: "/app/audit/archive"
+      retention_days: 0                # 0 = keep forever; otherwise >= 1095 in production
+      anchor:
+        url: ""                        # TODO: external WORM / transparency endpoint
+        token: ""                      # injected: PRIVAHUB_AUDIT_ANCHOR_TOKEN
+        interval: "1h"

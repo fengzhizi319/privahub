@@ -81,11 +81,14 @@ type Deps struct {
 	Env *service.EnvService
 	// Kuscia may be nil (offline mode): signing and signature verification
 	// are then skipped and no Kuscia resources are created.
-	Kuscia    KusciaOps
-	Routes    RouteCreator
-	Sync      DbSyncSender
-	TeePuller TeeResultPuller
-	Log       *zap.Logger
+	Kuscia KusciaOps
+	// StrictSignatures makes signature verification fail closed when Kuscia
+	// is unavailable (production); dev/test keep the offline skip.
+	StrictSignatures bool
+	Routes           RouteCreator
+	Sync             DbSyncSender
+	TeePuller        TeeResultPuller
+	Log              *zap.Logger
 }
 
 func (d *Deps) log() *zap.Logger {

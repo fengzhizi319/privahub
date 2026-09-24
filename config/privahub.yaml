@@ -3,8 +3,32 @@ server:
   http_port: 8080
   grpc_port: 9090
   read_timeout: 10s
-  write_timeout: 10s
+  write_timeout: 10s   # SSE streams reset their own per-event write deadline
   shutdown_timeout: 5s
+  # Listener hardening (both ports): slowloris / idle / header limits.
+  # read_header_timeout: 5s
+  # idle_timeout: 120s
+  # max_header_bytes: 1048576
+  # Upload routes body limit (default 2GiB; -1 = unlimited, explicit only).
+  # upload_max_size: 2147483648
+  # Main-port TLS. Production (no PRIVAHUB_PROFILE=dev|test) refuses to start
+  # unless tls.enabled=true, or behind_tls_proxy=true with trusted_proxies
+  # (a TLS-terminating reverse proxy). Either one also enables HSTS and
+  # Secure cookies.
+  # tls:
+  #   enabled: true
+  #   cert_file: /etc/privahub/tls/server.crt
+  #   key_file: /etc/privahub/tls/server.key
+  #   client_ca_file: ""        # optional: require client certificates (mTLS)
+  #   min_version: "1.2"        # 1.2 (TLS 1.3 negotiated when offered) | 1.3
+  #   stack: tls                # tls | tlcp (国密 GB/T 38636, SM2 dual certs) | both (auto-detect)
+  #   tlcp:                     # SM2 certificates for stack tlcp|both
+  #     sign_cert_file: ""
+  #     sign_key_file: ""
+  #     enc_cert_file: ""
+  #     enc_key_file: ""
+  # behind_tls_proxy: false
+  # trusted_proxies: []         # e.g. ["10.0.0.10"] — the TLS proxy addresses
   # Request throttling (Java RateLimitUtil.verifyRate). user_* applies per
   # user to user_paths (inst/node/newToken, datasource/create,
   # datatable/create, feature_datasource/create by default); login_* per IP.
@@ -17,15 +41,23 @@ server:
     login_burst: 1
     global_burst: 100
     global_rps: 20
-  # Inner (node-to-node) port. It trusts the kuscia-origin-source header, so a
-  # non-loopback inner_bind_address (e.g. 0.0.0.0 for a Kuscia gateway in
-  # another container) requires inner_auth; every configured check applies.
+  # Inner (node-to-node) port. It trusts the kuscia-origin-source header, so
+  # production profiles require inner_auth (token, allowed_cidrs or mTLS) even
+  # on a loopback inner_bind_address (co-located processes could forge the
+  # header); dev/test allow loopback without it. Every configured check applies.
   # inner_bind_address: "127.0.0.1"
   # inner_auth:
   #   token: ""            # shared secret (>=16 chars), header X-Privahub-Inner-Token
+  #                        # (env PRIVAHUB_SERVER_INNER_AUTH_TOKEN)
   #   token_file: ""
   #   allowed_cidrs: []    # direct peer allowlist, e.g. ["172.18.0.0/16"]
-  #   tls: { cert_file: "", key_file: "", client_ca_file: "" }   # mTLS
+  #   tls:                 # mTLS: the client cert CN/DNS SAN must equal kuscia-origin-source
+  #     cert_file: ""
+  #     key_file: ""
+  #     client_ca_file: ""
+  #     gateway_names: []  # cert names of relay gateways allowed to assert any origin
+  # trusted_platform: ""   # optional CDN client-IP header (e.g. CF-Connecting-IP); ClientIP
+  #                        # otherwise honours X-Forwarded-For only from trusted_proxies
   # OpenAPI 3 document at GET /api/v1alpha1/docs (Java springdoc). Default:
   # enabled only in dev/test profiles; public=false requires a login session.
   # api_docs:
@@ -40,8 +72,18 @@ database:
 
 # Without PRIVAHUB_PROFILE=dev|test the sample aes_key / jwt_secret below are
 # REJECTED at startup: set PRIVAHUB_CRYPTO_AES_KEY / PRIVAHUB_AUTH_JWT_SECRET.
+# The key protects secrets at rest (node / inst tokens, datasource credentials,
+# private keys) with SM4-GCM + HKDF-SM3 envelopes "enc:<version>:...". A key
+# is mandatory in production. Values: >= 32 hex chars (`openssl rand -hex 32`)
+# or >= 16 raw bytes. aes_key is key version v1; rotate with versioned keys
+# (old versions stay for decryption, rows are re-encrypted at startup):
+#   keys: { v1: "<old>", v2: "<new>" }
+#   active_version: v2
+# Maps cannot be set through one env var: use keys_file (YAML/JSON map from a
+# 0400 Secret mount, PRIVAHUB_CRYPTO_KEYS_FILE) or PRIVAHUB_CRYPTO_KEY_<VERSION>.
+# Losing every configured key makes the encrypted columns unreadable.
 crypto:
-  aes_key: "12345678901234567890123456789012" # sample; 32 bytes for AES-256
+  aes_key: "12345678901234567890123456789012" # sample (dev only)
 
 kuscia:
   kubeconfig: ""
@@ -49,7 +91,7 @@ kuscia:
   api_address: "127.0.0.1"
   api_port: 8083  # KusciaAPI gRPC port
   http_port: 8082 # KusciaAPI HTTP port (used by privahub)
-  protocol: "notls"
+  protocol: "notls" # production requires tls or mtls (notls only with PRIVAHUB_PROFILE=dev|test)
 
 observability:
   enable_metrics: true
@@ -65,13 +107,23 @@ observability:
 
 auth:
   jwt_secret: "privahub-dev-secret-change-in-production"
-  # Absolute session cap; sessions also expire after session_idle_timeout
-  # without activity (sliding, like Java SecretPad's 24h).
-  access_token_expiry: "168h"
+  # Short-lived access token, renewed with one-time-use refresh tokens
+  # (rotation + reuse detection). refresh_token_expiry is the absolute session
+  # cap; sessions also expire after session_idle_timeout without activity.
+  access_token_expiry: "2h"
   session_idle_timeout: "24h"
   # Login lockout (Java secretpad.account-error-*).
+  # max_attempts locks the (account, client IP) pair; account_max_attempts
+  # (default 4 x max_attempts) locks the account for every IP.
   max_attempts: 5
   lock_minutes: 30
+  # account_max_attempts: 20
+  # SM3 password KDF work factor (min 200000).
+  # password_kdf_iterations: 1000000
+  # Former jwt_secret values still accepted for verification (rotation).
+  # jwt_previous_secrets: []
+  # Browser session cookie Secure flag (default: auto / server.tls).
+  # cookie_secure: true
   # Initial admin: set PRIVAHUB_AUTH_ADMIN_PASSWORD, otherwise (non-dev
   # profiles) a random password is written once to initial_password_file (0600).
   admin_name: "admin"
@@ -81,11 +133,25 @@ auth:
 # Data management (datasource / datatable / upload). See pkg/config/data.go.
 # data:
 #   dir: "/app/data"            # uploaded CSV root: ${dir}/<nodeId>/ (env PRIVAHUB_DATA_DIR also honored)
-#   ip_block:                   # SSRF blacklist for OSS/ODPS/HTTP endpoints (Java ip.block)
-#     enable: true
-#     list: ["0.0.0.0/32", "127.0.0.1/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+#   ip_block:                   # SSRF blacklist for OSS/ODPS/MySQL/HTTP endpoints (Java ip.block),
+#     enable: true              # enforced at connect time (DNS rebinding safe); default list in
+#     list: []                  # pkg/config/data.go. Link-local/metadata, unspecified and multicast
+#                               # ranges stay blocked even with a custom list.
 #   tee:
 #     domain_id: "tee"
 #     capsule_manager: "capsule-manager.#.svc"
 #   cloud_log:
 #     sls: { ak: "", sk: "", host: "", project: "" }
+
+# Security audit trail (tamper-evident SM3 hash chain, internal/audit). See pkg/config/audit.go.
+# audit:
+#   queue_size: 4096
+#   spool_dir: "./data/audit/spool"      # fsync'd fallback when the DB write fails; replayed on startup
+#   spool_max_bytes: 268435456
+#   retention_days: 0                    # 0 = keep forever; production minimum 1095 (3 years)
+#   archive_dir: "./data/audit/archive"  # expired records are exported as hash-chained segments before deletion
+#   retention_interval: "24h"
+#   anchor:                              # external trust root for the chain tail (recommended in production)
+#     file: ""                           # append-only file, ideally WORM / another host
+#     url: ""                            # POST {time,seq,hash,node,algorithm}; token via PRIVAHUB_AUDIT_ANCHOR_TOKEN
+#     interval: "1h"

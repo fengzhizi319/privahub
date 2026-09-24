@@ -32,7 +32,7 @@ func TestHashPassword(t *testing.T) {
 	}
 
 	// Verify determinism
-	if HashPassword("test") != HashPassword("test") {
+	if h1, h2 := HashPassword("test"), HashPassword("test"); h1 != h2 {
 		t.Error("HashPassword should be deterministic")
 	}
 

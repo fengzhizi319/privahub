@@ -80,7 +80,7 @@ func TestUserService_UpdatePassword_Java(t *testing.T) {
 	}
 	var u model.UserAccountsDO
 	db.Where("name = ?", "u1").First(&u)
-	if u.PasswordHash != newH || u.PasswdResetFailedAttempts != nil {
+	if !storedMatches(u.PasswordHash, "new") || u.PasswdResetFailedAttempts != nil || u.PasswordVersion != 1 {
 		t.Errorf("password not updated / counters not reset: %+v", u)
 	}
 	var n int64
@@ -116,7 +116,7 @@ func TestNodeUserService_Create_JavaRules(t *testing.T) {
 	}
 	var u model.UserAccountsDO
 	db.Where("name = ?", "eu").First(&u)
-	if u.PasswordHash != HashPassword("p") || u.OwnerType != "EDGE" || u.OwnerID != "alice" {
+	if !storedMatches(u.PasswordHash, "p") || u.OwnerType != "EDGE" || u.OwnerID != "alice" {
 		t.Errorf("unexpected account %+v", u)
 	}
 }

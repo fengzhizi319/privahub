@@ -24,6 +24,7 @@ import (
 	datasync "github.com/fengzhizi319/privahub/internal/service/sync"
 	"github.com/fengzhizi319/privahub/internal/wire"
 	"github.com/fengzhizi319/privahub/pkg/config"
+	pcrypto "github.com/fengzhizi319/privahub/pkg/crypto"
 	"github.com/fengzhizi319/privahub/pkg/logger"
 )
 
@@ -47,12 +48,22 @@ func main() {
 		innerauth.SetOutgoingToken(token)
 	}
 
+	// At-rest keyring (same as cmd/server): synced node tokens are sealed.
+	keyring, err := cfg.Crypto.Keyring()
+	if err != nil {
+		log.Fatal("invalid crypto configuration", zap.Error(err))
+	}
+	pcrypto.SetDefault(keyring)
+
 	db, err := dao.NewDB(&cfg.Database, log)
 	if err != nil {
 		log.Fatal("failed to initialize database", zap.Error(err))
 	}
 	if err := migration.AutoMigrate(db, log); err != nil {
 		log.Fatal("failed to migrate database", zap.Error(err))
+	}
+	if err := migration.EncryptSecretsAtRest(context.Background(), db, log); err != nil {
+		log.Fatal("failed to encrypt secrets at rest", zap.Error(err))
 	}
 
 	env := service.NewEnvService(string(service.PlatformEdge), wire.PlatformNodeID(cfg), "", log)

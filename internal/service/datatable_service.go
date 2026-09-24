@@ -74,8 +74,8 @@ func NewDatatableService(
 		db:            db,
 		kusciaClient:  kusciaClient,
 		oss:           NewOssServiceWithFilter(f),
-		mysql:         NewMysqlChecker(),
-		odps:          NewOdpsChecker(),
+		mysql:         NewMysqlCheckerWithFilter(f),
+		odps:          NewOdpsCheckerWithFilter(f),
 		ipFilter:      f,
 		teeConverter:  NewTeeJobConverter("", 1),
 		teeNodeID:     "tee",
@@ -93,6 +93,8 @@ func (s *DatatableService) WithIPFilter(f *IPFilter) *DatatableService {
 	}
 	s.ipFilter = f
 	s.oss = NewOssServiceWithFilter(f)
+	s.mysql = NewMysqlCheckerWithFilter(f)
+	s.odps = NewOdpsCheckerWithFilter(f)
 	return s
 }
 

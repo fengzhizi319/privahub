@@ -15,10 +15,9 @@ import (
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/pkg/auth"
+	pcrypto "github.com/fengzhizi319/privahub/pkg/crypto"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
-	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -44,6 +43,15 @@ type InstService struct {
 	defaultCAFile string
 	createLock    sync.Mutex
 	log           *zap.Logger
+	// requireTLS refuses notls KusciaAPI registrations (production).
+	requireTLS bool
+}
+
+// WithRequireTLS refuses inst node registrations whose KusciaAPI protocol is
+// notls (production: kuscia traffic must be tls or mtls).
+func (s *InstService) WithRequireTLS(v bool) *InstService {
+	s.requireTLS = v
+	return s
 }
 
 // NewInstService creates an InstService. certsDir is where register certs are
@@ -118,31 +126,6 @@ func (s *InstService) findInstNode(ctx context.Context, instID, nodeID string) (
 		return nil, ErrNodeNotFound
 	}
 	return &n, nil
-}
-
-// SignInstToken mirrors Java TokenUtil.sign(secret=instId, audience=nodeId):
-// HS256 JWT with timestamp/signNonce claims and a 30 minute expiry.
-func SignInstToken(instID, nodeID string) (string, error) {
-	now := time.Now()
-	claims := jwt.MapClaims{
-		"aud":       []string{nodeID},
-		"timestamp": now.UnixMilli(),
-		"signNonce": uuid.NewString(),
-		"exp":       now.Add(instTokenExpire).Unix(),
-	}
-	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return tok.SignedString([]byte(instID))
-}
-
-// VerifyInstToken mirrors Java TokenUtil.verify(token, secret=instId, audience=nodeId).
-func VerifyInstToken(token, instID, nodeID string) bool {
-	parsed, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
-		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected alg %v", t.Header["alg"])
-		}
-		return []byte(instID), nil
-	}, jwt.WithAudience(nodeID), jwt.WithExpirationRequired())
-	return err == nil && parsed.Valid
 }
 
 // --- API ---
@@ -356,7 +339,7 @@ func (s *InstService) RegisterNode(ctx context.Context, req *InstRegisterRequest
 	if node.InstTokenState == InstTokenUsed {
 		return bizErr(errcode.InstTokenUsed, "instToken is used")
 	}
-	if node.InstToken == "" || req.InstToken != node.InstToken {
+	if node.InstToken == "" || !pcrypto.ConstantTimeEqual(req.InstToken, node.InstToken) {
 		return bizErr(errcode.InstTokenMismatch, "token is expired")
 	}
 	if !VerifyInstToken(req.InstToken, instID, req.NodeID) {
@@ -365,6 +348,9 @@ func (s *InstService) RegisterNode(ctx context.Context, req *InstRegisterRequest
 
 	if err := validateCertAndKey(req.CertFile, req.KeyFile); err != nil {
 		return bizWrap(errcode.InstRegisterCheckFailed, err, "cert is invalid")
+	}
+	if p := strings.ToLower(req.Protocol); s.requireTLS && p != "tls" && p != "mtls" {
+		return bizErr(errcode.InstRegisterCheckFailed, "protocol must be TLS or MTLS in production")
 	}
 
 	host := firstNonEmpty(remoteHost, req.Host)

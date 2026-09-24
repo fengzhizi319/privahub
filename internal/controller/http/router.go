@@ -23,6 +23,12 @@ import (
 func NewRouter(log *zap.Logger, app *wire.App) *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
+	// gin trusts every proxy by default (X-Forwarded-For from anyone becomes
+	// ClientIP). Only server.trusted_proxies may set it; default none, i.e.
+	// ClientIP = RemoteAddr for rate limits, audit and inst registration.
+	if err := middleware.ConfigureTrustedProxies(r, app.Config.Server.TrustedProxies, app.Config.Server.TrustedPlatform); err != nil {
+		log.Fatal("invalid server.trusted_proxies", zap.Error(err))
+	}
 
 	// Global middleware chain
 	// CaseKeysResponse must be outermost so every /api JSON response gets
@@ -33,7 +39,7 @@ func NewRouter(log *zap.Logger, app *wire.App) *gin.Engine {
 	r.Use(middleware.Recovery(log))
 	r.Use(middleware.Metrics())
 	r.Use(middleware.CORS(app.Config.Server.CORSAllowedOrigins...))
-	r.Use(middleware.SecurityHeaders())
+	r.Use(middleware.SecurityHeadersWith(middleware.SecurityHeaderOptions{HSTS: app.Config.Server.MainPortSecure()}))
 	r.Use(middleware.ExtraHeaders(app.Config.Server.ExtraResponseHeaders))
 	// Inner-port-only paths answer 404 on the main port (Java inner-port.path).
 	r.Use(middleware.BlockInnerPaths(app.Config.Server.InnerPortPaths))
@@ -101,6 +107,7 @@ func NewRouter(log *zap.Logger, app *wire.App) *gin.Engine {
 			registerNodeRouteRoutes(protected, app.NodeRouteHandler)
 			registerApprovalRoutes(protected, app.ApprovalHandler)
 			registerMessageRoutes(protected, app.MessageHandler)
+			registerAuditRoutes(protected, app.AuditHandler)
 		}
 	}
 
@@ -129,9 +136,11 @@ func NewRouter(log *zap.Logger, app *wire.App) *gin.Engine {
 	// OpenAPI 3 document (server.api_docs, Java springdoc).
 	registerAPIDocs(api, app)
 
-	// Env/platform info (public)
+	// Env/platform info (public): only the platform type is disclosed without
+	// a session; node / inst ids and the deploy mode are available to logged-in
+	// users via /api/v1alpha1/user/current.
 	r.GET("/api/v1alpha1/env", func(c *gin.Context) {
-		response.OK(c, app.EnvService.GetEnv())
+		response.OK(c, gin.H{"platformType": app.EnvService.GetEnv().PlatformType})
 	})
 
 	// SPA static file serving for production
@@ -378,6 +387,16 @@ func registerApprovalRoutes(rg *gin.RouterGroup, h *v1.ApprovalHandler) {
 	rg.POST("/approval/pull/status", h.PullStatus)
 }
 
+// registerAuditRoutes registers the read-only security audit trail API
+// (AUDITOR / ADMIN, see middleware.AuditorPaths). No update/delete routes.
+func registerAuditRoutes(rg *gin.RouterGroup, h *v1.AuditHandler) {
+	if h == nil {
+		return
+	}
+	rg.POST("/audit/list", h.List)
+	rg.GET("/audit/verify", h.Verify)
+}
+
 func registerMessageRoutes(rg *gin.RouterGroup, h *v1.MessageHandler) {
 	rg.POST("/message/list", h.List)
 	rg.POST("/message/detail", h.Detail)
@@ -418,33 +437,10 @@ func registerNodeUserRoutes(rg *gin.RouterGroup, app *wire.App) {
 }
 
 func registerFeatureTableRoutes(rg *gin.RouterGroup, app *wire.App) {
-	rg.POST("/featureTable/create", func(c *gin.Context) {
-		var req service.CreateFeatureDatasourceRequest
-		if err := c.ShouldBindJSON(&req); err != nil {
-			response.Fail(c, errcode.ParamError)
-			return
-		}
-		if err := app.FeatureTableService.CreateFeatureTable(c.Request.Context(), &req); err != nil {
-			response.Fail(c, errcode.SystemError)
-			return
-		}
-		response.OK(c, nil)
-	})
-	rg.POST("/featureTable/list", func(c *gin.Context) {
-		var req struct {
-			NodeID string `json:"node_id"`
-		}
-		if err := c.ShouldBindJSON(&req); err != nil {
-			response.Fail(c, errcode.ParamError)
-			return
-		}
-		list, err := app.FeatureTableService.FeatureDatasourceList(c.Request.Context(), req.NodeID)
-		if err != nil {
-			response.Fail(c, errcode.SystemError)
-			return
-		}
-		response.OK(c, list)
-	})
+	// The Go-only /featureTable/create and /featureTable/list aliases were
+	// removed (unused by the frontend; they bypassed the ownerId / nodeId data
+	// checks of /feature_datasource/*). Use /feature_datasource/create and
+	// /feature_datasource/auth/list.
 	rg.POST("/featureTable/project/list", func(c *gin.Context) {
 		var req struct {
 			NodeID    string `json:"node_id"`
@@ -454,6 +450,7 @@ func registerFeatureTableRoutes(rg *gin.RouterGroup, app *wire.App) {
 			response.Fail(c, errcode.ParamError)
 			return
 		}
+		req.ProjectID = verifiedID(c, "projectId", req.ProjectID)
 		list, err := app.FeatureTableService.ProjectFeatureTableList(c.Request.Context(), req.NodeID, req.ProjectID)
 		if err != nil {
 			response.Fail(c, errcode.SystemError)
@@ -470,6 +467,10 @@ func registerGraphDatasourceRoutes(rg *gin.RouterGroup, app *wire.App) {
 			response.Fail(c, errcode.ParamError)
 			return
 		}
+		if req.ProjectID == "" {
+			req.ProjectID = req.ProjectIDAlt
+		}
+		req.ProjectID = verifiedID(c, "projectId", req.ProjectID)
 		if err := app.GraphDatasourceService.Bind(c.Request.Context(), &req); err != nil {
 			response.Fail(c, errcode.SystemError)
 			return
@@ -486,6 +487,7 @@ func registerGraphDatasourceRoutes(rg *gin.RouterGroup, app *wire.App) {
 			response.Fail(c, errcode.ParamError)
 			return
 		}
+		req.ProjectID = verifiedID(c, "projectId", req.ProjectID)
 		if err := app.GraphDatasourceService.Unbind(c.Request.Context(), req.ProjectID, req.GraphID, req.DomainID); err != nil {
 			response.Fail(c, errcode.SystemError)
 			return
@@ -500,6 +502,7 @@ func registerGraphDatasourceRoutes(rg *gin.RouterGroup, app *wire.App) {
 			response.Fail(c, errcode.ParamError)
 			return
 		}
+		req.ProjectID = verifiedID(c, "projectId", req.ProjectID)
 		list, err := app.GraphDatasourceService.ListByProject(c.Request.Context(), req.ProjectID)
 		if err != nil {
 			response.Fail(c, errcode.SystemError)
@@ -534,4 +537,14 @@ func registerAPIDocs(api *gin.RouterGroup, app *wire.App) {
 		return
 	}
 	api.GET("/docs", app.AuthMiddleware(), apidocs.Handler)
+}
+
+// verifiedID returns the id DataResourceGuard verified for field when there
+// is one (non-CENTER callers), so the handler acts on exactly the checked
+// resource; otherwise the bound value.
+func verifiedID(c *gin.Context, field, bound string) string {
+	if id, ok := middleware.VerifiedResourceID(c, field); ok {
+		return id
+	}
+	return bound
 }

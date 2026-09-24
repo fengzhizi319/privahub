@@ -195,3 +195,69 @@ func TestDataResourceGuard_OwnResourcesPass(t *testing.T) {
 		t.Errorf("inner resetPassword for a foreign node must be rejected: %s", w.Body.String())
 	}
 }
+
+// TestVerifyRouteCoverage_RealRouters is the default-deny startup check on
+// the real main + inner routers (the server refuses to start otherwise).
+func TestVerifyRouteCoverage_RealRouters(t *testing.T) {
+	for _, mode := range []string{"master", "lite", "autonomy"} {
+		app := newTestAppWith(t, func(c *config.Config) { c.Server.Mode = mode })
+		main := NewRouter(zap.NewNop(), app)
+		inner := NewInnerRouter(zap.NewNop(), app)
+		MountEdgeForwardTargets(inner, main, app)
+		if err := VerifyRouteCoverage(main, inner); err != nil {
+			t.Errorf("%s: %v", mode, err)
+		}
+	}
+	// No stale exemptions.
+	registered := map[string]bool{}
+	app := newTestApp(t)
+	for _, ri := range apiRoutes(NewRouter(zap.NewNop(), app), NewInnerRouter(zap.NewNop(), app)) {
+		registered[ri.Path] = true
+	}
+	for p := range middleware.DataResourceExempt {
+		if !registered[p] && p != "/api/v1alpha1/docs" {
+			t.Errorf("DataResourceExempt entry %s has no registered route", p)
+		}
+	}
+}
+
+// TestParamConfusion_RealRouter replays the confirmed IDOR PoC against the
+// real router: aliased / duplicated id keys are rejected before any guard or
+// handler runs, for EDGE users and CENTER admins alike.
+func TestParamConfusion_RealRouter(t *testing.T) {
+	app := newTestAppWith(t, func(c *config.Config) { c.Server.NodeID = "self-node" })
+	app.DB.Create(&model.ProjectNodeDO{ProjectID: "mine", NodeID: "self-node"})
+	token := loginAs(t, app, "pc-user", auth.OwnerTypeEdge, "self-node")
+	r := NewRouter(zap.NewNop(), app)
+	for _, body := range []string{
+		`{"projectId":"mine","projectid":"victim"}`,
+		`{"projectId":"mine","project_id":"victim"}`,
+		`{"projectId":"mine","projectId":"victim"}`,
+		`{"project_id":"victim","projectId":"mine"}`,
+	} {
+		for _, path := range []string{"/api/v1alpha1/project/get", "/api/v1alpha1/graphDatasource/list", "/api/v1alpha1/graph/list"} {
+			code, _ := callAPI(t, r, token, path, body)
+			if code != errcode.ParamError.Code {
+				t.Errorf("%s %s: expected ParamError, got %d", path, body, code)
+			}
+		}
+	}
+	// The plain request for the own project passes the data check.
+	if _, msg := callAPI(t, r, token, "/api/v1alpha1/graphDatasource/list", `{"projectId":"mine"}`); strings.Contains(msg, "No permission") {
+		t.Errorf("own project rejected: %s", msg)
+	}
+	if code, _ := callAPI(t, r, token, "/api/v1alpha1/graphDatasource/list", `{"project_id":"victim"}`); code != errcode.AuthFailed.Code {
+		t.Errorf("foreign snake_case id must be denied, got %d", code)
+	}
+}
+
+// TestFeatureTableAliasesRemoved: /featureTable/create|list bypassed the
+// ownerId / nodeId checks of /feature_datasource/* and are gone.
+func TestFeatureTableAliasesRemoved(t *testing.T) {
+	app := newTestApp(t)
+	for _, ri := range apiRoutes(NewRouter(zap.NewNop(), app), NewInnerRouter(zap.NewNop(), app)) {
+		if ri.Path == "/api/v1alpha1/featureTable/create" || ri.Path == "/api/v1alpha1/featureTable/list" {
+			t.Errorf("%s must not be registered", ri.Path)
+		}
+	}
+}

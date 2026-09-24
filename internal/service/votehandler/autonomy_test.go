@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
+	"github.com/fengzhizi319/privahub/internal/service"
 	"github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 )
@@ -18,6 +19,12 @@ func newAutonomyEnv(t *testing.T) *testEnv {
 	e.mustCreate(t, &model.NodeDO{NodeID: "a1", Name: "A1", ControlNodeID: "a1", InstID: "instA"})
 	e.mustCreate(t, &model.NodeDO{NodeID: "b1", Name: "B1", ControlNodeID: "b1", InstID: "instB"})
 	return e
+}
+
+// peerB is instB's own platform (node b1) on the shared DB: replies are
+// signed there, so the signer node belongs to the voting institution.
+func (e *testEnv) peerB() *Service {
+	return NewService(&Deps{DB: e.db, Env: service.NewEnvService("autonomy", "b1", "instB", nil), Kuscia: e.kuscia, Routes: e.routes})
 }
 
 func ctxA() context.Context { return userCtx("instA", auth.OwnerTypeP2P, auth.PlatformTypeAutonomy) }
@@ -100,7 +107,7 @@ func TestProjectCreateAndArchive_FullFlow(t *testing.T) {
 	if err := e.svc.Reply(ctxA(), ActionApproved, "", "instB", voteID); bizCode(err) != errcode.VoteCheckFailed.Code {
 		t.Errorf("reply as someone else: %v", err)
 	}
-	if err := e.svc.Reply(ctxB(), ActionApproved, "fine", "instB", voteID); err != nil {
+	if err := e.peerB().Reply(ctxB(), ActionApproved, "fine", "instB", voteID); err != nil {
 		t.Fatalf("reply: %v", err)
 	}
 	for _, i := range parsePartyVoteInfos(e.request(t, voteID).PartyVoteInfo) {
@@ -148,7 +155,7 @@ func TestProjectCreateAndArchive_FullFlow(t *testing.T) {
 	if _, err := e.svc.Detail(ctxB(), false, "instB", archiveID, VoteTypeProjectArchive); err != nil {
 		t.Fatalf("archive detail: %v", err)
 	}
-	if err := e.svc.Reply(ctxB(), ActionApproved, "", "instB", archiveID); err != nil {
+	if err := e.peerB().Reply(ctxB(), ActionApproved, "", "instB", archiveID); err != nil {
 		t.Fatal(err)
 	}
 	// flushVoteStatus archived the project immediately
@@ -169,7 +176,7 @@ func TestProjectCreate_Rejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := e.svc.Reply(ctxB(), ActionRejected, "no", "instB", voteID); err != nil {
+	if err := e.peerB().Reply(ctxB(), ActionRejected, "no", "instB", voteID); err != nil {
 		t.Fatal(err)
 	}
 	e.mon.Tick(context.Background())

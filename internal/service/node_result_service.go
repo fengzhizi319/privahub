@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
+	"github.com/fengzhizi319/privahub/internal/dao/sqlutil"
 	"github.com/fengzhizi319/privahub/internal/graphjob"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
@@ -255,10 +256,10 @@ func (s *NodeService) ListNodeResults(ctx context.Context, req *ListNodeResultRe
 		q = q.Where("kind IN ?", kinds)
 	}
 	if name := strings.TrimSpace(req.NameFilter); name != "" {
-		like := "%" + name + "%"
-		q = q.Where("ref_id LIKE ? OR project_id IN (?) OR job_id IN (?)", like,
-			s.db.Model(&model.ProjectDO{}).Select("project_id").Where("name LIKE ?", like),
-			s.db.Model(&model.ProjectJobDO{}).Select("job_id").Where("name LIKE ?", like))
+		like := sqlutil.Contains(name)
+		q = q.Where("ref_id LIKE ? ESCAPE '!' OR project_id IN (?) OR job_id IN (?)", like,
+			s.db.Model(&model.ProjectDO{}).Select("project_id").Where("name LIKE ? ESCAPE '!'", like),
+			s.db.Model(&model.ProjectJobDO{}).Select("job_id").Where("name LIKE ? ESCAPE '!'", like))
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {

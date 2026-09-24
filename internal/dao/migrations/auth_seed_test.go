@@ -2,6 +2,7 @@ package migration
 
 import (
 	"context"
+	"github.com/fengzhizi319/privahub/pkg/auth"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,8 +33,11 @@ func TestSeedAdmin_ProductionRandomPasswordFile(t *testing.T) {
 	}
 	var admin model.UserAccountsDO
 	db.Where("name = ?", "admin").First(&admin)
-	if admin.PasswordHash != hashPassword(pwd) || admin.PasswordHash == hashPassword("12345678") {
+	if !kdfMatches(admin.PasswordHash, pwd) || kdfMatches(admin.PasswordHash, "12345678") {
 		t.Error("admin hash must be the random password")
+	}
+	if !admin.MustChangePassword {
+		t.Error("a generated initial admin password must be changed at first login")
 	}
 	if admin.OwnerType != "EDGE" || admin.OwnerID != "alice" {
 		t.Errorf("owner = %s/%s", admin.OwnerType, admin.OwnerID)
@@ -59,7 +63,7 @@ func TestSeedAdmin_ConfiguredPassword(t *testing.T) {
 	if err := db.Where("name = ?", "root").First(&u).Error; err != nil {
 		t.Fatal(err)
 	}
-	if u.PasswordHash != hashPassword("S3cret!") || u.OwnerType != "P2P" {
+	if !kdfMatches(u.PasswordHash, "S3cret!") || u.OwnerType != "P2P" || u.MustChangePassword {
 		t.Errorf("unexpected admin %+v", u)
 	}
 }
@@ -92,4 +96,8 @@ func TestSeedRBAC_JavaRolesAndNodePermissions(t *testing.T) {
 	if n != 46 {
 		t.Errorf("reseeding duplicated rels: %d", n)
 	}
+}
+
+func kdfMatches(stored, plain string) bool {
+	return auth.VerifyStoredPassword(stored, auth.PasswordCandidates{SHA256: hashPassword(plain)}).OK
 }

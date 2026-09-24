@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -101,13 +102,16 @@ func TestAuthService_Login_UserContextDTO(t *testing.T) {
 	if resp.ProjectIDs == nil || resp.APIResources == nil {
 		t.Error("projectIds/apiResources must be non-nil arrays")
 	}
-	// Session row stores the full JWT and the context snapshot.
+	// Session row stores only the token digest and a token-free snapshot.
 	var row model.UserTokensDO
-	if err := db.Where("token = ?", resp.Token).First(&row).Error; err != nil {
+	if err := db.Where("token = ?", auth.TokenDigest(resp.Token)).First(&row).Error; err != nil {
 		t.Fatalf("session row not stored: %v", err)
 	}
-	if row.SessionData == "" || row.SessionID == "" {
-		t.Error("session data/id missing")
+	if row.SessionData == "" || row.SessionID == "" || row.RefreshJTI == "" {
+		t.Error("session data/id/refresh jti missing")
+	}
+	if strings.Contains(row.SessionData, resp.Token) || strings.Contains(row.Token, ".") {
+		t.Error("raw token must not be persisted")
 	}
 }
 
@@ -164,8 +168,9 @@ func TestAuthService_Login_LegacySm3UpgradesHash(t *testing.T) {
 	}
 	var u model.UserAccountsDO
 	db.Where("name = ?", "legacy").First(&u)
-	if u.PasswordHash != HashPassword("abc") {
-		t.Errorf("hash not upgraded: %s", u.PasswordHash)
+	if auth.StoredPasswordFormat(u.PasswordHash) != auth.FormatKDF ||
+		!auth.VerifyStoredPassword(u.PasswordHash, auth.PasswordCandidates{SHA256: HashPassword("abc")}).OK {
+		t.Errorf("hash not upgraded to the SHA-256 KDF form: %s", u.PasswordHash)
 	}
 	// Subsequent login with only SHA-256 works.
 	if _, err := svc.Login(context.Background(), &LoginRequest{Username: "legacy", PasswordHash: HashPassword("abc")}); err != nil {
@@ -178,21 +183,25 @@ func TestAuthService_Login_AccountLockoutAndExpiry(t *testing.T) {
 	svc.SetOptions(AuthOptions{MaxAttempts: 3, LockDuration: 10 * time.Minute})
 	createUser(t, db, "locktest", "correctpass", "CENTER", "kuscia-system")
 	ctx := context.Background()
-	wrong := &LoginRequest{Username: "locktest", PasswordHash: HashPassword("wrong")}
+	wrong := &LoginRequest{Username: "locktest", PasswordHash: HashPassword("wrong"), ClientIP: "10.0.0.1"}
 
-	for i := 0; i < 2; i++ {
+	// Every failure — including the one that locks — is the uniform error.
+	for i := 0; i < 4; i++ {
 		_, err := svc.Login(ctx, wrong)
-		if !errors.Is(err, ErrInvalidPassword) || authCode(err) != errcode.AuthUserPasswordError.Code {
+		if !errors.Is(err, ErrInvalidPassword) || authCode(err) != errcode.AuthLoginFailed.Code {
 			t.Fatalf("attempt %d: %v", i+1, err)
 		}
 	}
-	_, err := svc.Login(ctx, wrong)
-	if !errors.Is(err, ErrUserLocked) || authCode(err) != errcode.AuthUserIsLocked.Code {
-		t.Fatalf("3rd failure should lock: %v", err)
+	// "Locked" is only revealed to the caller that knows the password.
+	good := &LoginRequest{Username: "locktest", PasswordHash: HashPassword("correctpass"), ClientIP: "10.0.0.1"}
+	if _, err := svc.Login(ctx, good); !errors.Is(err, ErrUserLocked) || authCode(err) != errcode.AuthUserIsLocked.Code {
+		t.Fatalf("locked pair must reject correct password with USER_IS_LOCKED: %v", err)
 	}
-	good := &LoginRequest{Username: "locktest", PasswordHash: HashPassword("correctpass")}
-	if _, err := svc.Login(ctx, good); !errors.Is(err, ErrUserLocked) {
-		t.Fatalf("locked account must reject correct password: %v", err)
+	// Another client IP is not affected by this pair lock.
+	other := *good
+	other.ClientIP = "10.0.0.2"
+	if _, err := svc.Login(ctx, &other); err != nil {
+		t.Fatalf("other IP must still log in: %v", err)
 	}
 
 	// After lock expiry the counter resets and login works.
@@ -211,19 +220,19 @@ func TestAuthService_Login_UnknownUserUniformAndCounted(t *testing.T) {
 	svc, _ := newTestAuthService(t)
 	svc.SetOptions(AuthOptions{MaxAttempts: 2, LockDuration: time.Minute})
 	ctx := context.Background()
-	req := &LoginRequest{Username: "ghost", PasswordHash: HashPassword("x")}
-	_, err := svc.Login(ctx, req)
-	if authCode(err) != errcode.AuthUserPasswordError.Code {
-		t.Fatalf("unknown user must get the same code as wrong password: %v", err)
+	req := &LoginRequest{Username: "ghost", PasswordHash: HashPassword("x"), ClientIP: "1.1.1.1"}
+	for i := 0; i < 4; i++ {
+		_, err := svc.Login(ctx, req)
+		if authCode(err) != errcode.AuthLoginFailed.Code {
+			t.Fatalf("unknown user must always get the uniform code (attempt %d): %v", i+1, err)
+		}
 	}
-	_, err = svc.Login(ctx, req)
-	if authCode(err) != errcode.AuthUserIsLocked.Code {
-		t.Fatalf("unknown user should be locked after max attempts: %v", err)
+	if _, ok := svc.throttle.lockedUntil(throttleKey("ghost", "1.1.1.1"), time.Now()); !ok {
+		t.Fatal("unknown user pair must be counted/locked like a real account")
 	}
 	svc.now = func() time.Time { return time.Now().Add(2 * time.Minute) }
-	_, err = svc.Login(ctx, req)
-	if authCode(err) != errcode.AuthUserPasswordError.Code {
-		t.Fatalf("counter should reset after expiry: %v", err)
+	if _, ok := svc.throttle.lockedUntil(throttleKey("ghost", "1.1.1.1"), svc.now()); ok {
+		t.Fatal("lock should expire")
 	}
 }
 
@@ -295,7 +304,7 @@ func TestAuthService_RefreshToken(t *testing.T) {
 	}
 	// After logout the refresh token is useless.
 	_ = svc.Logout(ctx, "refreshtest", newPair.AccessToken)
-	if _, err := svc.RefreshToken(ctx, loginResp.RefreshToken); err == nil {
+	if _, err := svc.RefreshToken(ctx, newPair.RefreshToken); err == nil {
 		t.Error("refresh after logout must fail")
 	}
 }

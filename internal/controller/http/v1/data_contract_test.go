@@ -19,8 +19,10 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/fengzhizi319/privahub/internal/controller/http/middleware"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/service"
+	"github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
 )
 
@@ -82,6 +84,11 @@ func TestDataContract_DatatableListAndUploadDownload(t *testing.T) {
 	dtSvc := service.NewDatatableService(nil, nil, db, kc)
 	dataH := NewDataHandler(db, kc).WithServices(service.NewDataService(db, kc, nil, t.TempDir()), nil, nil)
 	r := gin.New()
+	// Upload checks the Node-Id against the caller (EDGE owner alice).
+	r.Use(func(c *gin.Context) {
+		middleware.SetUser(c, &auth.UserContext{Name: "eu", OwnerType: auth.OwnerTypeEdge, OwnerID: "alice"})
+		c.Next()
+	})
 	dtH := NewDatatableHandler(dtSvc, kc)
 	r.POST("/datatable/list", dtH.List)
 	r.POST("/datatable/delete", dtH.Delete)
@@ -123,6 +130,18 @@ func TestDataContract_DatatableListAndUploadDownload(t *testing.T) {
 	assert.Equal(t, "x.csv", ud["name"])
 	assert.True(t, strings.HasPrefix(ud["realName"].(string), "x_"))
 	assert.Equal(t, "default-data-source", ud["datasource"])
+
+	// upload to a foreign node is denied (any non-CENTER owner, not only EDGE)
+	buf.Reset()
+	mw = multipart.NewWriter(&buf)
+	fw, _ = mw.CreateFormFile("file", "y.csv")
+	_, _ = fw.Write([]byte("a\n1\n"))
+	_ = mw.Close()
+	req = httptest.NewRequest(http.MethodPost, "/data/upload?Node-Id=bob", &buf)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	w = httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	assert.Contains(t, w.Body.String(), "202011602", "foreign Node-Id upload must be denied")
 
 	// download of a missing result file -> "No data" attachment
 	b, _ := json.Marshal(map[string]string{"nodeId": "alice", "domainDataId": "r1"})

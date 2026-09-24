@@ -1,0 +1,108 @@
+# Default deny: nothing gets in or out of the privahub namespace unless an
+# explicit policy below allows it. Adjust the namespace selectors to your
+# cluster (ingress controller / Kuscia namespaces).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: privahub
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+# frontend / ingress -> main API 8080 (the SPA is served by privahub itself,
+# so the only client-facing hop is the ingress controller).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: privahub-allow-http-from-ingress
+  namespace: privahub
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: privahub
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: privahub-web   # optional separate frontend pods
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+# Kuscia gateway -> inner port 9001 (node-to-node callbacks). Never from
+# anywhere else; server.inner_auth additionally requires the shared token.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: privahub-allow-inner-from-kuscia
+  namespace: privahub
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: privahub
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kuscia
+      ports:
+        - {protocol: TCP, port: 9001}
+---
+# Prometheus -> /metrics on 8080 (still guarded by metrics_access=restricted).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: privahub-allow-metrics-scrape
+  namespace: privahub
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: privahub
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - {protocol: TCP, port: 8080}
+---
+# Egress: DNS + KusciaAPI (8082 HTTP / 8083 gRPC) + Kuscia gateway (80/1080).
+# Datasource egress (OSS / ODPS / MySQL / HTTP endpoints) is intentionally NOT
+# open by default: add a narrowly scoped policy per approved endpoint
+# (defence in depth on top of data.ip_block SSRF filtering).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: privahub-allow-egress
+  namespace: privahub
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: privahub
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kuscia
+      ports:
+        - {protocol: TCP, port: 8082}
+        - {protocol: TCP, port: 8083}
+        - {protocol: TCP, port: 80}
+        - {protocol: TCP, port: 1080}

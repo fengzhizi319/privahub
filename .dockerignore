@@ -1,0 +1,24 @@
+# Keep the build context small and free of local state / secrets.
+.git
+**/.git
+bin/
+data/
+*.db
+*.db-wal
+*.db-shm
+coverage.*
+.env
+.env.*
+config/certs/
+config/initial-admin-password
+config/kuscia/
+config/sync/
+web/node_modules
+web/**/node_modules
+web/**/dist
+web/.env*
+web/test
+web/design
+web/docs
+docs/
+design/

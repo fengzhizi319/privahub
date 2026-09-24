@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -25,6 +26,8 @@ type Config struct {
 	// Sync holds center/edge/P2P data-sync, edge request forwarding and
 	// startup-init settings (sync.go).
 	Sync SyncConfig `mapstructure:"sync"`
+	// Audit configures the tamper-evident security audit trail (audit.go).
+	Audit AuditConfig `mapstructure:"audit"`
 
 	// Profile is the active profile (PRIVAHUB_PROFILE / "profile" key), e.g.
 	// dev, edge, p2p, test. Empty means the base (production) configuration.
@@ -54,6 +57,25 @@ type ServerConfig struct {
 	ReadTimeout     time.Duration `mapstructure:"read_timeout"`
 	WriteTimeout    time.Duration `mapstructure:"write_timeout"`
 	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
+	// ReadHeaderTimeout / IdleTimeout / MaxHeaderBytes harden both listeners
+	// against slowloris and oversized headers (defaults 5s / 120s / 1MiB).
+	ReadHeaderTimeout time.Duration `mapstructure:"read_header_timeout"`
+	IdleTimeout       time.Duration `mapstructure:"idle_timeout"`
+	MaxHeaderBytes    int           `mapstructure:"max_header_bytes"`
+	// TLS configures HTTPS on the main (http_port) listener (security.go).
+	TLS ServerTLSConfig `mapstructure:"tls"`
+	// BehindTLSProxy declares that a TLS-terminating reverse proxy fronts the
+	// main port (cookies are Secure, HSTS is sent). Production requires
+	// either server.tls.enabled or this flag (with trusted proxies).
+	BehindTLSProxy bool `mapstructure:"behind_tls_proxy"`
+	// TrustedProxies lists reverse-proxy addresses/CIDRs whose
+	// X-Forwarded-For / X-Forwarded-Proto headers are trusted (gin
+	// SetTrustedProxies). Required with behind_tls_proxy in production.
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
+	// TrustedPlatform optionally names a platform / CDN client-IP header
+	// (e.g. CF-Connecting-IP) that gin trusts unconditionally for ClientIP.
+	// Only set it when that platform strips the header from client requests.
+	TrustedPlatform string `mapstructure:"trusted_platform"`
 
 	// NodeID is this platform's node id (Java secretpad.node-id). Defaults to
 	// kuscia.namespace when empty.
@@ -81,8 +103,8 @@ type ServerConfig struct {
 	ExtraResponseHeaders map[string]string `mapstructure:"extra_response_headers"`
 	// MaxBodySize is the default request body limit in bytes (<=0: unlimited).
 	MaxBodySize int64 `mapstructure:"max_body_size"`
-	// UploadMaxSize is the body limit for upload routes (<=0: unlimited,
-	// Java upload-file.max-request-size=-1).
+	// UploadMaxSize is the body limit for upload routes (default 2GiB; only
+	// an explicit -1 means unlimited, 0 falls back to the default).
 	UploadMaxSize int64 `mapstructure:"upload_max_size"`
 	// UploadPaths are the routes subject to UploadMaxSize instead of MaxBodySize.
 	UploadPaths []string `mapstructure:"upload_paths"`
@@ -110,6 +132,11 @@ type InnerAuthConfig struct {
 		CertFile     string `mapstructure:"cert_file"`
 		KeyFile      string `mapstructure:"key_file"`
 		ClientCAFile string `mapstructure:"client_ca_file"`
+		// GatewayNames are client-certificate names (CN / DNS SAN) of Kuscia
+		// gateways that relay other nodes' requests and may therefore assert
+		// any kuscia-origin-source. Any other client certificate is a node
+		// identity: its CN / SAN must equal kuscia-origin-source.
+		GatewayNames []string `mapstructure:"gateway_names"`
 	} `mapstructure:"tls"`
 }
 
@@ -186,7 +213,26 @@ type DatabaseConfig struct {
 
 // CryptoConfig holds encryption key settings.
 type CryptoConfig struct {
-	AESKey string `mapstructure:"aes_key"` // 32 bytes for AES-256
+	// AESKey is the legacy single key; it is registered as key version "v1"
+	// of the at-rest envelope (pkg/crypto) when Keys has no "v1" entry.
+	AESKey string `mapstructure:"aes_key"`
+	// Keys maps key versions (e.g. v1, v2) to key material (>=16 bytes, hex
+	// or raw). New ciphertexts use ActiveVersion; older versions still
+	// decrypt, which allows key rotation.
+	Keys map[string]string `mapstructure:"keys"`
+	// ActiveVersion selects the key used for new ciphertexts (default: v1,
+	// or the only configured version).
+	ActiveVersion string `mapstructure:"active_version"`
+	// KeysFile is a YAML or JSON file mapping key versions to key material
+	// ({"v1": "<hex>", "v2": "<hex>"}), merged over Keys. It lets a secret
+	// store / K8s Secret mount inject the whole key map; it should be 0600
+	// or 0400 (a warning is logged otherwise). Per-version environment
+	// variables PRIVAHUB_CRYPTO_KEY_<VERSION> (e.g. PRIVAHUB_CRYPTO_KEY_V2)
+	// take precedence over both (crypto_keys.go).
+	KeysFile string `mapstructure:"keys_file"`
+
+	// warnings collects non-fatal findings from loadExternalKeys.
+	warnings []string
 }
 
 // KusciaNodeConfig represents a single Kuscia node connection.
@@ -285,6 +331,22 @@ type AuthConfig struct {
 	// the data-resource (node/project owner) check (Java white-list.paths).
 	// Empty uses the Java default list (middleware.DefaultAutonomyWhitelist).
 	DataResourceWhitelist []string `mapstructure:"data_resource_whitelist"`
+
+	// JWTPreviousSecrets are former jwt_secret values still accepted for
+	// verification (key rotation; tokens carry a "kid" header). Remove them
+	// once every token signed with them has expired.
+	JWTPreviousSecrets []string `mapstructure:"jwt_previous_secrets"`
+	// PasswordKDFIterations is the SM3 KDF work factor for stored passwords
+	// (default 1,000,000; values below 200,000 are raised to it).
+	PasswordKDFIterations int `mapstructure:"password_kdf_iterations"`
+	// AccountMaxAttempts locks the account for every client IP after this
+	// many failures (default 4 x max_attempts); max_attempts locks only the
+	// (account, client IP) pair so one attacker cannot lock an admin out.
+	AccountMaxAttempts int `mapstructure:"account_max_attempts"`
+	// CookieSecure forces the Secure flag of the browser session cookies
+	// (default: Secure when server.tls.enabled / behind_tls_proxy, otherwise
+	// per request when it arrived over HTTPS).
+	CookieSecure *bool `mapstructure:"cookie_secure"`
 }
 
 // AuthEnabled reports whether authentication is enabled (default true).
@@ -315,6 +377,11 @@ func Load(cfgFile string) (*Config, error) {
 	v.SetEnvPrefix("PRIVAHUB")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
+	// AutomaticEnv only overrides keys viper already knows (defaults / config
+	// file). Bind every leaf key of Config so PRIVAHUB_<KEY> works for keys
+	// that have no default and are absent from the file (e.g.
+	// PRIVAHUB_AUTH_ADMIN_PASSWORD).
+	bindEnvKeys(v, reflect.TypeOf(Config{}), "")
 
 	// Read base config file (ignore if not found)
 	if err := v.ReadInConfig(); err != nil {
@@ -345,6 +412,9 @@ func Load(cfgFile string) (*Config, error) {
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
+	}
+	if err := cfg.Crypto.loadExternalKeys(os.Environ()); err != nil {
+		return nil, err
 	}
 	cfg.Profile = profile
 	if cfg.Observability.MetricsAccess == "" {
@@ -386,6 +456,9 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("invalid http_port %d", c.Server.HTTPPort)
 	}
 
+	if err := c.validateAudit(); err != nil {
+		return err
+	}
 	return c.validateSecurity()
 }
 
@@ -421,6 +494,12 @@ func (c *Config) validateSecurity() error {
 	if err := c.validateInnerAuth(); err != nil {
 		return err
 	}
+	if err := c.validateTransportSecurity(); err != nil {
+		return err
+	}
+	if err := c.validateNodeSecurity(); err != nil {
+		return err
+	}
 	switch c.Observability.MetricsAccess {
 	case "", MetricsPublic, MetricsRestricted, MetricsAuth, MetricsDisabled:
 	default:
@@ -454,15 +533,18 @@ func (c *Config) validateInnerAuth() error {
 	if token != "" && len(token) < 16 {
 		return fmt.Errorf("server.inner_auth.token must be at least 16 characters")
 	}
-	// An empty address with a port binds every interface.
-	if IsLoopbackBind(c.Server.InnerBindAddress) || (c.Server.InnerBindAddress == "" && c.Server.InnerPort == 0) {
+	if token != "" || len(a.AllowedCIDRs) > 0 || a.MTLSEnabled() {
 		return nil
 	}
-	if token == "" && len(a.AllowedCIDRs) == 0 && !a.MTLSEnabled() {
+	// An empty address with a port binds every interface.
+	loopback := IsLoopbackBind(c.Server.InnerBindAddress) || (c.Server.InnerBindAddress == "" && c.Server.InnerPort == 0)
+	if !loopback {
 		return fmt.Errorf("server.inner_bind_address=%q exposes the inner port, which trusts the kuscia-origin-source header: "+
 			"configure server.inner_auth (token / token_file, allowed_cidrs of the Kuscia gateway, or tls for mTLS), "+
 			"or bind it to 127.0.0.1", c.Server.InnerBindAddress)
 	}
+	// Loopback without inner_auth: allowed in dev/test only, see
+	// validateNodeSecurity.
 	return nil
 }
 
@@ -509,6 +591,7 @@ func (c *Config) SecurityWarnings() []string {
 			w = append(w, "auth.enabled=false: authentication is DISABLED (dev/test only)")
 		}
 	}
+	w = append(w, c.Crypto.warnings...)
 	if c.Observability.MetricsAccess == MetricsPublic && !c.IsDev() {
 		w = append(w, "observability.metrics_access=public: /metrics is served without restriction")
 	}
@@ -516,6 +599,7 @@ func (c *Config) SecurityWarnings() []string {
 }
 
 func setDefaults(v *viper.Viper) {
+	setAuditDefaults(v)
 	v.SetDefault("server.mode", "master")
 	v.SetDefault("server.http_port", 8080)
 	v.SetDefault("server.inner_port", 9001)
@@ -523,6 +607,26 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.read_timeout", "10s")
 	v.SetDefault("server.write_timeout", "10s")
 	v.SetDefault("server.shutdown_timeout", "5s")
+	v.SetDefault("server.read_header_timeout", "5s")
+	v.SetDefault("server.idle_timeout", "120s")
+	v.SetDefault("server.max_header_bytes", 1<<20)
+	v.SetDefault("server.behind_tls_proxy", false)
+	v.SetDefault("server.trusted_proxies", []string{})
+	v.SetDefault("server.trusted_platform", "")
+	v.SetDefault("server.inner_auth.tls.gateway_names", []string{})
+	v.SetDefault("server.tls.enabled", false)
+	v.SetDefault("server.tls.cert_file", "")
+	v.SetDefault("server.tls.key_file", "")
+	v.SetDefault("server.tls.client_ca_file", "")
+	v.SetDefault("server.tls.min_version", "1.2")
+	v.SetDefault("server.tls.stack", "tls")
+	v.SetDefault("server.tls.tlcp.sign_cert_file", "")
+	v.SetDefault("server.tls.tlcp.sign_key_file", "")
+	v.SetDefault("server.tls.tlcp.enc_cert_file", "")
+	v.SetDefault("server.tls.tlcp.enc_key_file", "")
+	v.SetDefault("server.tls.tlcp.port", 0)
+	v.SetDefault("crypto.active_version", "")
+	v.SetDefault("crypto.keys_file", "")
 
 	v.SetDefault("database.driver", "sqlite")
 	v.SetDefault("database.dsn", "privahub.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
@@ -570,10 +674,14 @@ func setDefaults(v *viper.Viper) {
 	})
 	v.SetDefault("server.cors_allowed_origins", []string{"http://localhost:8000", "http://127.0.0.1:8000"})
 	v.SetDefault("server.extra_response_headers", map[string]string{
-		"Content-Security-Policy": "base-uri 'self';frame-src 'self';worker-src blob: 'self' data:;object-src 'self';",
+		// Same policy as middleware.DefaultContentSecurityPolicy (and the SPA
+		// build's <meta> CSP); override here to customise.
+		"Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+			"img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; " +
+			"object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
 	})
 	v.SetDefault("server.max_body_size", 32<<20)
-	v.SetDefault("server.upload_max_size", -1)
+	v.SetDefault("server.upload_max_size", DefaultUploadMaxSize)
 	v.SetDefault("server.upload_paths", []string{
 		"/api/v1alpha1/data/upload",
 		"/api/v1alpha1/inst/node/register",
@@ -599,11 +707,59 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.reset_password_max_attempts", 5)
 	v.SetDefault("auth.reset_password_lock_minutes", 60)
 	v.SetDefault("auth.admin_name", "admin")
+	v.SetDefault("auth.admin_password", "")
 	v.SetDefault("auth.initial_password_file", "./config/initial-admin-password")
 
-	// Access tokens are additionally bound to a DB session with a sliding
-	// idle timeout (auth.session_idle_timeout, 24h like Java); the JWT expiry is
-	// the absolute session cap.
-	v.SetDefault("auth.access_token_expiry", "168h")
+	// Access tokens are short lived (2h) and bound to a DB session with a
+	// sliding idle timeout (auth.session_idle_timeout, 24h like Java); they
+	// are renewed with one-time-use refresh tokens whose expiry
+	// (refresh_token_expiry, 7 days) is the absolute session cap.
+	v.SetDefault("auth.access_token_expiry", "2h")
 	v.SetDefault("auth.refresh_token_expiry", "168h") // 7 days
+}
+
+// bindEnvKeys calls v.BindEnv for every scalar / scalar-slice leaf of the
+// mapstructure-tagged struct type t (prefix is the dotted parent key). Maps
+// and slices of structs (crypto.keys, kuscia.nodes, extra_response_headers)
+// cannot be expressed as one env var and are skipped; crypto.keys has its own
+// PRIVAHUB_CRYPTO_KEY_<VERSION> / crypto.keys_file mechanism.
+func bindEnvKeys(v *viper.Viper, t reflect.Type, prefix string) {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		tag := strings.Split(f.Tag.Get("mapstructure"), ",")[0]
+		if tag == "" || tag == "-" {
+			continue
+		}
+		key := tag
+		if prefix != "" {
+			key = prefix + "." + tag
+		}
+		ft := f.Type
+		for ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
+		}
+		switch ft.Kind() {
+		case reflect.Struct:
+			if ft == reflect.TypeOf(time.Time{}) {
+				_ = v.BindEnv(key)
+				continue
+			}
+			bindEnvKeys(v, ft, key)
+		case reflect.Map:
+			continue
+		case reflect.Slice, reflect.Array:
+			if k := ft.Elem().Kind(); k == reflect.Struct || k == reflect.Map || k == reflect.Slice {
+				continue
+			}
+			_ = v.BindEnv(key)
+		default:
+			_ = v.BindEnv(key)
+		}
+	}
 }

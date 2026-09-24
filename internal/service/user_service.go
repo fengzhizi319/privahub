@@ -3,13 +3,17 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/fengzhizi319/privahub/internal/audit"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
+	"github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -29,6 +33,39 @@ type UserService struct {
 	resetMaxAttempts int
 	resetLock        time.Duration
 	now              func() time.Time
+
+	// initialAdmin / initialPasswordFile: the generated initial admin
+	// password file is deleted once that account changes its password.
+	initialAdmin        string
+	initialPasswordFile string
+	log                 *zap.Logger
+}
+
+// SetInitialPasswordFile configures the generated initial admin password
+// file (auth.initial_password_file), removed after the admin's first change.
+func (s *UserService) SetInitialPasswordFile(adminName, path string, log *zap.Logger) {
+	s.initialAdmin, s.initialPasswordFile, s.log = adminName, path, log
+}
+
+// removeInitialPasswordFile deletes the initial admin password hint once the
+// admin has chosen a password of their own.
+func (s *UserService) removeInitialPasswordFile(name string) {
+	if s.initialPasswordFile == "" || name != s.initialAdmin {
+		return
+	}
+	if _, err := os.Stat(s.initialPasswordFile); err != nil {
+		return
+	}
+	if err := os.Remove(s.initialPasswordFile); err != nil {
+		if s.log != nil {
+			s.log.Warn("could not delete the initial admin password file; delete it manually",
+				zap.String("file", s.initialPasswordFile), zap.Error(err))
+		}
+		return
+	}
+	if s.log != nil {
+		s.log.Info("initial admin password changed; initial password file deleted", zap.String("file", s.initialPasswordFile))
+	}
 }
 
 // SetResetPasswordPolicy configures the updatePwd failure lockout.
@@ -91,18 +128,6 @@ type ResetPasswordRequest struct {
 	NewPasswordHash string `json:"newPasswordHash"`
 }
 
-// clientPasswordHash returns the stored-form hash from a client hash (SHA-256
-// hex) or, failing that, hashes a plaintext password.
-func clientPasswordHash(hash, plain string) string {
-	if hexHash.MatchString(hash) {
-		return strings.ToLower(hash)
-	}
-	if plain != "" {
-		return HashPassword(plain)
-	}
-	return ""
-}
-
 // UserVO represents a user view object.
 type UserVO struct {
 	ID        int64    `json:"id"`
@@ -131,10 +156,18 @@ func (s *UserService) CreateUser(ctx context.Context, req *CreateUserRequest) (*
 	if existing != nil {
 		return nil, ErrUserAlreadyExists
 	}
-	passwordHash := clientPasswordHash(req.PasswordHash, req.Password)
-	if passwordHash == "" {
+	clientHash := clientPasswordHash(req.PasswordHash, req.Password)
+	if clientHash == "" {
 		return nil, ErrPasswordRequired
 	}
+	if err := checkNewPasswordHash(clientHash); err != nil {
+		return nil, err
+	}
+	passwordHash, err := auth.HashClientPassword(clientHash)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now()
 
 	ownerType := req.OwnerType
 	if ownerType == "" {
@@ -150,6 +183,10 @@ func (s *UserService) CreateUser(ctx context.Context, req *CreateUserRequest) (*
 		PasswordHash: passwordHash,
 		OwnerType:    ownerType,
 		OwnerID:      ownerID,
+		// The admin chose this password for the user: it must be replaced
+		// by the user at first login.
+		MustChangePassword: true,
+		GmtPasswordChanged: &now,
 	}
 
 	// Wrap user + roles + nodes creation in a transaction for atomicity
@@ -332,20 +369,50 @@ func (s *UserService) DeleteUser(ctx context.Context, name string) error {
 	return s.userRepo.Delete(ctx, user.ID)
 }
 
-// ResetPassword resets a user's password.
+// ResetPassword resets a user's password (admin). The new password must pass
+// the server policy (weak dictionary, not recently used); the account is
+// flagged must_change_password so the user replaces it at the next login, and
+// every session of the user is revoked.
 func (s *UserService) ResetPassword(ctx context.Context, req *ResetPasswordRequest) error {
-	_, err := s.userRepo.FindByName(ctx, req.Name)
-	if err != nil {
+	user, err := s.userRepo.FindByName(ctx, req.Name)
+	if err != nil || user == nil {
 		return ErrUserNotFound
 	}
 	h := clientPasswordHash(req.NewPasswordHash, req.NewPassword)
 	if h == "" {
 		return ErrPasswordRequired
 	}
-	if err := s.userRepo.UpdatePassword(ctx, req.Name, h); err != nil {
+	if err := checkNewPasswordHash(h); err != nil {
 		return err
 	}
-	return ClearUserSessions(ctx, s.db, req.Name)
+	if isPasswordReused(user, h) {
+		return newAuthError(ErrPasswordReused, errcode.AuthPasswordReused)
+	}
+	if err := s.applyPasswordChange(ctx, user, h, true); err != nil {
+		return err
+	}
+	recordAuthEvent(ctx, audit.ActionPasswordReset, req.Name, "", audit.ResultSuccess, "admin_reset")
+	return nil
+}
+
+// applyPasswordChange stores the new password (targeted column update) and
+// revokes every session of the user.
+func (s *UserService) applyPasswordChange(ctx context.Context, user *model.UserAccountsDO, clientHash string, mustChange bool) error {
+	updates, err := newPasswordUpdates(user, clientHash, mustChange, s.now())
+	if err != nil {
+		return err
+	}
+	updates["passwd_reset_failed_attempts"] = nil
+	updates["gmt_passwd_reset_release"] = nil
+	user.PasswdResetFailedAttempts, user.GmtPasswdResetRelease = nil, nil
+	if s.db != nil {
+		if err := s.db.WithContext(ctx).Model(&model.UserAccountsDO{}).Where("id = ?", user.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+	} else if err := s.userRepo.Update(ctx, user); err != nil {
+		return err
+	}
+	return ClearUserSessions(ctx, s.db, user.Name)
 }
 
 // GetUser retrieves a user by name.
@@ -397,20 +464,32 @@ func (s *UserService) UpdatePassword(ctx context.Context, req *UpdatePasswordReq
 	if req.NewPasswordHash != req.ConfirmPasswordHash {
 		return newAuthError(ErrInvalidPassword, errcode.UserUpdatePasswordErrorInconsistent)
 	}
-	if req.OldPasswordHash == req.NewPasswordHash {
+	if strings.EqualFold(req.OldPasswordHash, req.NewPasswordHash) {
 		return newAuthError(ErrInvalidPassword, errcode.UserUpdatePasswordErrorSame)
 	}
-	stored := strings.ToLower(user.PasswordHash)
-	if constEq(strings.ToLower(req.OldPasswordHash), stored) ||
-		(req.OldPasswordHashSm3 != "" && constEq(strings.ToLower(req.OldPasswordHashSm3), stored)) {
-		user.GmtPasswdResetRelease = nil
-		user.PasswdResetFailedAttempts = nil
-		user.PasswordHash = strings.ToLower(req.NewPasswordHash)
-		if err := s.userRepo.Update(ctx, user); err != nil {
+	oldOK := auth.VerifyStoredPassword(user.PasswordHash, auth.PasswordCandidates{
+		SHA256: req.OldPasswordHash, SM3: req.OldPasswordHashSm3,
+	}).OK
+	if oldOK {
+		newHash := strings.ToLower(strings.TrimSpace(req.NewPasswordHash))
+		// Policy checks only after the old password is proven, so they are
+		// not an oracle for somebody holding a stolen session.
+		if err := checkNewPasswordHash(newHash); err != nil {
+			recordAuthEvent(ctx, audit.ActionPasswordChange, user.Name, "", audit.ResultFailure, "policy_weak")
 			return err
 		}
-		return ClearUserSessions(ctx, s.db, user.Name)
+		if isPasswordReused(user, newHash) {
+			recordAuthEvent(ctx, audit.ActionPasswordChange, user.Name, "", audit.ResultFailure, "policy_reuse")
+			return newAuthError(ErrPasswordReused, errcode.AuthPasswordReused)
+		}
+		if err := s.applyPasswordChange(ctx, user, newHash, false); err != nil {
+			return err
+		}
+		recordAuthEvent(ctx, audit.ActionPasswordChange, user.Name, "", audit.ResultSuccess, "")
+		s.removeInitialPasswordFile(user.Name)
+		return nil
 	}
+	recordAuthEvent(ctx, audit.ActionPasswordChange, user.Name, "", audit.ResultFailure, "wrong_old_password")
 
 	attempts := 1
 	if user.PasswdResetFailedAttempts != nil {
@@ -420,11 +499,24 @@ func (s *UserService) UpdatePassword(ctx context.Context, req *UpdatePasswordReq
 	if attempts >= s.resetMaxAttempts {
 		release := now.Add(s.resetLock)
 		user.GmtPasswdResetRelease = &release
-		_ = s.userRepo.Update(ctx, user)
+		s.saveResetCounters(ctx, user)
+		recordAuthEvent(ctx, audit.ActionLockout, user.Name, "", audit.ResultFailure, "update_password_threshold")
 		return newAuthError(ErrUserLocked, errcode.AuthResetPasswordIsLocked, strconv.Itoa(int(s.resetLock.Minutes())))
 	}
-	_ = s.userRepo.Update(ctx, user)
+	s.saveResetCounters(ctx, user)
 	return newAuthError(ErrInvalidPassword, errcode.AuthUserPasswordError, strconv.Itoa(s.resetMaxAttempts-attempts))
+}
+
+// saveResetCounters persists the updatePwd failure counters only.
+func (s *UserService) saveResetCounters(ctx context.Context, user *model.UserAccountsDO) {
+	if s.db != nil {
+		_ = s.db.WithContext(ctx).Model(&model.UserAccountsDO{}).Where("id = ?", user.ID).Updates(map[string]interface{}{
+			"passwd_reset_failed_attempts": user.PasswdResetFailedAttempts,
+			"gmt_passwd_reset_release":     user.GmtPasswdResetRelease,
+		}).Error
+		return
+	}
+	_ = s.userRepo.Update(ctx, user)
 }
 
 func (s *UserService) toUserVO(ctx context.Context, user *model.UserAccountsDO) *UserVO {

@@ -20,9 +20,11 @@ type VoteWiring struct {
 	Monitor *votehandler.Monitor
 }
 
-// wireVote builds the vote system on top of the node services and starts the monitors.
+// wireVote builds the vote system on top of the node services and starts the
+// monitors. strictSignatures (production) makes vote signature verification
+// fail closed when Kuscia is unavailable.
 func wireVote(db *gorm.DB, log *zap.Logger, nodeService *service.NodeService, certs *service.CertificateService,
-	kusciaClient *kuscia.Client, env *service.EnvService) *VoteWiring {
+	kusciaClient *kuscia.Client, env *service.EnvService, strictSignatures bool) *VoteWiring {
 	if log == nil {
 		log = zap.NewNop()
 	}
@@ -31,6 +33,8 @@ func wireVote(db *gorm.DB, log *zap.Logger, nodeService *service.NodeService, ce
 		Env:    env,
 		Kuscia: votehandler.NewKusciaOps(nodeService, certs, kusciaClient),
 		Log:    log.Named("vote"),
+
+		StrictSignatures: strictSignatures,
 	}
 	if nodeService != nil {
 		deps.Routes = nodeService.Routes()

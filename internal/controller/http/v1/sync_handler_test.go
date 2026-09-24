@@ -73,6 +73,8 @@ func TestSyncHandler_VoteSyncCreate(t *testing.T) {
 
 func TestSyncHandler_DataSync(t *testing.T) {
 	db, r := newSyncHandlerEnv(t)
+	// The sending node bob belongs to institution instB.
+	db.Create(&model.NodeDO{NodeID: "bob", Name: "Bob", ControlNodeID: "bob", InstID: "instB"})
 	w := syncPostJSON(r, "/api/v1alpha1/data/sync", `{"tableName":"org.secretflow.secretpad.persistence.entity.ProjectGraphDO","action":"create","data":{"upk":{"projectId":"p","graphId":"g"},"name":"graph","ownerId":"instB"}}`)
 	if !strings.Contains(w.Body.String(), `"code":0`) {
 		t.Fatalf("resp %s", w.Body.String())
@@ -90,5 +92,57 @@ func TestSyncHandler_DataSync(t *testing.T) {
 	w = syncPostJSON(r, "/api/v1alpha1/data/sync", `{"tableName":"user_accounts","action":"create","data":{"name":"x"}}`)
 	if !strings.Contains(w.Body.String(), "202011100") {
 		t.Fatalf("user_accounts must be rejected: %s", w.Body.String())
+	}
+}
+
+// TestSyncHandler_DataSyncOwnership: a peer may only write rows it owns
+// (reverse of the P2P producer filter); rejected writes change nothing and
+// answer a generic AUTH_FAILED.
+func TestSyncHandler_DataSyncOwnership(t *testing.T) {
+	db, r := newSyncHandlerEnv(t)
+	db.Create(&model.NodeDO{NodeID: "bob", Name: "Bob", ControlNodeID: "bob", InstID: "instB"})
+	db.Create(&model.NodeDO{NodeID: "bob2", Name: "Bob2", ControlNodeID: "bob2", InstID: "instB"})
+	db.Create(&model.ProjectGraphDO{ProjectID: "p", GraphID: "victim", Name: "orig", OwnerID: "instC"})
+	db.Create(&model.ProjectGraphDO{ProjectID: "p", GraphID: "bobs", Name: "orig", OwnerID: "instB"})
+	denied := func(body string) {
+		t.Helper()
+		w := syncPostJSON(r, "/api/v1alpha1/data/sync", body)
+		if !strings.Contains(w.Body.String(), "202011602") {
+			t.Errorf("expected AUTH_FAILED for %s, got %s", body, w.Body.String())
+		}
+	}
+	// Foreign owner in the payload.
+	denied(`{"tableName":"project_graph","action":"create","data":{"project_id":"p","graph_id":"new","name":"x","owner_id":"instC"}}`)
+	// Claiming ownership of an existing foreign row (overwrite by business key).
+	denied(`{"tableName":"project_graph","action":"update","data":{"project_id":"p","graph_id":"victim","name":"pwned","owner_id":"instB"}}`)
+	// Deleting a foreign row.
+	denied(`{"tableName":"project_graph","action":"delete","data":{"project_id":"p","graph_id":"victim"}}`)
+	// Datatable of another institution's node.
+	denied(`{"tableName":"project_datatable","action":"create","data":{"project_id":"p","node_id":"carol","datatable_id":"d"}}`)
+	// Graph node of a graph bob does not own.
+	denied(`{"tableName":"project_graph_node","action":"create","data":{"project_id":"p","graph_id":"victim","graph_node_id":"n1"}}`)
+	var g model.ProjectGraphDO
+	db.Where("graph_id = ?", "victim").First(&g)
+	if g.Name != "orig" || g.OwnerID != "instC" {
+		t.Fatalf("victim graph modified: %+v", g)
+	}
+	// Own rows are accepted: own graph, datatable of another node of instB.
+	for _, ok := range []string{
+		`{"tableName":"project_graph","action":"update","data":{"project_id":"p","graph_id":"bobs","name":"new","owner_id":"instB"}}`,
+		`{"tableName":"project_datatable","action":"create","data":{"project_id":"p","node_id":"bob2","datatable_id":"d"}}`,
+		`{"tableName":"project_graph_node","action":"create","data":{"project_id":"p","graph_id":"bobs","graph_node_id":"n1"}}`,
+	} {
+		if w := syncPostJSON(r, "/api/v1alpha1/data/sync", ok); !strings.Contains(w.Body.String(), `"code":0`) {
+			t.Errorf("own row rejected: %s -> %s", ok, w.Body.String())
+		}
+	}
+	// Missing origin is rejected.
+	req := httptest.NewRequest(http.MethodPost, "/api/v1alpha1/data/sync", strings.NewReader(
+		`{"tableName":"project_graph","action":"update","data":{"project_id":"p","graph_id":"bobs","name":"n","owner_id":"instB"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if !strings.Contains(w.Body.String(), "202011602") {
+		t.Errorf("missing origin must be rejected: %s", w.Body.String())
 	}
 }

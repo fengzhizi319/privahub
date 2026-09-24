@@ -84,9 +84,15 @@ func (b *autonomyBase) instName(ctx context.Context, instID string) string {
 }
 
 // verify checks the request signature and the signer's certificate chain
-// (Java AbstractAutonomyVoteTypeHandler.verify). Skipped in offline mode.
+// (Java AbstractAutonomyVoteTypeHandler.verify, hardened in signature.go:
+// KeyUsage, chain to the Kuscia domain cert, validity at signing time,
+// nonce replay). Offline mode (no Kuscia) skips it only when strict
+// signatures are off (dev/test).
 func (b *autonomyBase) verify(ctx context.Context, msg *VoteRequestMessage, body *VoteRequestBody) error {
 	if b.d.Kuscia == nil {
+		if b.d.StrictSignatures {
+			return bizErr(errcode.SystemVerifySignatureError, "kuscia unavailable: vote signature cannot be verified")
+		}
 		return nil
 	}
 	if len(msg.CertChain) < 2 || len(body.Executors) == 0 {
@@ -96,11 +102,11 @@ func (b *autonomyBase) verify(ctx context.Context, msg *VoteRequestMessage, body
 		return bizWrap(errcode.SystemVerifySignatureError, err, "")
 	}
 	cert := b.d.Kuscia.DomainCert(ctx, body.Executors[0], "")
-	if !CompareCertPubKey(cert, msg.CertChain[1]) {
-		return bizErr(errcode.SystemVerifySignatureError, "cert does not match")
+	if err := verifySignerChain(msg.CertChain, cert, body.SignMeta, false); err != nil {
+		return bizWrap(errcode.SystemVerifySignatureError, err, "cert chain invalid")
 	}
-	if !ValidateCertChain(msg.CertChain) {
-		return bizErr(errcode.SystemVerifySignatureError, "cert chain invalid")
+	if err := checkNonce(body.SignMeta, msg.Body); err != nil {
+		return bizWrap(errcode.SystemVerifySignatureError, err, "vote request replayed")
 	}
 	return nil
 }

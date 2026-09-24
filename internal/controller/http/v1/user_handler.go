@@ -37,9 +37,12 @@ func (h *UserHandler) Create(c *gin.Context) {
 
 	vo, err := h.userService.CreateUser(c.Request.Context(), &req)
 	if err != nil {
+		var ae *service.AuthError
 		switch {
 		case errors.Is(err, service.ErrUserAlreadyExists):
 			response.FailArgs(c, errcode.SystemValidationError, "The name already exists in db.")
+		case errors.As(err, &ae):
+			failAuthErr(c, err)
 		case errors.Is(err, service.ErrPasswordRequired):
 			response.FailArgs(c, errcode.SystemValidationError, "passwordHash required")
 		default:
@@ -113,8 +116,12 @@ func (h *UserHandler) ResetPassword(c *gin.Context) {
 		response.FailArgs(c, errcode.SystemValidationError, err.Error())
 		return
 	}
-	if err := h.userService.ResetPassword(c.Request.Context(), &req); err != nil {
+	ctx := service.WithClientIP(c.Request.Context(), c.ClientIP())
+	if err := h.userService.ResetPassword(ctx, &req); err != nil {
+		var ae *service.AuthError
 		switch {
+		case errors.As(err, &ae):
+			failAuthErr(c, err)
 		case errors.Is(err, service.ErrUserNotFound):
 			response.Fail(c, errcode.NotFound)
 		case errors.Is(err, service.ErrPasswordRequired):
@@ -135,7 +142,7 @@ func (h *UserHandler) Get(c *gin.Context) {
 		response.FailHTTP(c, 401, errcode.AuthFailed, "login is required")
 		return
 	}
-	response.OK(c, u.Normalize())
+	response.OK(c, PublicUserContext(c, u))
 }
 
 // UpdatePwd handles self-service password update (Java UserController.updatePwd).
@@ -153,10 +160,13 @@ func (h *UserHandler) UpdatePwd(c *gin.Context) {
 		return
 	}
 	req.Name = u.Name
-	if err := h.userService.UpdatePassword(c.Request.Context(), &req); err != nil {
+	ctx := service.WithClientIP(c.Request.Context(), c.ClientIP())
+	if err := h.userService.UpdatePassword(ctx, &req); err != nil {
 		failAuthErr(c, err)
 		return
 	}
+	// Every session of the user was revoked: drop the browser cookies too.
+	middleware.ClearBrowserSession(c)
 	response.OK(c, true)
 }
 
@@ -204,7 +214,8 @@ func (h *UserHandler) RemoteResetPassword(c *gin.Context) {
 	raw, err := h.nodeUserService.RemoteResetPassword(c.Request.Context(), &req)
 	if err != nil {
 		if errors.Is(err, service.ErrRemoteNotConfigured) || errors.Is(err, service.ErrNodeUserInvalidParam) ||
-			errors.Is(err, service.ErrNodeUserNotFound) || errors.Is(err, service.ErrNodeUserWrongPwd) {
+			errors.Is(err, service.ErrNodeUserNotFound) || errors.Is(err, service.ErrNodeUserWrongPwd) ||
+			errors.Is(err, service.ErrNodeUserWeakPwd) || errors.Is(err, service.ErrNodeUserReusedPwd) {
 			code, msg := service.NodeUserErrorCode(err, &req)
 			response.FailArgs(c, code, msg)
 			return

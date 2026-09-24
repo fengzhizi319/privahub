@@ -6,6 +6,7 @@ package wire
 import (
 	"time"
 
+	"github.com/fengzhizi319/privahub/internal/audit"
 	"github.com/fengzhizi319/privahub/internal/controller/http/middleware"
 	v1 "github.com/fengzhizi319/privahub/internal/controller/http/v1"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
@@ -28,7 +29,10 @@ func NewJWTManager(cfg *config.Config) *auth.JWTManager {
 	if refreshExpiry == 0 {
 		refreshExpiry = 168 * time.Hour
 	}
-	return auth.NewJWTManager(cfg.Auth.JWTSecret, accessExpiry, refreshExpiry)
+	m := auth.NewJWTManager(cfg.Auth.JWTSecret, accessExpiry, refreshExpiry)
+	// Key rotation: former secrets still verify (tokens carry a kid header).
+	m.AddVerificationKeys(cfg.Auth.JWTPreviousSecrets...)
+	return m
 }
 
 // App holds all initialized dependencies for the Privahub application.
@@ -101,6 +105,11 @@ type App struct {
 	JobSyncService     *service.JobStatusSyncService
 	ServingSyncService *service.ServingStatusSyncService
 
+	// Audit is the tamper-evident security audit trail (audit_wire.go);
+	// nil when initialization failed.
+	Audit        *audit.Service
+	AuditHandler *v1.AuditHandler
+
 	// Rate limiters (Java RateLimitUtil), see auth_wire.go.
 	userLimiter  *middleware.KeyedLimiter
 	loginLimiter *middleware.KeyedLimiter
@@ -109,6 +118,8 @@ type App struct {
 // NewApp creates and initializes the application with all dependencies.
 // The log parameter is passed to background services for operational logging.
 func NewApp(db *gorm.DB, cfg *config.Config, log *zap.Logger) *App {
+	// Security audit trail first, so every later component can record events.
+	auditService, auditHandler := wireAudit(db, cfg, log)
 	jwtManager := NewJWTManager(cfg)
 	// Outgoing node-to-node calls carry server.inner_auth.token.
 	if token, err := cfg.Server.InnerAuth.ResolvedToken(); err == nil {
@@ -190,11 +201,11 @@ func NewApp(db *gorm.DB, cfg *config.Config, log *zap.Logger) *App {
 	// Bug78 fix: pass logger to SseServer for operational visibility.
 	sseServer := service.NewSseServerWithInterval(log, cfg.Sync.Ping())
 	envService := NewEnvServiceFromConfig(cfg, log)
-	dataResourceAuth := wireAuth(db, cfg, envService, authService, userService, nodeUserService, userHandler)
+	dataResourceAuth := wireAuth(db, cfg, envService, authService, userService, nodeUserService, userHandler, log)
 	// Node / route / inst / certificate / dataproxy wiring (pool-aware).
 	nodeDomain := wireNodeDomain(db, cfg, log, nodeService, kusciaClient, kusciaPool, envService)
 	// Vote / approval / message / P2P services + vote status monitors (vote_wire.go).
-	voteWiring := wireVote(db, log, nodeService, nodeDomain.CertificateService, kusciaClient, envService)
+	voteWiring := wireVote(db, log, nodeService, nodeDomain.CertificateService, kusciaClient, envService, !cfg.IsDev())
 	approvalHandler := v1.NewApprovalHandler(voteWiring.Service)
 	messageHandler := v1.NewMessageHandler(voteWiring.Service)
 	p2pHandler := v1.NewP2PHandler(db, voteWiring.P2P, log)
@@ -281,6 +292,9 @@ func NewApp(db *gorm.DB, cfg *config.Config, log *zap.Logger) *App {
 
 		userLimiter:  newUserLimiter(cfg),
 		loginLimiter: newLoginLimiter(cfg),
+
+		Audit:        auditService,
+		AuditHandler: auditHandler,
 	}
 }
 
@@ -304,4 +318,6 @@ func (a *App) Shutdown() {
 	if a.SseServer != nil {
 		a.SseServer.Stop()
 	}
+	// Last: drain audit events recorded during shutdown.
+	closeAudit(a.Audit)
 }

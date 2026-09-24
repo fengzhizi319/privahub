@@ -43,6 +43,14 @@ func TestDataService_UploadCreateDownload(t *testing.T) {
 	content, err := os.ReadFile(filepath.Join(dir, "alice", vo.RealName))
 	require.NoError(t, err)
 	assert.Equal(t, "id,v\n1,2\n", string(content))
+	// Upload store is not world-accessible (umask can only tighten these).
+	fst, err := os.Stat(filepath.Join(dir, "alice", vo.RealName))
+	require.NoError(t, err)
+	assert.Zero(t, fst.Mode().Perm()&^uploadFilePerm, "file perm %v", fst.Mode().Perm())
+	assert.Zero(t, fst.Mode().Perm()&0o007, "uploaded file must not be world-readable")
+	dst, err := os.Stat(filepath.Join(dir, "alice"))
+	require.NoError(t, err)
+	assert.Zero(t, dst.Mode().Perm()&0o007, "node dir must not be world-accessible")
 
 	id, err := s.CreateData(ctx, &CreateDataRequest{NodeID: "alice", Name: "a.csv", RealName: vo.RealName, TableName: "tbl",
 		DatasourceType: "LOCAL", DatasourceName: "default-data-source",

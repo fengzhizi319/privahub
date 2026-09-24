@@ -1,0 +1,11 @@
+# SQL-injection guard allowlist (scripts/check_sql_injection_guard.sh, rule D).
+# Format:  <path> | <exact code snippet of the first SQL argument> | <justification>
+# Every entry must still match code, otherwise the gate fails (no stale entries).
+internal/service/model_service.go | col + " " + dir | col from modelSortColumns whitelist map; dir is literal ASC/DESC
+internal/service/sync/center.go | col+" > ?" | col = registry timeColumn() (static struct tag of a registered sync table), value bound via ?
+internal/service/sync/edge.go | col + " DESC" | col = registry timeColumn() (static struct tag of a registered sync table)
+internal/service/node_service.go | order | order built from a fixed map {gmtCreate,gmtModified,nodeName,nodeId} + literal ASC/DESC
+internal/service/node_result_service.go | order | order is one of two literals ("gmt_create DESC"/"gmt_create ASC")
+internal/audit/store.go | col+" = ?" | col iterates the keys of a static map literal (actor/result/resource_type/...); value bound via ?
+internal/dao/migrations/encrypt_at_rest.go | q | table/column from static model.SecretColumns, quoted via Dialector.QuoteTo; no request input
+internal/dao/migrations/encrypt_at_rest.go | u | table/column from static model.SecretColumns, quoted via Dialector.QuoteTo; values bound via ?

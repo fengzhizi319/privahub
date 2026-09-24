@@ -106,9 +106,11 @@ func wireSync(db *gorm.DB, cfg *config.Config, log *zap.Logger, env *service.Env
 			Forward: cfg.Sync.ForwardPaths(), Include: cfg.Sync.IncludePaths(),
 			Gateway: cfg.Kuscia.Gateway, CenterHost: cfg.Server.CenterPlatformService,
 			NodeID: env.GetPlatformNodeId(), Log: log.Named("edge-forward"),
+			MaxRequestBytes: cfg.Server.MaxBodySize,
 		}
 		if auth != nil {
 			fwd.Sessions = auth
+			fwd.JWT = auth.JWTManager()
 		}
 		w.MainMiddlewares = append(w.MainMiddlewares, middleware.EdgeForward(fwd))
 	}

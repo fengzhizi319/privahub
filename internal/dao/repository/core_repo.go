@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
+	"github.com/fengzhizi319/privahub/internal/dao/sqlutil"
 	"gorm.io/gorm"
 )
 
@@ -109,7 +110,7 @@ func (r *ProjectRepo) PageQuery(ctx context.Context, page, size int, name string
 
 	query := r.DB().WithContext(ctx).Model(&model.ProjectDO{})
 	if name != "" {
-		query = query.Where("name LIKE ?", "%"+name+"%")
+		query = query.Where("name LIKE ? ESCAPE '!'", sqlutil.Contains(name))
 	}
 
 	if err := query.Count(&total).Error; err != nil {

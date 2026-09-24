@@ -277,7 +277,7 @@ func (r *outputRenderer) fillReport(ctx context.Context, projectID, reportID str
 			var meta map[string]json.RawMessage
 			if json.Unmarshal(metaRaw, &meta) == nil {
 				if t, ok := meta["tabs"]; ok && len(t) > 0 && string(t) != "null" {
-					tabs = json.RawMessage(t)
+					tabs = t
 				}
 			}
 		}

@@ -15,6 +15,17 @@ type UserAccountsDO struct {
 	LockedInvalidTime         *time.Time `json:"locked_invalid_time"`
 	// InstID mirrors Java AccountsDO.instId (P2P institution of the user).
 	InstID string `gorm:"type:varchar(64);not null;default:''" json:"inst_id"`
+	// MustChangePassword restricts the account's sessions to the password
+	// change flow (generated initial admin password, admin reset).
+	MustChangePassword bool `gorm:"not null;default:false" json:"must_change_password"`
+	// PasswordVersion is bumped on every password change/reset; tokens carry
+	// it (JWT "pv") so older tokens stop working.
+	PasswordVersion int64 `gorm:"not null;default:0" json:"-"`
+	// PasswordHistory is a JSON array of the previous stored (KDF) hashes,
+	// newest first, used to reject password reuse.
+	PasswordHistory string `gorm:"type:text" json:"-"`
+	// GmtPasswordChanged is the time of the last password change.
+	GmtPasswordChanged *time.Time `json:"-"`
 }
 
 func (UserAccountsDO) TableName() string { return "user_accounts" }
@@ -23,13 +34,23 @@ func (UserAccountsDO) TableName() string { return "user_accounts" }
 type UserTokensDO struct {
 	BaseDO
 	Name string `gorm:"type:varchar(128);not null" json:"name"`
-	// Token holds the full access token (a JWT, well over 64 chars).
-	Token    string     `gorm:"type:text" json:"token"`
+	// Token holds the SM3 digest of the access token (auth.TokenDigest), never
+	// the token itself. Legacy rows (raw token) are digested by the startup
+	// migration.
+	Token    string     `gorm:"type:text" json:"-"`
 	GmtToken *time.Time `json:"gmt_token"`
 	// SessionData is the JSON UserContext snapshot (Java UserContextDTO).
 	SessionData string `gorm:"type:text" json:"session_data"`
 	// SessionID binds the access/refresh token pair (JWT "sid" claim).
 	SessionID string `gorm:"type:varchar(64);index" json:"session_id"`
+	// RefreshJTI is the digest of the only refresh token JTI still valid for
+	// this session (one-time-use rotation; auth.RefreshJTIDigest).
+	RefreshJTI string `gorm:"type:varchar(64)" json:"-"`
+	// PwdVer is the account password version the session was created with.
+	PwdVer int64 `gorm:"not null;default:0" json:"-"`
+	// GmtRefreshExpire is the absolute session end (refresh token expiry of
+	// the login; rotations never extend it).
+	GmtRefreshExpire *time.Time `json:"-"`
 }
 
 func (UserTokensDO) TableName() string { return "user_tokens" }

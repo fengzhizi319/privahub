@@ -9,6 +9,7 @@ import (
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
+	"github.com/fengzhizi319/privahub/internal/dao/sqlutil"
 	"github.com/fengzhizi319/privahub/internal/graphjob"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
@@ -215,7 +216,7 @@ func (s *ProjectService) ListAllProjects(ctx context.Context, name string) ([]Pr
 		q = q.Where("project_id IN (?)", s.db.Model(&model.ProjectNodeDO{}).Select("project_id").Where("node_id = ?", op.OwnerID))
 	}
 	if name != "" {
-		q = q.Where("name LIKE ?", "%"+name+"%")
+		q = q.Where("name LIKE ? ESCAPE '!'", sqlutil.Contains(name))
 	}
 	var projects []model.ProjectDO
 	if err := q.Order("gmt_create DESC").Find(&projects).Error; err != nil {

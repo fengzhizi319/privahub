@@ -306,6 +306,15 @@ func TestProjectEndpoints(t *testing.T) {
 	if p1.GraphCount != 1 || len(p1.Nodes) != 2 || p1.Nodes[0].NodeName != "Alice" {
 		t.Fatalf("p1 vo %+v", p1)
 	}
+	// LIKE wildcards in the search term match literally (sqlutil.Contains).
+	for _, kw := range []string{"_", "%", "p_", "!"} {
+		if got, err := f.project.ListAllProjects(ctx, kw); err != nil || len(got) != 0 {
+			t.Fatalf("wildcard %q must match literally: %d %v", kw, len(got), err)
+		}
+	}
+	if got, _ := f.project.ListAllProjects(ctx, "p3"); len(got) != 1 {
+		t.Fatalf("plain search: %d", len(got))
+	}
 	edge := WithOperator(context.Background(), Operator{OwnerID: "bob", OwnerType: "EDGE"})
 	if edgeList, _ := f.project.ListAllProjects(edge, ""); len(edgeList) != 1 || edgeList[0].ProjectID != "p1" {
 		t.Fatalf("edge filter %+v", edgeList)

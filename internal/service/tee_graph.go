@@ -323,7 +323,7 @@ func (s *GraphService) convertTrustedFlowJob(_ context.Context, cc *chainContext
 	return &kuscia.CreateJobRequest{
 		JobID:          job.JobID,
 		Initiator:      initiator,
-		MaxParallelism: int32(job.MaxParallelism),
+		MaxParallelism: clampInt32(job.MaxParallelism),
 		Tasks:          tasks,
 	}, nil
 }

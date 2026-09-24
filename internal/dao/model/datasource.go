@@ -8,7 +8,7 @@ type DatasourceDO struct {
 	Type           string `gorm:"type:varchar(32);not null;default:'OSS'" json:"type"` // OSS, HTTP, LOCAL_FS
 	Status         string `gorm:"type:varchar(32);not null;default:'Available'" json:"status"`
 	OwnerID        string `gorm:"type:varchar(64);not null" json:"owner_id"`
-	ConnectionInfo string `gorm:"type:text" json:"connection_info"` // JSON config
+	ConnectionInfo string `gorm:"type:text;serializer:secret" json:"connection_info"` // JSON config, encrypted at rest
 	Description    string `gorm:"type:varchar(512)" json:"description"`
 }
 

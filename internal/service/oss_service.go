@@ -57,15 +57,10 @@ func NewOssServiceWithFilter(f *IPFilter) *OssService {
 		f = NewDisabledIPFilter()
 	}
 	return &OssService{
-		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
-			// Disable redirects to prevent SSRF via redirect chains.
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
-				return http.ErrUseLastResponse
-			},
-		},
-		ipFilter: f,
-		now:      time.Now,
+		// Connect-time IP enforcement, no proxies, no redirects (SSRF).
+		httpClient: f.HTTPClient(10 * time.Second),
+		ipFilter:   f,
+		now:        time.Now,
 	}
 }
 
@@ -153,11 +148,15 @@ func (s *OssService) CheckBucketExists(ctx context.Context, cfg *OssConfig, buck
 	// (HEAD responses carry no error code).
 	u, err := s.buildURL(cfg, bucketName, "", url.Values{"location": {""}})
 	if err != nil {
-		return bizWrap(errcode.DatasourceDataSourceCreateFail, err, "")
+		return &BizError{Code: errcode.DatasourceDataSourceCreateFail, Err: err}
 	}
 	resp, err := s.signedDo(ctx, cfg, http.MethodGet, u)
 	if err != nil {
-		return bizWrap(errcode.DatasourceDataSourceCreateFail, err, "")
+		if errors.Is(err, ErrIPBlocked) {
+			return bizErr(errcode.FeatureTableIpFilter, cfg.Endpoint)
+		}
+		// Generic message: transport errors would reveal internal ports.
+		return &BizError{Code: errcode.DatasourceDataSourceCreateFail, Err: err}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusOK {

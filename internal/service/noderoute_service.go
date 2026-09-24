@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
+	"github.com/fengzhizi319/privahub/internal/dao/sqlutil"
 	"github.com/fengzhizi319/privahub/internal/graphjob"
 	"github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
@@ -156,7 +157,7 @@ func (r *NodeRouteService) sharedProjectIDs(ctx context.Context, src, dst string
 		projectIDs[p] = true
 	}
 	var configs []model.ProjectApprovalConfigDO
-	if err := db.Where("parties LIKE ? AND parties LIKE ?", "%"+src+"%", "%"+dst+"%").Find(&configs).Error; err == nil {
+	if err := db.Where("parties LIKE ? ESCAPE '!' AND parties LIKE ? ESCAPE '!'", sqlutil.Contains(src), sqlutil.Contains(dst)).Find(&configs).Error; err == nil {
 		for _, c := range configs {
 			if c.ProjectID != "" {
 				projectIDs[c.ProjectID] = true
@@ -286,9 +287,9 @@ func (r *NodeRouteService) Page(ctx context.Context, req *PageNodeRouteRequest) 
 		q = q.Where("dst_node_id = ?", req.DstNodeID)
 	}
 	if kw := strings.TrimSpace(req.Search); kw != "" {
-		like := "%" + kw + "%"
-		q = q.Where("src_node_id LIKE ? OR dst_net_address LIKE ? OR src_node_id IN (?)", like, like,
-			r.db().Model(&model.NodeDO{}).Select("node_id").Where("name LIKE ?", like))
+		like := sqlutil.Contains(kw)
+		q = q.Where("src_node_id LIKE ? ESCAPE '!' OR dst_net_address LIKE ? ESCAPE '!' OR src_node_id IN (?)", like, like,
+			r.db().Model(&model.NodeDO{}).Select("node_id").Where("name LIKE ? ESCAPE '!'", like))
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {

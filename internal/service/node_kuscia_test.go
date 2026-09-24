@@ -471,6 +471,12 @@ func TestInstService_Flow(t *testing.T) {
 		t.Errorf("bad cert must be rejected, got %v", err)
 	}
 	req.CertFile = certPEM
+	// Production refuses plaintext KusciaAPI channels.
+	is.WithRequireTLS(true)
+	if err := is.RegisterNode(context.Background(), req, "127.0.0.1"); bizCode(err) != errcode.InstRegisterCheckFailed.Code {
+		t.Errorf("notls registration must be refused in production, got %v", err)
+	}
+	is.WithRequireTLS(false)
 	if err := is.RegisterNode(context.Background(), req, "127.0.0.1"); err != nil {
 		t.Fatalf("RegisterNode: %v", err)
 	}

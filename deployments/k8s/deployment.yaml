@@ -1,0 +1,118 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: privahub
+  namespace: privahub
+  labels:
+    app.kubernetes.io/name: privahub
+    app.kubernetes.io/component: backend
+spec:
+  # SQLite on a RWO volume: exactly one writer. Switch database.driver to
+  # mysql before scaling out.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: privahub
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: privahub
+        app.kubernetes.io/component: backend
+    spec:
+      serviceAccountName: privahub
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: privahub
+          # Our image: pinned version (never :latest). Pin by digest in
+          # production, e.g. via `kustomize edit set image privahub=...@sha256:...`.
+          image: ghcr.io/fengzhizi319/privahub:1.0.0
+          imagePullPolicy: IfNotPresent
+          args: ["-config", "/etc/privahub/privahub.yaml"]
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: inner
+              containerPort: 9001
+          env:
+            # Secrets: always via secretKeyRef, never literal values.
+            - name: PRIVAHUB_AUTH_JWT_SECRET
+              valueFrom:
+                secretKeyRef: {name: privahub-secrets, key: jwt-secret}
+            - name: PRIVAHUB_CRYPTO_AES_KEY
+              valueFrom:
+                secretKeyRef: {name: privahub-secrets, key: aes-key}
+            - name: PRIVAHUB_OBSERVABILITY_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef: {name: privahub-secrets, key: metrics-token}
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+          startupProbe:
+            httpGet: {path: /api/v1alpha1/healthz, port: http}
+            periodSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: {path: /api/v1alpha1/healthz, port: http}
+            periodSeconds: 20
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet: {path: /api/v1alpha1/healthz, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests: {cpu: 250m, memory: 256Mi}
+            limits: {cpu: "2", memory: 2Gi, ephemeral-storage: 1Gi}
+          volumeMounts:
+            - {name: config, mountPath: /etc/privahub, readOnly: true}
+            - {name: inner-token, mountPath: /var/run/secrets/privahub, readOnly: true}
+            - {name: kuscia-client-tls, mountPath: /var/run/secrets/kuscia, readOnly: true}
+            - {name: data, mountPath: /app/data}
+            - {name: audit, mountPath: /app/audit}
+            - {name: node-certs, mountPath: /app/config/certs}
+            - {name: kuscia-pool, mountPath: /app/config/kuscia}
+            - {name: sync-state, mountPath: /app/config/sync}
+            - {name: tmp, mountPath: /tmp}
+      volumes:
+        - name: config
+          configMap: {name: privahub-config}
+        - name: inner-token
+          secret:
+            secretName: privahub-secrets
+            defaultMode: 0400
+            items: [{key: inner-token, path: inner-token}]
+        - name: kuscia-client-tls
+          secret: {secretName: kuscia-client-tls, defaultMode: 0400}
+        - name: data
+          persistentVolumeClaim: {claimName: privahub-data}
+        - name: audit
+          persistentVolumeClaim: {claimName: privahub-audit}
+        # node certificates / Kuscia pool / sync cursors are regenerated or
+        # re-synced on start; move them to a PVC if you need them to survive
+        # pod restarts in your topology.
+        - name: node-certs
+          emptyDir: {sizeLimit: 64Mi}
+        - name: kuscia-pool
+          emptyDir: {sizeLimit: 16Mi}
+        - name: sync-state
+          emptyDir: {sizeLimit: 64Mi}
+        - name: tmp
+          emptyDir: {sizeLimit: 1Gi}

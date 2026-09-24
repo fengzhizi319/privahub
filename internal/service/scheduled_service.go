@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
+	"github.com/fengzhizi319/privahub/internal/dao/sqlutil"
 	"github.com/fengzhizi319/privahub/internal/graphjob"
 	"github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/fengzhizi319/privahub/pkg/cronutil"
@@ -972,7 +973,7 @@ func (s *ScheduledService) QueryPage(ctx context.Context, req *PageScheduledRequ
 	page, size := normPage(req.Page, req.Size, 10)
 	q := s.db.WithContext(ctx).Model(&model.ProjectScheduleDO{}).Where("project_id = ?", req.ProjectID)
 	if req.Search != "" {
-		q = q.Where("schedule_id LIKE ?", "%"+req.Search+"%")
+		q = q.Where("schedule_id LIKE ? ESCAPE '!'", sqlutil.Contains(req.Search))
 	}
 	if req.Status != "" {
 		q = q.Where("status = ?", req.Status)
@@ -1085,7 +1086,7 @@ func (s *ScheduledService) TaskPage(ctx context.Context, req *TaskPageScheduledR
 		q = q.Where("schedule_id = ?", req.ScheduleID)
 	}
 	if req.Search != "" {
-		q = q.Where("schedule_task_id LIKE ?", "%"+req.Search+"%")
+		q = q.Where("schedule_task_id LIKE ? ESCAPE '!'", sqlutil.Contains(req.Search))
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {

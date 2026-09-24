@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/fengzhizi319/privahub/internal/controller/http/middleware"
 	"github.com/fengzhizi319/privahub/internal/service"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
@@ -63,9 +64,10 @@ func (h *DataHandler) Upload(c *gin.Context) {
 	if nodeID == "" {
 		nodeID = c.PostForm("Node-Id")
 	}
-	// Java checkDataPermissions: EDGE users may only upload to their own node.
-	if strings.EqualFold(c.GetString("owner_type"), "EDGE") && c.GetString("owner_id") != "" && c.GetString("owner_id") != nodeID {
-		response.FailWithMsg(c, errcode.AuthFailed, "no Permissions")
+	// Java checkDataPermissions, applied to every non-CENTER-owner account
+	// (EDGE and P2P users alike): the target node must be the caller's own
+	// node or a node of its institution. A missing Node-Id is denied.
+	if !middleware.RequireNodeAccess(c, nodeID) {
 		return
 	}
 	file, header, err := c.Request.FormFile("file")

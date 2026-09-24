@@ -158,6 +158,9 @@ func nonNil(s []string) []string {
 // signedRequestMessage signs the base64 body with the key issued for nodeID.
 // Without Kuscia (offline mode) the message is left unsigned.
 func (b *base) signedRequestMessage(ctx context.Context, nodeID string, body *VoteRequestBody) (*VoteRequestMessage, error) {
+	if b.d.Kuscia != nil {
+		body.SignMeta = newSignMeta()
+	}
 	msg := &VoteRequestMessage{Body: b64(toJSON(body))}
 	if b.d.Kuscia == nil {
 		b.d.log().Warn("kuscia not configured, vote request left unsigned", zap.String("vote", body.VoteRequestID))

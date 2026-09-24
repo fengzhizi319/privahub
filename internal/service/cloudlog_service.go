@@ -61,7 +61,11 @@ type CloudLogService struct {
 
 // NewCloudLogService creates a CloudLogService.
 func NewCloudLogService(db *gorm.DB, env *EnvService, cfg config.SLSConfig) *CloudLogService {
-	return &CloudLogService{db: db, env: env, cfg: cfg, httpClient: &http.Client{Timeout: 15 * time.Second}, now: time.Now}
+	// The SLS host is operator configuration (not user input), so no IP
+	// filter; redirects are still never followed (signed requests, SSRF).
+	hc := &http.Client{Timeout: 15 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	return &CloudLogService{db: db, env: env, cfg: cfg, httpClient: hc, now: time.Now}
 }
 
 // Configured reports whether SLS is configured.

@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: privahub-data
+  namespace: privahub
+  labels:
+    app.kubernetes.io/name: privahub
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 20Gi
+---
+# Audit spool / anchors are kept on their own volume so that filling the data
+# volume (uploads) can never stop audit writes, and vice versa.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: privahub-audit
+  namespace: privahub
+  labels:
+    app.kubernetes.io/name: privahub
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi

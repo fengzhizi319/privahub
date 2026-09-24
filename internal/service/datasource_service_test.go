@@ -123,7 +123,10 @@ func TestMysqlChecker_OpenError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "MySQL test connection failed")
 	assert.False(t, m.TableExists(context.Background(), &MysqlConfig{}, "d", "t"))
-	assert.Contains(t, NewMysqlChecker().dsn(&MysqlConfig{Endpoint: "h:3306", User: "u", Password: "p", Database: "d"}), "u:p@tcp(h:3306)/d")
+	// Connections use the per-checker guarded dialer (SSRF check at connect time).
+	dsn := NewMysqlChecker().dsn(&MysqlConfig{Endpoint: "h:3306", User: "u", Password: "p", Database: "d"})
+	assert.Contains(t, dsn, "u:p@privahub-guarded-")
+	assert.Contains(t, dsn, "(h:3306)/d")
 }
 
 func newTestDatasourceService(t *testing.T) (*DatasourceService, *DatatableService, *dataFakeKuscia) {
@@ -236,7 +239,8 @@ func TestDatasourceService_DetailNodesDelete(t *testing.T) {
 	require.NoError(t, err)
 	info := d.Info.(*OssDatasourceInfo)
 	assert.Equal(t, "AKI****", info.AK)
-	assert.Equal(t, "SEC****", info.SK)
+	assert.Equal(t, "******", info.SK, "secret keys are fully masked")
+	assert.NotContains(t, info.SK, "SEC")
 	assert.Equal(t, "OSS", d.Type)
 
 	_, err = ds.GetDatasourceDetail(ctx, &DatasourceDetailRequest{OwnerID: "alice", DatasourceID: "none", Type: "OSS"})

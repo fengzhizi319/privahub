@@ -4,8 +4,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"flag"
 	"fmt"
 	"net/http"
@@ -17,8 +15,11 @@ import (
 	"github.com/fengzhizi319/privahub/internal/dao"
 	migration "github.com/fengzhizi319/privahub/internal/dao/migrations"
 	"github.com/fengzhizi319/privahub/internal/wire"
+	pauth "github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/fengzhizi319/privahub/pkg/config"
+	pcrypto "github.com/fengzhizi319/privahub/pkg/crypto"
 	"github.com/fengzhizi319/privahub/pkg/logger"
+	"github.com/fengzhizi319/privahub/pkg/tlsutil"
 	"go.uber.org/zap"
 )
 
@@ -44,7 +45,8 @@ func main() {
 	cfg, err := config.Load(*cfgFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
-		fmt.Fprintln(os.Stderr, "hint: production (no PRIVAHUB_PROFILE) needs PRIVAHUB_AUTH_JWT_SECRET and PRIVAHUB_CRYPTO_AES_KEY; "+
+		fmt.Fprintln(os.Stderr, "hint: production (no PRIVAHUB_PROFILE) needs PRIVAHUB_AUTH_JWT_SECRET, PRIVAHUB_CRYPTO_AES_KEY, "+
+			"main-port TLS (server.tls.* or server.behind_tls_proxy + server.trusted_proxies) and kuscia.protocol tls|mtls; "+
 			"local development: PRIVAHUB_PROFILE=dev")
 		os.Exit(1)
 	}
@@ -65,6 +67,22 @@ func main() {
 		zap.Int("grpc_port", cfg.Server.GRPCPort),
 	)
 
+	// At-rest envelope keyring (crypto.keys / crypto.aes_key, SM4-GCM +
+	// HKDF-SM3). Validate already refused production starts without a key.
+	keyring, err := cfg.Crypto.Keyring()
+	if err != nil {
+		log.Fatal("Invalid crypto configuration", zap.Error(err))
+	}
+	pcrypto.SetDefault(keyring)
+	if keyring == nil {
+		log.Warn("SECURITY: no crypto key configured: secrets are stored in the database unencrypted (dev/test only)")
+	}
+
+	// Password KDF work factor (auth.password_kdf_iterations); set before the
+	// migrations, which wrap legacy raw password hashes with it.
+	log.Info("Password storage: SM3 KDF",
+		zap.Int("iterations", pauth.ConfigurePasswordKDF(cfg.Auth.PasswordKDFIterations)))
+
 	// Initialize database
 	db, err := dao.NewDB(&cfg.Database, log)
 	if err != nil {
@@ -75,6 +93,10 @@ func main() {
 	// Run database migration and seed data
 	if err := migration.AutoMigrate(db, log); err != nil {
 		log.Fatal("Failed to run database migration", zap.Error(err))
+	}
+	// Encrypt legacy plaintext secrets / rotate to the active key (idempotent).
+	if err := migration.EncryptSecretsAtRest(context.Background(), db, log); err != nil {
+		log.Fatal("Failed to encrypt secrets at rest", zap.Error(err))
 	}
 	for _, w := range cfg.SecurityWarnings() {
 		log.Warn("SECURITY: " + w)
@@ -94,27 +116,31 @@ func main() {
 	innerRouter := controllerhttp.NewInnerRouter(log, app)
 	// CENTER: serve the EDGE-forwarded write endpoints on the inner port.
 	controllerhttp.MountEdgeForwardTargets(innerRouter, router, app)
-
-	// Configure HTTP server
-	srv := &http.Server{
-		Addr:         fmt.Sprintf(":%d", cfg.Server.HTTPPort),
-		Handler:      router,
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
+	// Default deny: refuse to start when a registered /api route is not
+	// classified for RBAC and for data-resource checks.
+	if err := controllerhttp.VerifyRouteCoverage(router, innerRouter); err != nil {
+		log.Fatal("Route authorization coverage check failed", zap.Error(err))
 	}
 
-	// Configure inner HTTP server
-	innerSrv := &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", cfg.Server.InnerBindAddress, cfg.Server.InnerPort),
-		Handler:      innerRouter,
-		ReadTimeout:  cfg.Server.ReadTimeout,
-		WriteTimeout: cfg.Server.WriteTimeout,
+	// Configure HTTP servers. WriteTimeout does not cut SSE streams: the SSE
+	// handlers reset their own write deadline per event (service/sse_server.go).
+	srv := newHTTPServer(fmt.Sprintf(":%d", cfg.Server.HTTPPort), router, &cfg.Server)
+	innerSrv := newHTTPServer(fmt.Sprintf("%s:%d", cfg.Server.InnerBindAddress, cfg.Server.InnerPort), innerRouter, &cfg.Server)
+
+	// Main listener: plain TCP, TLS, 国密 TLCP or both (server.tls.*).
+	mainLn, err := tlsutil.Listen("tcp", srv.Addr, cfg.Server.TLS)
+	if err != nil {
+		log.Fatal("HTTP listener failed", zap.Error(err))
+	}
+	if !cfg.Server.TLS.Enabled && !cfg.Server.BehindTLSProxy {
+		log.Warn("SECURITY: main port serves plain HTTP (dev/test only; production requires server.tls or server.behind_tls_proxy)")
 	}
 
 	// Start HTTP server in goroutine
 	go func() {
-		log.Info("HTTP server listening", zap.String("addr", srv.Addr))
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Info("HTTP server listening", zap.String("addr", srv.Addr),
+			zap.Bool("tls", cfg.Server.TLS.Enabled), zap.String("tls_stack", tlsStackName(cfg.Server.TLS)))
+		if err := srv.Serve(mainLn); err != nil && err != http.ErrServerClosed {
 			log.Fatal("HTTP server failed", zap.Error(err))
 		}
 	}()
@@ -122,7 +148,7 @@ func main() {
 	// Inner listener: mTLS when server.inner_auth.tls is configured.
 	innerTLS := cfg.Server.InnerAuth.MTLSEnabled()
 	if innerTLS {
-		tlsCfg, err := innerMTLSConfig(cfg.Server.InnerAuth.TLS.ClientCAFile)
+		tlsCfg, err := tlsutil.MutualTLSConfig(cfg.Server.InnerAuth.TLS.ClientCAFile)
 		if err != nil {
 			log.Fatal("Inner port mTLS configuration failed", zap.Error(err))
 		}
@@ -175,15 +201,37 @@ func main() {
 	log.Info("Server exited gracefully")
 }
 
-// innerMTLSConfig requires and verifies client certificates signed by caFile.
-func innerMTLSConfig(caFile string) (*tls.Config, error) {
-	pem, err := os.ReadFile(caFile)
-	if err != nil {
-		return nil, fmt.Errorf("read client CA: %w", err)
+// newHTTPServer applies the listener hardening shared by both ports:
+// ReadHeaderTimeout (slowloris), IdleTimeout and MaxHeaderBytes.
+func newHTTPServer(addr string, h http.Handler, sc *config.ServerConfig) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadTimeout:       sc.ReadTimeout,
+		ReadHeaderTimeout: durationOr(sc.ReadHeaderTimeout, 5e9),
+		WriteTimeout:      sc.WriteTimeout,
+		IdleTimeout:       durationOr(sc.IdleTimeout, 120e9),
+		MaxHeaderBytes:    intOr(sc.MaxHeaderBytes, 1<<20),
 	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(pem) {
-		return nil, fmt.Errorf("no certificates in client CA %s", caFile)
+}
+
+func tlsStackName(t config.ServerTLSConfig) string {
+	if !t.Enabled {
+		return "none"
 	}
-	return &tls.Config{ClientCAs: pool, ClientAuth: tls.RequireAndVerifyClientCert, MinVersion: tls.VersionTLS12}, nil
+	return t.NormalizedStack()
+}
+
+func durationOr[T ~int64](v T, def T) T {
+	if v <= 0 {
+		return def
+	}
+	return v
+}
+
+func intOr(v, def int) int {
+	if v <= 0 {
+		return def
+	}
+	return v
 }

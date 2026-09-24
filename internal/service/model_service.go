@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
+	"github.com/fengzhizi319/privahub/internal/dao/sqlutil"
 	"github.com/fengzhizi319/privahub/internal/graphjob"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
@@ -305,9 +306,7 @@ func transferKeyword(keyword string) string {
 	if strings.TrimSpace(keyword) == "" {
 		return ""
 	}
-	keyword = strings.ReplaceAll(keyword, "!", "!!")
-	keyword = strings.ReplaceAll(keyword, "%", "!%")
-	return strings.ReplaceAll(keyword, "_", "!_")
+	return sqlutil.EscapeLike(keyword)
 }
 
 // ModelPackPage mirrors ModelManagementServiceImpl.modelPackPage.
@@ -431,7 +430,7 @@ func (s *ModelService) RefreshPublishing(ctx context.Context, pack *model.Projec
 	st := resp.Data.Status
 	var sv model.ProjectModelServingDO
 	hasServing := s.db.WithContext(ctx).Where("serving_id = ?", pack.ServingID).First(&sv).Error == nil
-	newStats := pack.ModelStats
+	var newStats int8
 	switch st.State {
 	case servingStatusAvailable:
 		newStats = model.ModelStatsPublished

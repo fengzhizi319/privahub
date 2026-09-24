@@ -56,6 +56,7 @@ func newAuthFlowEnv(t *testing.T) *authFlowEnv {
 	r := gin.New()
 	authMW := []gin.HandlerFunc{middleware.SessionAuth(jwtMgr, authSvc, true), middleware.RBAC(db, env, middleware.RBACConfig{Enabled: true})}
 	r.POST("/api/login", ah.Login)
+	r.POST("/api/user/refresh", ah.RefreshToken)
 	r.POST("/api/logout", append(authMW, ah.Logout)...)
 	g := r.Group("/api/v1alpha1", authMW...)
 	g.POST("/user/get", uh.Get)
@@ -179,7 +180,10 @@ func TestAuthFlow_UpdatePwdUsesSessionName(t *testing.T) {
 	var admin, eu model.UserAccountsDO
 	e.db.Where("name = ?", "admin").First(&admin)
 	e.db.Where("name = ?", "eu").First(&eu)
-	if admin.PasswordHash != service.HashPassword("12345678") || eu.PasswordHash != service.HashPassword("new") {
+	matches := func(stored, plain string) bool {
+		return auth.VerifyStoredPassword(stored, auth.PasswordCandidates{SHA256: service.HashPassword(plain)}).OK
+	}
+	if !matches(admin.PasswordHash, "12345678") || !matches(eu.PasswordHash, "new") {
 		t.Error("updatePwd must change the session user's password only")
 	}
 	// Sessions were cleared.

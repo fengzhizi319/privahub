@@ -39,7 +39,7 @@ func TestUserService_CreateUser_Success(t *testing.T) {
 
 	user, err := svc.CreateUser(context.Background(), &CreateUserRequest{
 		Name:      "testuser",
-		Password:  "password123",
+		Password:  "Str0ng-Pass#1",
 		OwnerType: "CENTER",
 		OwnerID:   "kuscia-system",
 		RoleCodes: []string{"ADMIN"},
@@ -58,10 +58,10 @@ func TestUserService_CreateUser_Success(t *testing.T) {
 	// Verify password was hashed
 	var dbUser model.UserAccountsDO
 	db.Where("name = ?", "testuser").First(&dbUser)
-	if dbUser.PasswordHash == "password123" {
+	if dbUser.PasswordHash == "Str0ng-Pass#1" {
 		t.Error("password should be hashed, not stored in plain text")
 	}
-	if dbUser.PasswordHash != HashPassword("password123") {
+	if !storedMatches(dbUser.PasswordHash, "Str0ng-Pass#1") {
 		t.Error("password hash mismatch")
 	}
 }
@@ -216,8 +216,11 @@ func TestUserService_ResetPassword_Success(t *testing.T) {
 	// Verify new password hash
 	var dbUser model.UserAccountsDO
 	db.Where("name = ?", "resetuser").First(&dbUser)
-	if dbUser.PasswordHash != HashPassword("newpass123") {
+	if !storedMatches(dbUser.PasswordHash, "newpass123") {
 		t.Error("password hash not updated correctly")
+	}
+	if !dbUser.MustChangePassword || dbUser.PasswordVersion != 1 {
+		t.Errorf("admin reset must force a change and bump the version: %+v", dbUser)
 	}
 }
 

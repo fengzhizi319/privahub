@@ -35,6 +35,8 @@ const (
 	RoleEdgeNode    = "EDGE_NODE"
 	RoleEdgeUser    = "EDGE_USER"
 	RoleP2PNode     = "P2P_NODE"
+	// RoleAuditor may read and verify the security audit trail (read-only).
+	RoleAuditor = "AUDITOR"
 )
 
 // AllInterfaceResource grants access to every API resource code.
@@ -63,6 +65,12 @@ type UserContext struct {
 	// Go-only fields (not part of the Java DTO, omitted from JSON when empty).
 	UserID    string `json:"userId,omitempty"`
 	SessionID string `json:"-"` // stored in user_tokens.session_id
+	// MustChangePassword restricts the session to user/get, user/updatePwd
+	// and logout until the password is changed (generated initial admin
+	// password, admin reset).
+	MustChangePassword bool `json:"mustChangePassword,omitempty"`
+	// PwdVer is the account password version the session was created with.
+	PwdVer int64 `json:"-"`
 }
 
 // IsCenterOwner reports whether the user is a CENTER platform user (full data

@@ -15,14 +15,14 @@ kuscia:
   api_address: "${KUSCIA_API_ADDRESS:127.0.0.1}"
   api_port: 8083  # KusciaAPI gRPC port
   http_port: 8082 # KusciaAPI HTTP port (used by privahub)
-  protocol: "${KUSCIA_PROTOCOL:tls}"
+  protocol: "tls" # override with PRIVAHUB_KUSCIA_PROTOCOL (mtls); notls is refused outside dev/test
   gateway: "${KUSCIA_GW_ADDRESS:127.0.0.1:1080}"
   nodes:
     - domain_id: "${NODE_ID}"
       mode: "lite"
       host: "${KUSCIA_API_ADDRESS:127.0.0.1}"
       port: 8083
-      protocol: "${KUSCIA_PROTOCOL:tls}"
+      protocol: "tls" # override with PRIVAHUB_KUSCIA_PROTOCOL (mtls); notls is refused outside dev/test
 
 observability:
   log_level: "info"

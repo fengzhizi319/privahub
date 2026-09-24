@@ -23,6 +23,12 @@ func NewInnerRouter(log *zap.Logger, app *wire.App) *gin.Engine {
 
 	r.Use(middleware.TraceID())
 	r.Use(middleware.Recovery(log))
+	// ClientIP = direct peer unless server.trusted_proxies says otherwise.
+	if err := middleware.ConfigureTrustedProxies(r, app.Config.Server.TrustedProxies, app.Config.Server.TrustedPlatform); err != nil {
+		log.Fatal("invalid server.trusted_proxies", zap.Error(err))
+	}
+	// Body limit on node-to-node requests (server.max_body_size).
+	r.Use(middleware.BodyLimitWithOverrides(app.Config.Server.MaxBodySize, nil))
 	// Routes disabled by sync.disabled_routes (Java unregister-mapping.path).
 	if app.Sync != nil && len(app.Sync.InnerMiddlewares) > 0 {
 		r.Use(app.Sync.InnerMiddlewares...)
@@ -72,10 +78,13 @@ func MountEdgeForwardTargets(inner, main *gin.Engine, app *wire.App) {
 	for _, ri := range inner.Routes() {
 		existing[ri.Method+" "+ri.Path] = true
 	}
+	// CaseKeysRequest runs before the authorization guards so that
+	// DataResourceGuard reads the same (validated, twin-expanded) body the
+	// handler binds.
 	chain := []gin.HandlerFunc{
 		middleware.CaseKeysResponse(),
-		app.InnerGuardMiddleware(), app.InnerAuthMiddleware(), app.RBACMiddleware(), app.DataResourceMiddleware(), app.UserRateLimitMiddleware(),
-		middleware.CaseKeysRequest(),
+		app.InnerGuardMiddleware(), app.InnerAuthMiddleware(), middleware.CaseKeysRequest(),
+		app.RBACMiddleware(), app.DataResourceMiddleware(), app.UserRateLimitMiddleware(),
 	}
 	for _, ri := range main.Routes() {
 		if ri.Method != http.MethodPost || !want[ri.Path] || existing[ri.Method+" "+ri.Path] {
@@ -83,4 +92,14 @@ func MountEdgeForwardTargets(inner, main *gin.Engine, app *wire.App) {
 		}
 		inner.POST(ri.Path, append(append([]gin.HandlerFunc{}, chain...), ri.HandlerFunc)...)
 	}
+}
+
+// VerifyRouteCoverage runs middleware.VerifyRouteCoverage over every route of
+// the given engines (cmd/server refuses to start on error).
+func VerifyRouteCoverage(engines ...*gin.Engine) error {
+	var all gin.RoutesInfo
+	for _, e := range engines {
+		all = append(all, e.Routes()...)
+	}
+	return middleware.VerifyRouteCoverage(all)
 }

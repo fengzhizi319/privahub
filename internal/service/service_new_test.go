@@ -47,7 +47,7 @@ func TestNodeUserService_CreateAndList(t *testing.T) {
 	err := svc.Create(ctx, &NodeUserCreateRequest{
 		NodeID:   "alice",
 		UserName: "edge_user1",
-		Password: "password123",
+		Password: "Str0ng-Pass#1",
 	})
 	if err != nil {
 		t.Fatalf("Create failed: %v", err)
@@ -114,7 +114,7 @@ func TestNodeUserService_ResetPassword(t *testing.T) {
 	}
 	var u model.UserAccountsDO
 	db.Where("name = ?", "edge_user2").First(&u)
-	if u.PasswordHash != HashPassword("new_pass") {
+	if !storedMatches(u.PasswordHash, "new_pass") {
 		t.Error("password not updated")
 	}
 

@@ -33,6 +33,13 @@ type DataService struct {
 	log          *zap.Logger
 }
 
+// Upload store permissions. Uploaded CSVs are read by Kuscia DataProxy under a
+// different uid, so group read is granted; "other" gets nothing.
+const (
+	uploadDirPerm  os.FileMode = 0o750
+	uploadFilePerm os.FileMode = 0o640
+)
+
 // NewDataService creates a DataService. storeDir is the upload root
 // (Java secretpad.data.dir-path); empty => $PRIVAHUB_DATA_DIR or ./data.
 func NewDataService(db *gorm.DB, kc *kuscia.Client, env *EnvService, storeDir string) *DataService {
@@ -45,7 +52,9 @@ func NewDataService(db *gorm.DB, kc *kuscia.Client, env *EnvService, storeDir st
 	if abs, err := filepath.Abs(storeDir); err == nil {
 		storeDir = abs
 	}
-	_ = os.MkdirAll(storeDir, 0o755)
+	// 0750: owner rwx, group r-x so a Kuscia/DataProxy reader that shares the
+	// volume via a common group (fsGroup) can traverse; no world access.
+	_ = os.MkdirAll(storeDir, uploadDirPerm) //nolint:gosec // G703: storeDir is operator config (data dir / PRIVAHUB_DATA_DIR), never request input
 	return &DataService{db: db, kusciaClient: kc, env: env, storeDir: storeDir, log: zap.NewNop()}
 }
 
@@ -194,10 +203,16 @@ func (s *DataService) Upload(ctx context.Context, nodeID, fileName string, src i
 	if !inDir(s.storeDir, target) {
 		return nil, bizErr(errcode.DataIllegalParamsError, "file path not in whitelist")
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, uploadDirPerm); err != nil {
 		return nil, bizWrap(errcode.SystemUnknownError, err, "Failed to create new dir")
 	}
-	out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	// target is a random name under dir, verified by inDir(s.storeDir, target)
+	// above. 0640 instead of 0600: the reader is Kuscia DataProxy / the task
+	// container (a different uid — root in the Docker lite image, or a
+	// non-root uid sharing the volume through a common group/fsGroup in K8s);
+	// group read keeps that working while world access stays denied.
+	out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, uploadFilePerm) //nolint:gosec // G302/G304: path contained by inDir; 0640 needed for cross-uid DataProxy read via shared group
+
 	if err != nil {
 		if os.IsExist(err) {
 			return nil, bizErr(errcode.DataFileExistsError, "")
@@ -368,7 +383,8 @@ func writeTarGz(w io.Writer, root string) error {
 			return err
 		}
 		if info.Mode().IsRegular() {
-			f, err := os.Open(p)
+			f, err := os.Open(p) //nolint:gosec // G304: p is walked under root, which DataService.download contained with inDir + EvalSymlinks; symlinks are skipped
+
 			if err != nil {
 				return err
 			}

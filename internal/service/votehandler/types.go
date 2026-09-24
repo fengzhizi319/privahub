@@ -111,6 +111,8 @@ type VoteRequestBody struct {
 	ApprovedThreshold int      `json:"approved_threshold"`
 	ApprovedAction    string   `json:"approved_action,omitempty"`
 	RejectedAction    string   `json:"rejected_action,omitempty"`
+	// SignMeta (signed_at + nonce) is set on new signatures (signature.go).
+	SignMeta
 }
 
 // VoteRequestMessage is stored in vote_request.request_msg / vote_invite.vote_msg.
@@ -125,6 +127,8 @@ type VoteReplyBody struct {
 	VoteRequestID string `json:"vote_request_id"`
 	Voter         string `json:"voter"`
 	Action        string `json:"action"` // APPROVE | REJECT
+	// SignMeta (signed_at + nonce) is set on new signatures (signature.go).
+	SignMeta
 }
 
 // VoteReplyMessage is stored in vote_invite.vote_msg after a reply.

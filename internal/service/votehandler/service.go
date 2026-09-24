@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
+	"github.com/fengzhizi319/privahub/internal/dao/sqlutil"
 	"github.com/fengzhizi319/privahub/internal/service"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"go.uber.org/zap"
@@ -220,7 +221,7 @@ func (s *Service) List(ctx context.Context, req *MessageListRequest) (*MessageLi
 			}
 		}
 		if req.KeyWord != "" {
-			q = q.Where("description LIKE ?", "%"+req.KeyWord+"%")
+			q = q.Where("description LIKE ? ESCAPE '!'", sqlutil.Contains(req.KeyWord))
 		}
 		if req.Type != "" {
 			q = q.Where("type = ?", req.Type)
@@ -240,7 +241,7 @@ func (s *Service) List(ctx context.Context, req *MessageListRequest) (*MessageLi
 	} else {
 		q := db.Model(&model.VoteRequestDO{}).Where("initiator = ?", req.OwnerID)
 		if req.KeyWord != "" {
-			q = q.Where("description LIKE ?", "%"+req.KeyWord+"%")
+			q = q.Where("description LIKE ? ESCAPE '!'", sqlutil.Contains(req.KeyWord))
 		}
 		if req.Type != "" {
 			q = q.Where("type = ?", req.Type)
@@ -402,7 +403,7 @@ func (s *Service) Reply(ctx context.Context, action, reason, participantID, vote
 		if action == ActionApproved {
 			teeAction = "APPROVE"
 		}
-		replyBody := b64(toJSON(VoteReplyBody{VoteRequestID: voteID, Voter: voter, Action: teeAction}))
+		replyBody := b64(toJSON(VoteReplyBody{VoteRequestID: voteID, Voter: voter, Action: teeAction, SignMeta: newSignMeta()}))
 		sig, err := SignSHA256withRSA([]byte(replyBody+msg.VoteRequestSignature), kc.Key)
 		if err != nil {
 			return bizWrap(errcode.SystemSignatureError, err, "")

@@ -3,9 +3,11 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/fengzhizi319/privahub/internal/audit"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/service"
 	"github.com/fengzhizi319/privahub/pkg/auth"
@@ -130,8 +132,6 @@ var APIResourceCodes = map[string]string{
 	"/api/v1alpha1/graphDatasource/bind":      "GRAPH_UPDATE",
 	"/api/v1alpha1/graphDatasource/unbind":    "GRAPH_UPDATE",
 	"/api/v1alpha1/graphDatasource/list":      "GRAPH_DETAIL",
-	"/api/v1alpha1/featureTable/create":       "DATATABLE_CREATE",
-	"/api/v1alpha1/featureTable/list":         "DATATABLE_LIST",
 	"/api/v1alpha1/featureTable/project/list": "PRJ_DATATABLE_GET",
 }
 
@@ -329,6 +329,15 @@ func RBAC(db *gorm.DB, platform PlatformProvider, cfg RBACConfig) gin.HandlerFun
 		if path == "" {
 			path = c.Request.URL.Path
 		}
+		if AuditorPaths[path] {
+			// Security audit trail: AUDITOR / ADMIN only (audit_trail.go).
+			if !IsAuditor(c.Request.Context(), db, u) {
+				denyInterface(c, path, u)
+				return
+			}
+			c.Next()
+			return
+		}
 		if AdminOnlyPaths[path] {
 			if !IsAdmin(c.Request.Context(), db, u) {
 				denyInterface(c, path, u)
@@ -337,7 +346,12 @@ func RBAC(db *gorm.DB, platform PlatformProvider, cfg RBACConfig) gin.HandlerFun
 			c.Next()
 			return
 		}
-		code := APIResourceCodes[path]
+		code, mapped := APIResourceCodes[path]
+		if !mapped && strings.HasPrefix(path, "/api/") && !RouteClassified(path) {
+			// Default deny: an authenticated route nobody classified.
+			denyInterface(c, "UNCLASSIFIED:"+path, u)
+			return
+		}
 		if !CheckInterfaceResource(c.Request.Context(), db, platform, u, code) {
 			denyInterface(c, code, u)
 			return
@@ -346,8 +360,21 @@ func RBAC(db *gorm.DB, platform PlatformProvider, cfg RBACConfig) gin.HandlerFun
 	}
 }
 
+// RouteClassified reports whether path is known to the interface RBAC tables
+// (resource code, admin-only, explicitly unchecked or public).
+func RouteClassified(path string) bool {
+	if _, ok := APIResourceCodes[path]; ok {
+		return true
+	}
+	if _, ok := NoInterfaceCheckPaths[path]; ok {
+		return true
+	}
+	return AdminOnlyPaths[path] || PublicPaths[path] || AuditorPaths[path]
+}
+
 func denyInterface(c *gin.Context, code string, u *auth.UserContext) {
 	msg := fmt.Sprintf("No permission to access the interface(%s). owner_type(%s), owner_id(%s)", code, u.OwnerType, u.OwnerID)
+	recordDenial(c, u, "interface", code, msg)
 	c.AbortWithStatusJSON(200, response.Body{Status: &response.Status{
 		Code: errcode.AuthFailed.Code, Msg: response.Message(c, errcode.AuthFailed, msg),
 	}})
@@ -397,6 +424,7 @@ func RequireDataResource(c *gin.Context, kind service.DataResourceType, id strin
 		ownerType, ownerID = u.OwnerType, u.OwnerID
 	}
 	msg := fmt.Sprintf("No permission to access the data %s(%s). owner_type(%s), owner_id(%s)", kind, id, ownerType, ownerID)
+	recordDenial(c, u, string(kind), id, msg)
 	c.AbortWithStatusJSON(200, response.Body{Status: &response.Status{
 		Code: errcode.AuthFailed.Code, Msg: response.Message(c, errcode.AuthFailed, msg),
 	}})
@@ -411,4 +439,25 @@ func RequireNodeAccess(c *gin.Context, nodeID string) bool {
 // RequireProjectAccess is RequireDataResource for PROJECT_ID.
 func RequireProjectAccess(c *gin.Context, projectID string) bool {
 	return RequireDataResource(c, service.DataResourceProjectID, projectID)
+}
+
+// recordDenial writes an authorization denial to the security audit trail.
+func recordDenial(c *gin.Context, u *auth.UserContext, resourceType, resourceID, reason string) {
+	e := audit.Event{
+		IP:           c.ClientIP(),
+		Action:       audit.ActionAuthzDenied,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+		Result:       audit.ResultDenied,
+		Reason:       reason,
+		Extra:        map[string]string{"method": c.Request.Method, "path": c.Request.URL.Path},
+	}
+	if u != nil {
+		e.Actor, e.OwnerID = u.Name, u.OwnerID
+		e.ActorType = audit.ActorUser
+		if u.IsVirtualNode() {
+			e.ActorType = audit.ActorNode
+		}
+	}
+	audit.Record(c.Request.Context(), e)
 }

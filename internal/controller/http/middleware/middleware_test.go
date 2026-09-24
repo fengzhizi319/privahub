@@ -323,13 +323,38 @@ func TestSecurityHeaders(t *testing.T) {
 	}{
 		{"X-Content-Type-Options", "nosniff"},
 		{"X-Frame-Options", "DENY"},
-		{"X-XSS-Protection", "1; mode=block"},
 		{"Cache-Control", "no-store"},
+		{"Referrer-Policy", "no-referrer"},
+		{"Content-Security-Policy", DefaultContentSecurityPolicy},
 	}
 	for _, tt := range tests {
 		if got := w.Header().Get(tt.header); got != tt.expected {
 			t.Errorf("header %s: expected %q, got %q", tt.header, tt.expected, got)
 		}
+	}
+	for _, h := range []string{"X-XSS-Protection", "Strict-Transport-Security"} {
+		if got := w.Header().Get(h); got != "" {
+			t.Errorf("header %s must not be sent over plain HTTP by default, got %q", h, got)
+		}
+	}
+	if pp := w.Header().Get("Permissions-Policy"); !strings.Contains(pp, "camera=()") {
+		t.Errorf("Permissions-Policy = %q", pp)
+	}
+	for _, d := range []string{"default-src 'self'", "script-src 'self';", "frame-ancestors 'none'", "base-uri 'self'", "object-src 'none'", "connect-src 'self'"} {
+		if !strings.Contains(DefaultContentSecurityPolicy, d) {
+			t.Errorf("CSP lacks %q", d)
+		}
+	}
+}
+
+func TestSecurityHeaders_HSTS(t *testing.T) {
+	r := gin.New()
+	r.Use(SecurityHeadersWith(SecurityHeaderOptions{HSTS: true}))
+	r.GET("/test", func(c *gin.Context) { c.Status(204) })
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest("GET", "/test", nil))
+	if got := w.Header().Get("Strict-Transport-Security"); !strings.HasPrefix(got, "max-age=31536000") {
+		t.Errorf("HSTS = %q", got)
 	}
 }
 

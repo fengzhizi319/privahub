@@ -13,6 +13,7 @@ import (
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
+	"github.com/fengzhizi319/privahub/internal/dao/sqlutil"
 	"github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/kuscia"
@@ -331,6 +332,8 @@ func (s *NodeService) CreateNode(ctx context.Context, req *CreateNodeRequest) (s
 			NodeID:       id,
 			Name:         id,
 			PasswordHash: HashPassword(id + nodeUserInitPwdSuffix),
+			// Well-known initial password: force a change at first login.
+			MustChangePassword: true,
 		}); err != nil {
 			return bizWrap(errcode.NodeCreateError, err, "")
 		}
@@ -433,8 +436,8 @@ func (s *NodeService) PageNodes(ctx context.Context, req *PageNodeRequest) (*Nod
 	page, size := normalizePage(firstPositive(req.Page, req.PageNumber), firstPositive(req.Size, req.PageSize))
 	q := s.db.WithContext(ctx).Model(&model.NodeDO{})
 	if kw := strings.TrimSpace(req.Search); kw != "" {
-		like := "%" + kw + "%"
-		q = q.Where("name LIKE ? OR node_id LIKE ?", like, like)
+		like := sqlutil.Contains(kw)
+		q = q.Where("name LIKE ? ESCAPE '!' OR node_id LIKE ? ESCAPE '!'", like, like)
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {

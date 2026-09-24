@@ -137,6 +137,7 @@ func TestValidate_ValidConfig(t *testing.T) {
 			JWTSecret: "my-secret-of-sufficient-length",
 		},
 	}
+	secureTransport(cfg)
 
 	err := cfg.Validate()
 	if err != nil {

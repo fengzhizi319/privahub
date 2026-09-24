@@ -2,14 +2,14 @@ package migration
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
+	"github.com/fengzhizi319/privahub/pkg/auth"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
@@ -96,11 +96,20 @@ func seedAdminUser(ctx context.Context, db *gorm.DB, log *zap.Logger, opts SeedO
 	if ownerTypeForPlatform(opts.PlatformType) == "CENTER" && ownerID == "" {
 		ownerID = "kuscia-system"
 	}
+	stored, err := auth.HashClientPassword(hashPassword(password))
+	if err != nil {
+		return err
+	}
+	now := time.Now()
 	admin := &model.UserAccountsDO{
 		Name:         opts.AdminName,
-		PasswordHash: hashPassword(password),
+		PasswordHash: stored,
 		OwnerType:    ownerTypeForPlatform(opts.PlatformType),
 		OwnerID:      ownerID,
+		// A generated password is only a bootstrap secret: the first session
+		// is restricted to changing it (see middleware.MustChangePasswordGuard).
+		MustChangePassword: generated,
+		GmtPasswordChanged: &now,
 	}
 	if generated {
 		// Write the password before creating the account so a failure does
@@ -117,7 +126,7 @@ func seedAdminUser(ctx context.Context, db *gorm.DB, log *zap.Logger, opts SeedO
 		switch {
 		case generated:
 			abs, _ := filepath.Abs(opts.InitialPasswordFile)
-			log.Warn("initial admin password generated; read it once, log in, change it, then delete the file",
+			log.Warn("initial admin password generated; read it once and log in — the first login must change it, after which the file is deleted automatically",
 				zap.String("user", opts.AdminName), zap.String("file", abs))
 		case opts.AdminPassword != "":
 			log.Info("initial admin created with the configured password", zap.String("user", opts.AdminName))
@@ -140,20 +149,7 @@ func writeInitialPassword(path, password string) error {
 	return os.Chmod(path, 0o600)
 }
 
-const passwordAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#%^&*"
-
-func randomPassword(n int) (string, error) {
-	b := make([]byte, n)
-	max := big.NewInt(int64(len(passwordAlphabet)))
-	for i := range b {
-		v, err := rand.Int(rand.Reader, max)
-		if err != nil {
-			return "", err
-		}
-		b[i] = passwordAlphabet[v.Int64()]
-	}
-	return string(b), nil
-}
+func randomPassword(n int) (string, error) { return auth.GenerateOneTimePassword(n) }
 
 // javaRoles mirrors the Java sys_role seeds (+ Go ADMIN / CENTER_ADMIN).
 var javaRoles = map[string]string{
@@ -162,6 +158,7 @@ var javaRoles = map[string]string{
 	"EDGE_NODE":    "Edge node rpc",
 	"EDGE_USER":    "Edge 用户",
 	"P2P_NODE":     "P2P 用户",
+	"AUDITOR":      "审计员",
 }
 
 // seedRBAC seeds sys_role / sys_resource / sys_role_resource_rel from the Java

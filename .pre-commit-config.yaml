@@ -1,0 +1,76 @@
+# pre-commit hooks for privahub (fast subset of `make check`).
+#
+# Install once per clone:
+#   pipx install pre-commit        # or: python3 -m pip install --user pre-commit
+#   make pre-commit-install        # == pre-commit install --install-hooks
+# Run on everything:  pre-commit run --all-files
+#
+# Requirements on PATH: go (>= 1.25), golangci-lint v2 (the hook falls back to
+# `go run` with the pinned version), python3. The full gate set (tests,
+# govulncheck, OpenAPI drift, full-history gitleaks) runs in `make check`/CI.
+default_install_hook_types: [pre-commit]
+fail_fast: false
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks          # staged changes only; config: .gitleaks.toml
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+        exclude: ^web/
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key
+      - id: trailing-whitespace
+        exclude: ^(web/|.*\.md$)
+      - id: end-of-file-fixer
+        exclude: ^(web/|.*\.json$)
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+        files: ^scripts/.*\.sh$
+
+  - repo: local
+    hooks:
+      - id: gofmt
+        name: gofmt
+        language: system
+        entry: bash -c 'out=$("$(go env GOROOT)/bin/gofmt" -l "$@") || exit 1; [ -z "$out" ] || { echo "gofmt needed:"; echo "$out"; exit 1; }' --
+        types: [go]
+      - id: golangci-lint-fast
+        name: golangci-lint (fast linters, changed packages)
+        language: system
+        entry: bash -c 'L=$(command -v golangci-lint || echo "go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2"); CGO_ENABLED=1 $L run --fast-only --new-from-rev=HEAD ./...'
+        types: [go]
+        pass_filenames: false
+      - id: sqli-check
+        name: SQL injection guard (GORM)
+        language: system
+        entry: bash scripts/check_sql_injection_guard.sh
+        files: \.go$|^scripts/sqli-allowlist\.txt$
+        pass_filenames: false
+      - id: redact-check
+        name: log redaction guard
+        language: system
+        entry: bash scripts/check_log_redaction.sh
+        types: [go]
+        pass_filenames: false
+      - id: k8s-check
+        name: deployment manifest baseline
+        language: system
+        entry: bash scripts/check_k8s_manifests.sh
+        files: ^deployments/
+        pass_filenames: false
+      - id: image-check
+        name: base image digest pins
+        language: system
+        entry: bash scripts/check_base_image_pins.sh
+        files: Dockerfile
+        pass_filenames: false

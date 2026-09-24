@@ -3,12 +3,15 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"unicode"
 
+	"github.com/fengzhizi319/privahub/pkg/errcode"
+	"github.com/fengzhizi319/privahub/pkg/response"
 	"github.com/gin-gonic/gin"
 )
 
@@ -76,10 +79,14 @@ func expandKeys(v interface{}) interface{} {
 		var adds []kv
 		for k, val := range t {
 			t[k] = expandKeys(val)
-			if snake := toSnakeCase(k); snake != k {
+			// Twins must stay in k's canonical class (CanonicalJSONKey): a
+			// Unicode case mapping outside encoding/json's fold orbit could
+			// otherwise alias another key.
+			ck := CanonicalJSONKey(k)
+			if snake := toSnakeCase(k); snake != k && CanonicalJSONKey(snake) == ck {
 				adds = append(adds, kv{snake, t[k]})
 			}
-			if camel := toCamelCase(k); camel != k {
+			if camel := toCamelCase(k); camel != k && CanonicalJSONKey(camel) == ck {
 				adds = append(adds, kv{camel, t[k]})
 			}
 		}
@@ -159,6 +166,36 @@ func shouldSkipCasePath(path string) bool {
 	return false
 }
 
+// isFormContentType reports multipart / urlencoded bodies (not JSON-bound).
+func isFormContentType(ct string) bool {
+	ct = strings.ToLower(ct)
+	return strings.HasPrefix(ct, "multipart/") || strings.HasPrefix(ct, "application/x-www-form-urlencoded")
+}
+
+// rejectBody answers a malformed / ambiguous / oversized request body and
+// aborts the chain: HTTP 413 for the body limit, otherwise the Java-style
+// ParamError envelope (HTTP 200).
+func rejectBody(c *gin.Context, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
+			"status": gin.H{"code": 413, "msg": "request body too large"},
+		})
+		return
+	}
+	msg := "invalid request body"
+	if errors.Is(err, ErrDuplicateJSONKey) {
+		msg = "duplicate or aliased keys (e.g. projectId and project_id) are not allowed"
+	}
+	c.AbortWithStatusJSON(http.StatusOK, response.Body{Status: &response.Status{
+		Code: errcode.ParamError.Code, Msg: response.Message(c, errcode.ParamError, msg),
+	}})
+}
+
+// ctxJSONKeysChecked marks a request whose JSON body CaseKeysRequest validated
+// (and then expanded with twin keys).
+const ctxJSONKeysChecked = "json_keys_checked"
+
 // CaseKeysRequest normalizes incoming JSON request bodies so that handlers
 // binding either snake_case or camelCase struct tags both receive their fields.
 //
@@ -167,26 +204,43 @@ func shouldSkipCasePath(path string) bool {
 // "projectId" against a `json:"project_id"` tag, which previously caused
 // widespread ParamError responses. This middleware additively injects the twin
 // key for every object key, reconciling both conventions without breaking any
-// existing endpoint. Only application/json bodies are processed; multipart and
-// empty bodies are left untouched.
+// existing endpoint.
+//
+// Security: before expanding, every JSON body (any Content-Type except
+// multipart / urlencoded forms, since ShouldBindJSON ignores Content-Type) is
+// scanned with CheckJSONKeys; bodies with duplicate or aliased keys (same
+// CanonicalJSONKey at any depth) or trailing data are rejected with ParamError,
+// so authorization guards and handler bindings can never see different ids.
 func CaseKeysRequest() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !isJSONContentType(c.GetHeader("Content-Type")) {
+		if isFormContentType(c.GetHeader("Content-Type")) {
 			c.Next()
 			return
 		}
-		if c.Request.Body == nil || c.Request.ContentLength == 0 {
+		if c.Request.Body == nil || c.Request.Body == http.NoBody || c.Request.ContentLength == 0 {
 			c.Next()
 			return
 		}
 
 		body, err := io.ReadAll(c.Request.Body)
 		_ = c.Request.Body.Close()
-		if err != nil || len(bytes.TrimSpace(body)) == 0 {
+		if err != nil {
+			// Typically the BodyLimit cap: never hand a truncated body on.
+			rejectBody(c, err)
+			return
+		}
+		if len(bytes.TrimSpace(body)) == 0 || (!isJSONContentType(c.GetHeader("Content-Type")) && !looksLikeJSON(body)) {
 			c.Request.Body = io.NopCloser(bytes.NewReader(body))
 			c.Next()
 			return
 		}
+		if err := CheckJSONKeys(body); err != nil {
+			rejectBody(c, err)
+			return
+		}
+		// The body below holds only canonical-unique originals plus their
+		// same-valued twins; DataResourceGuard relies on this.
+		c.Set(ctxJSONKeysChecked, true)
 
 		// Only JSON objects carry keys worth expanding; arrays of scalars and
 		// non-JSON payloads are passed through unchanged.

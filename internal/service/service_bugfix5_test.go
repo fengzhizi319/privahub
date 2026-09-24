@@ -50,7 +50,7 @@ func TestUserService_CreateUser_Atomic(t *testing.T) {
 
 	vo, err := svc.CreateUser(context.Background(), &CreateUserRequest{
 		Name:      "testuser",
-		Password:  "password123",
+		Password:  "Str0ng-Pass#1",
 		RoleCodes: []string{"ADMIN", "USER"},
 		NodeIDs:   []string{"alice", "bob"},
 	})
@@ -122,7 +122,7 @@ func TestUserService_DeleteUser_Atomic(t *testing.T) {
 	// Create user with roles and nodes
 	_, err := svc.CreateUser(context.Background(), &CreateUserRequest{
 		Name:      "deleteuser",
-		Password:  "password",
+		Password:  "Str0ng-Pass#2",
 		RoleCodes: []string{"ADMIN"},
 		NodeIDs:   []string{"alice"},
 	})

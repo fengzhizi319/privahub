@@ -30,6 +30,9 @@
           "deployMode": {
             "type": "string"
           },
+          "mustChangePassword": {
+            "type": "boolean"
+          },
           "name": {
             "type": "string"
           },
@@ -982,35 +985,6 @@
         },
         "type": "object"
       },
-      "service.EnvDTO": {
-        "properties": {
-          "deploy_mode": {
-            "type": "string"
-          },
-          "inst_id": {
-            "type": "string"
-          },
-          "is_autonomy": {
-            "type": "boolean"
-          },
-          "is_center": {
-            "type": "boolean"
-          },
-          "is_p2p_edge": {
-            "type": "boolean"
-          },
-          "node_id": {
-            "type": "string"
-          },
-          "platformNodeId": {
-            "type": "string"
-          },
-          "platformType": {
-            "type": "string"
-          }
-        },
-        "type": "object"
-      },
       "service.FeatureDataSourceVO": {
         "properties": {
           "columns": {
@@ -1820,6 +1794,9 @@
           "expires_at": {
             "format": "date-time",
             "type": "string"
+          },
+          "mustChangePassword": {
+            "type": "boolean"
           },
           "name": {
             "type": "string"
@@ -4137,6 +4114,193 @@
         },
         "type": "object"
       },
+      "v1.AuditListRequest": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "endTime": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "resourceId": {
+            "type": "string"
+          },
+          "resourceType": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "startTime": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "traceId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "v1.AuditListResponse": {
+        "properties": {
+          "list": {
+            "items": {
+              "$ref": "#/components/schemas/v1.AuditRecordVO"
+            },
+            "type": "array"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "total": {
+            "format": "int64",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "v1.AuditRecordVO": {
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "actorType": {
+            "type": "string"
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "extra": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "ownerId": {
+            "type": "string"
+          },
+          "prevHash": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "resourceId": {
+            "type": "string"
+          },
+          "resourceType": {
+            "type": "string"
+          },
+          "result": {
+            "type": "string"
+          },
+          "seq": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "time": {
+            "type": "string"
+          },
+          "traceId": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "v1.AuditVerifyResponse": {
+        "properties": {
+          "algorithm": {
+            "type": "string"
+          },
+          "anchorWarning": {
+            "type": "string"
+          },
+          "anchoringEnabled": {
+            "type": "boolean"
+          },
+          "anchorsChecked": {
+            "type": "integer"
+          },
+          "archivedThrough": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "archivesMissing": {
+            "type": "integer"
+          },
+          "archivesVerified": {
+            "type": "integer"
+          },
+          "breakKind": {
+            "type": "string"
+          },
+          "brokenId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "brokenSeq": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "checked": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "firstSeq": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "lastSeq": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "segments": {
+            "type": "integer"
+          },
+          "tailHash": {
+            "type": "string"
+          },
+          "tailSeq": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "valid": {
+            "type": "boolean"
+          },
+          "verifiedAt": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "v1.modelIDRequest": {
         "properties": {
           "modelId": {
@@ -4749,7 +4913,7 @@
             "description": "SecretPad response envelope (business errors use status.code != 0 with HTTP 200)"
           }
         },
-        "summary": "Logout deletes the current session only (Java deleteByNameAndToken) and",
+        "summary": "Logout deletes the current session only (Java deleteByNameAndToken),",
         "tags": [
           "logout"
         ],
@@ -4769,9 +4933,6 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "refresh_token"
-                ],
                 "type": "object"
               }
             }
@@ -4806,7 +4967,7 @@
           }
         },
         "security": [],
-        "summary": "RefreshToken handles token refresh for a still-existing session.",
+        "summary": "RefreshToken rotates the token pair of a still-existing session. The",
         "tags": [
           "user"
         ],
@@ -4934,6 +5095,99 @@
           "approval"
         ],
         "x-handler": "github.com/fengzhizi319/privahub/internal/controller/http/v1.(*ApprovalHandler).PullStatus-fm"
+      }
+    },
+    "/api/v1alpha1/audit/list": {
+      "post": {
+        "operationId": "post_v1alpha1_audit_list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/v1.AuditListRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/v1.AuditListResponse"
+                    },
+                    "status": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "msg": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "SecretPad response envelope (business errors use status.code != 0 with HTTP 200)"
+          }
+        },
+        "summary": "List is POST /api/v1alpha1/audit/list.",
+        "tags": [
+          "audit"
+        ],
+        "x-handler": "github.com/fengzhizi319/privahub/internal/controller/http/v1.(*AuditHandler).List-fm",
+        "x-roles": [
+          "AUDITOR",
+          "ADMIN"
+        ]
+      }
+    },
+    "/api/v1alpha1/audit/verify": {
+      "get": {
+        "operationId": "get_v1alpha1_audit_verify",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/v1.AuditVerifyResponse"
+                    },
+                    "status": {
+                      "properties": {
+                        "code": {
+                          "type": "integer"
+                        },
+                        "msg": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              }
+            },
+            "description": "SecretPad response envelope (business errors use status.code != 0 with HTTP 200)"
+          }
+        },
+        "summary": "Verify is GET /api/v1alpha1/audit/verify: re-computes the hash chain and",
+        "tags": [
+          "audit"
+        ],
+        "x-handler": "github.com/fengzhizi319/privahub/internal/controller/http/v1.(*AuditHandler).Verify-fm",
+        "x-roles": [
+          "AUDITOR",
+          "ADMIN"
+        ]
       }
     },
     "/api/v1alpha1/cloud_log/sls": {
@@ -6184,7 +6438,8 @@
                 "schema": {
                   "properties": {
                     "data": {
-                      "$ref": "#/components/schemas/service.EnvDTO"
+                      "additionalProperties": true,
+                      "type": "object"
                     },
                     "status": {
                       "properties": {
@@ -6210,105 +6465,6 @@
           "env"
         ],
         "x-handler": "github.com/fengzhizi319/privahub/internal/controller/http.NewRouter.func2"
-      }
-    },
-    "/api/v1alpha1/featureTable/create": {
-      "post": {
-        "operationId": "post_v1alpha1_featureTable_create",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/service.CreateFeatureDatasourceRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "status": {
-                      "properties": {
-                        "code": {
-                          "type": "integer"
-                        },
-                        "msg": {
-                          "type": "string"
-                        }
-                      },
-                      "type": "object"
-                    }
-                  },
-                  "type": "object"
-                }
-              }
-            },
-            "description": "SecretPad response envelope (business errors use status.code != 0 with HTTP 200)"
-          }
-        },
-        "tags": [
-          "featureTable"
-        ],
-        "x-api-resource": "DATATABLE_CREATE",
-        "x-handler": "github.com/fengzhizi319/privahub/internal/controller/http.registerFeatureTableRoutes.func1"
-      }
-    },
-    "/api/v1alpha1/featureTable/list": {
-      "post": {
-        "operationId": "post_v1alpha1_featureTable_list",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "properties": {
-                  "node_id": {
-                    "type": "string"
-                  }
-                },
-                "type": "object"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "properties": {
-                    "data": {
-                      "items": {
-                        "$ref": "#/components/schemas/service.FeatureDataSourceVO"
-                      },
-                      "type": "array"
-                    },
-                    "status": {
-                      "properties": {
-                        "code": {
-                          "type": "integer"
-                        },
-                        "msg": {
-                          "type": "string"
-                        }
-                      },
-                      "type": "object"
-                    }
-                  },
-                  "type": "object"
-                }
-              }
-            },
-            "description": "SecretPad response envelope (business errors use status.code != 0 with HTTP 200)"
-          }
-        },
-        "tags": [
-          "featureTable"
-        ],
-        "x-api-resource": "DATATABLE_LIST",
-        "x-handler": "github.com/fengzhizi319/privahub/internal/controller/http.registerFeatureTableRoutes.func2"
       }
     },
     "/api/v1alpha1/featureTable/project/list": {
@@ -6366,7 +6522,7 @@
           "featureTable"
         ],
         "x-api-resource": "PRJ_DATATABLE_GET",
-        "x-handler": "github.com/fengzhizi319/privahub/internal/controller/http.registerFeatureTableRoutes.func3"
+        "x-handler": "github.com/fengzhizi319/privahub/internal/controller/http.registerFeatureTableRoutes.func1"
       }
     },
     "/api/v1alpha1/feature_datasource/auth/list": {
@@ -11899,7 +12055,7 @@
             "description": "SecretPad response envelope (business errors use status.code != 0 with HTTP 200)"
           }
         },
-        "summary": "Logout deletes the current session only (Java deleteByNameAndToken) and",
+        "summary": "Logout deletes the current session only (Java deleteByNameAndToken),",
         "tags": [
           "user"
         ],

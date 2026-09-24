@@ -19,7 +19,7 @@ func TestWireVote_TeePullerAndStop(t *testing.T) {
 	}
 	ns := service.NewNodeService(repository.NewNodeRepo(db), repository.NewNodeRouteRepo(db), nil, db)
 	env := service.NewEnvService("center", "kuscia-system", "", nil)
-	v := wireVote(db, nil, ns, service.NewCertificateService(ns), nil, env)
+	v := wireVote(db, nil, ns, service.NewCertificateService(ns), nil, env, false)
 	if v.Service == nil || v.P2P == nil || v.Monitor == nil {
 		t.Fatalf("vote wiring = %+v", v)
 	}

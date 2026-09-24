@@ -77,6 +77,11 @@ func AllModels() []interface{} {
 		&model.ProjectScheduleDO{},
 		&model.ProjectScheduleJobDO{},
 		&model.CertificateDO{},
+
+		// Security audit trail (internal/audit)
+		&model.AuditLogDO{},
+		&model.AuditChainTailDO{},
+		&model.AuditSegmentDO{},
 	}
 }
 
@@ -90,6 +95,10 @@ func AutoMigrate(db *gorm.DB, log *zap.Logger) error {
 		return err
 	}
 	if err := MigrateJobStatusData(db); err != nil {
+		return err
+	}
+	// Credential storage hardening (password KDF wrap, token digests).
+	if err := MigrateAuthSecurity(db, log); err != nil {
 		return err
 	}
 	log.Info("Database auto-migration completed")

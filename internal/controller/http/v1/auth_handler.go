@@ -3,9 +3,12 @@ package v1
 
 import (
 	"errors"
+	"net/http"
+	"strings"
 
 	"github.com/fengzhizi319/privahub/internal/controller/http/middleware"
 	"github.com/fengzhizi319/privahub/internal/service"
+	"github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/fengzhizi319/privahub/pkg/response"
 	"github.com/gin-gonic/gin"
@@ -35,10 +38,13 @@ func failAuthErr(c *gin.Context, err error) {
 //
 // Request:  {name, passwordHash, passwordHashSm3?}   (see service.AuthService doc)
 // Response: Java UserContextDTO {token, name, platformType, platformNodeId,
-// ownerType, ownerId, ownerName, projectIds, apiResources, deployMode} plus
-// access_token/refresh_token/expires_at/token_type and a legacy `user` object.
-// Failures use HTTP 200 with AUTH USER_PASSWORD_ERROR (202011601, uniform for
-// unknown users) or USER_IS_LOCKED (202011603).
+// ownerType, ownerId, ownerName, projectIds, apiResources, deployMode,
+// mustChangePassword?} plus access_token/refresh_token/expires_at/token_type
+// and a legacy `user` object. The session is also set as HttpOnly cookies
+// (+ CSRF cookie); with "X-Privahub-Session: cookie" the tokens are omitted
+// from the body. Failures use HTTP 200 with 202011601 (uniform "username or
+// password error", no remaining-attempt count) or USER_IS_LOCKED (202011603,
+// only when the password was correct).
 //
 // @Summary User login
 // @Tags Auth
@@ -53,17 +59,34 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		response.FailArgs(c, errcode.SystemValidationError, "name is required")
 		return
 	}
+	if reason := middleware.VerifyLoginOrigin(c); reason != "" {
+		response.FailHTTP(c, http.StatusForbidden, errcode.AuthCSRFFailed, reason)
+		return
+	}
+	req.ClientIP = c.ClientIP()
 
-	resp, err := h.authService.Login(c.Request.Context(), &req)
+	resp, err := h.authService.Login(service.WithClientIP(c.Request.Context(), req.ClientIP), &req)
 	if err != nil {
 		failAuthErr(c, err)
 		return
 	}
+	// Browser session: HttpOnly cookies + fresh CSRF token. API clients keep
+	// using the tokens from the body (omitted when the browser asks for a
+	// cookie-only session).
+	if err := middleware.IssueBrowserSession(c, resp.TokenPair.AccessToken, resp.TokenPair.RefreshToken, true); err != nil {
+		response.FailWithMsg(c, errcode.SystemUnknownError, "cannot issue session")
+		return
+	}
+	if middleware.WantsCookieSession(c) {
+		resp.Token = ""
+		resp.TokenPair = &auth.TokenPair{ExpiresAt: resp.TokenPair.ExpiresAt, TokenType: "Cookie"}
+	}
 	response.OK(c, resp)
 }
 
-// Logout deletes the current session only (Java deleteByNameAndToken) and
-// returns the user name. Requires authentication.
+// Logout deletes the current session only (Java deleteByNameAndToken),
+// clears the browser session cookies and returns the user name. Requires
+// authentication.
 //
 // @Summary User logout
 // @Tags Auth
@@ -81,33 +104,61 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 	if token == "" {
 		token = middleware.ExtractToken(c)
 	}
-	if err := h.authService.Logout(c.Request.Context(), u.Name, token); err != nil {
+	ctx := service.WithClientIP(c.Request.Context(), c.ClientIP())
+	if err := h.authService.Logout(ctx, u.Name, token); err != nil {
 		response.FailWithMsg(c, errcode.SystemUnknownError, err.Error())
 		return
 	}
+	middleware.ClearBrowserSession(c)
 	response.OK(c, u.Name)
 }
 
-// RefreshToken handles token refresh for a still-existing session.
+// RefreshToken rotates the token pair of a still-existing session. The
+// refresh token comes from the JSON body (API clients) or from the HttpOnly
+// refresh cookie (browsers; Origin + CSRF checks apply). Refresh tokens are
+// one-time-use: replaying a rotated one revokes the session.
 // @Summary Refresh access token
 // @Tags Auth
 // @Accept json
 // @Produce json
 // @Param request body object true "Refresh token request"
 // @Success 200 {object} response.Body{data=auth.TokenPair}
-// @Router /api/v1alpha1/user/refresh [post]
+// @Router /api/user/refresh [post]
 func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	var req struct {
-		RefreshToken string `json:"refresh_token" binding:"required"`
+		RefreshToken string `json:"refresh_token"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
+	_ = c.ShouldBindJSON(&req)
+	token, fromCookie := strings.TrimSpace(req.RefreshToken), false
+	if token == "" {
+		token, fromCookie = middleware.RefreshCookieToken(c), true
+	}
+	if token == "" {
 		response.FailArgs(c, errcode.SystemValidationError, "refresh_token is required")
 		return
 	}
+	if fromCookie {
+		if reason := middleware.VerifyBrowserRequest(c); reason != "" {
+			response.FailHTTP(c, http.StatusForbidden, errcode.AuthCSRFFailed, reason)
+			return
+		}
+	}
 
-	tokenPair, err := h.authService.RefreshToken(c.Request.Context(), req.RefreshToken)
+	ctx := service.WithClientIP(c.Request.Context(), c.ClientIP())
+	tokenPair, err := h.authService.RefreshToken(ctx, token)
 	if err != nil {
-		response.FailArgs(c, errcode.AuthFailed, "invalid refresh token")
+		if fromCookie {
+			middleware.ClearBrowserSession(c)
+		}
+		response.FailHTTP(c, http.StatusUnauthorized, errcode.AuthFailed, "invalid refresh token")
+		return
+	}
+	if fromCookie || middleware.WantsCookieSession(c) {
+		if err := middleware.IssueBrowserSession(c, tokenPair.AccessToken, tokenPair.RefreshToken, false); err != nil {
+			response.FailWithMsg(c, errcode.SystemUnknownError, "cannot issue session")
+			return
+		}
+		response.OK(c, &auth.TokenPair{ExpiresAt: tokenPair.ExpiresAt, TokenType: "Cookie"})
 		return
 	}
 	response.OK(c, tokenPair)
@@ -126,5 +177,17 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 		response.FailHTTP(c, 401, errcode.AuthFailed, "login is required")
 		return
 	}
-	response.OK(c, u.Normalize())
+	response.OK(c, PublicUserContext(c, u))
+}
+
+// PublicUserContext returns the UserContext as sent to clients: the session
+// token is never echoed to a cookie-authenticated (browser) caller, so page
+// scripts cannot read the HttpOnly credential through the API.
+func PublicUserContext(c *gin.Context, u *auth.UserContext) *auth.UserContext {
+	out := *u
+	out.Normalize()
+	if c.GetBool(middleware.CtxAuthViaCookie) {
+		out.Token = ""
+	}
+	return &out
 }

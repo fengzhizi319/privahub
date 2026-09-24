@@ -109,7 +109,7 @@ func TestUserService_UpdateUser_TransactionalRolesAndNodes(t *testing.T) {
 	// Create initial user
 	_, err := svc.CreateUser(ctx, &CreateUserRequest{
 		Name:      "alice",
-		Password:  "password",
+		Password:  "Str0ng-Pass#2",
 		RoleCodes: []string{"ADMIN"},
 		NodeIDs:   []string{"node1"},
 	})

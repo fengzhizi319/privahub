@@ -81,8 +81,8 @@ func NewDatasourceService(db *gorm.DB, kusciaClient *kuscia.Client) *DatasourceS
 		db:           db,
 		kusciaClient: kusciaClient,
 		oss:          NewOssServiceWithFilter(f),
-		mysql:        NewMysqlChecker(),
-		odps:         NewOdpsChecker(),
+		mysql:        NewMysqlCheckerWithFilter(f),
+		odps:         NewOdpsCheckerWithFilter(f),
 		ipFilter:     f,
 		log:          zap.NewNop(),
 	}
@@ -98,6 +98,8 @@ func (s *DatasourceService) WithIPFilter(f *IPFilter) *DatasourceService {
 	}
 	s.ipFilter = f
 	s.oss = NewOssServiceWithFilter(f)
+	s.mysql = NewMysqlCheckerWithFilter(f)
+	s.odps = NewOdpsCheckerWithFilter(f)
 	return s
 }
 
@@ -280,12 +282,23 @@ func randomLetters(n int) string {
 	return string(b)
 }
 
-// akSkDesensitize mirrors Java DesensitizationUtils.akSkDesensitize.
+// akSkDesensitize mirrors Java DesensitizationUtils.akSkDesensitize for
+// access key IDs only: the first 3 characters + "****" (and only when the ID
+// is long enough that 3 characters are a small fraction of it).
 func akSkDesensitize(s string) string {
-	if len(s) < 3 {
-		return ""
+	if len(s) < 6 {
+		return secretMask(s)
 	}
 	return s[:3] + "****"
+}
+
+// secretMask fully masks a secret (password / secret key): no character of
+// the secret, nor its length, is revealed.
+func secretMask(s string) string {
+	if s == "" {
+		return ""
+	}
+	return "******"
 }
 
 func distinctStrings(in []string) []string {
@@ -400,6 +413,35 @@ func parseDatasourceInfo(dsType string, raw json.RawMessage) (*parsedInfo, error
 	return p, nil
 }
 
+// connectivityError logs the detailed connectivity failure server-side and
+// returns a generic client error: echoing dial/driver errors ("connection
+// refused", "i/o timeout", server banners) would turn the datasource test
+// into an internal port scanner.
+func (s *DatasourceService) connectivityError(dsType, endpoint string, err error) error {
+	if errors.Is(err, ErrIPBlocked) {
+		return bizErr(errcode.FeatureTableIpFilter, endpoint)
+	}
+	if s.log != nil {
+		s.log.Warn("datasource connectivity check failed", zap.String("type", dsType),
+			zap.String("endpoint", endpoint), zap.Error(err))
+	}
+	return &BizError{Code: errcode.DatasourceDataSourceCreateFail, Err: err}
+}
+
+// clientErrorMessage is the client-safe message of a service error (never
+// the wrapped cause).
+func clientErrorMessage(err error) string {
+	if be, ok := AsBizError(err); ok {
+		if be.Msg != "" {
+			return be.Msg
+		}
+		if be.Code != nil {
+			return be.Code.Message
+		}
+	}
+	return "datasource connectivity check failed"
+}
+
 // checkConnectivity runs the per-type connectivity checks of Java
 // {Oss,Odps,Mysql}KusciaControlDatasourceHandler.createDatasource.
 func (s *DatasourceService) checkConnectivity(ctx context.Context, dsType string, p *parsedInfo) error {
@@ -419,14 +461,17 @@ func (s *DatasourceService) checkConnectivity(ctx context.Context, dsType string
 		if err := s.odps.TestConnection(ctx, &OdpsConfig{
 			Endpoint: p.odps.Endpoint, AccessID: p.odps.AccessID, AccessKey: p.odps.AccessKey, Project: p.odps.Project,
 		}); err != nil {
-			return bizWrap(errcode.DatasourceDataSourceCreateFail, err, err.Error())
+			return s.connectivityError("ODPS", p.odps.Endpoint, err)
 		}
 		return nil
 	case DatasourceTypeMySQL:
+		if err := s.ipFilter.CheckURL(p.mysql.Endpoint); err != nil {
+			return err
+		}
 		if err := s.mysql.TestConnection(ctx, &MysqlConfig{
 			Endpoint: p.mysql.Endpoint, User: p.mysql.User, Password: p.mysql.Password, Database: p.mysql.Database,
 		}); err != nil {
-			return bizWrap(errcode.DatasourceDataSourceCreateFail, err, err.Error())
+			return s.connectivityError("MYSQL", p.mysql.Endpoint, err)
 		}
 		return nil
 	}
@@ -839,7 +884,7 @@ func desensitizedInfo(ds *kuscia.DomainDataSource) interface{} {
 			vh := o.Virtualhost
 			return &OssDatasourceInfo{
 				Endpoint: o.Endpoint, Bucket: o.Bucket, Prefix: o.Prefix,
-				AK: akSkDesensitize(o.AccessKeyID), SK: akSkDesensitize(o.AccessKeySecret),
+				AK: akSkDesensitize(o.AccessKeyID), SK: secretMask(o.AccessKeySecret),
 				StorageType: o.StorageType, Virtualhost: &vh,
 			}
 		}
@@ -847,13 +892,13 @@ func desensitizedInfo(ds *kuscia.DomainDataSource) interface{} {
 		if o := ds.Info.Odps; o != nil {
 			return &OdpsDatasourceInfo{
 				Endpoint: o.Endpoint, Project: o.Project,
-				AccessID: akSkDesensitize(o.AccessKeyID), AccessKey: akSkDesensitize(o.AccessKeySecret),
+				AccessID: akSkDesensitize(o.AccessKeyID), AccessKey: secretMask(o.AccessKeySecret),
 			}
 		}
 	case DatasourceTypeMySQL:
 		if d := ds.Info.Database; d != nil {
 			return &MysqlDatasourceInfo{
-				Endpoint: d.Endpoint, User: d.User, Password: akSkDesensitize(d.Password), Database: d.Database,
+				Endpoint: d.Endpoint, User: d.User, Password: secretMask(d.Password), Database: d.Database,
 			}
 		}
 	}
@@ -952,7 +997,7 @@ func (s *DatasourceService) TestDatasource(ctx context.Context, req *TestDatasou
 		return nil, err
 	}
 	if err := s.checkConnectivity(ctx, t, p); err != nil {
-		return &TestDatasourceVO{Success: false, Message: err.Error()}, nil
+		return &TestDatasourceVO{Success: false, Message: clientErrorMessage(err)}, nil
 	}
 	return &TestDatasourceVO{Success: true, Message: "connection test passed"}, nil
 }

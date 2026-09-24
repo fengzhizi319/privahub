@@ -182,6 +182,11 @@ func (m *Monitor) sign(ctx context.Context, reqs []model.VoteRequestDO) {
 			d.log().Warn("vote sign: generate key certs failed", zap.String("vote", vr.VoteID), zap.Error(err))
 			continue
 		}
+		// Timestamp + nonce the body now that it gets signed.
+		if _, body, err := parseRequest(vr.RequestMsg); err == nil && !body.timestamped() {
+			body.SignMeta = newSignMeta()
+			msg.Body = b64(toJSON(body))
+		}
 		sig, err := SignSHA256withRSA([]byte(msg.Body), kc.Key)
 		if err != nil {
 			d.log().Warn("vote sign failed", zap.String("vote", vr.VoteID), zap.Error(err))
@@ -268,7 +273,7 @@ func (m *Monitor) SyncInvites(ctx context.Context) {
 // does not verify.
 func (m *Monitor) verifyInvites(ctx context.Context, vr *model.VoteRequestDO, invites []model.VoteInviteDO) {
 	d := m.svc.d
-	if d.Kuscia == nil {
+	if d.Kuscia == nil && !d.StrictSignatures {
 		return
 	}
 	for i := range invites {
@@ -299,6 +304,11 @@ func (m *Monitor) verifyInvites(ctx context.Context, vr *model.VoteRequestDO, in
 // (replyBody + requestSignature) must verify with the reply's leaf cert, whose
 // chain root must carry the voter's domain public key.
 func (m *Monitor) VerifyReply(ctx context.Context, inv *model.VoteInviteDO, vr *model.VoteRequestDO) bool {
+	d := m.svc.d
+	if d.Kuscia == nil && d.StrictSignatures {
+		d.log().Warn("vote reply rejected: kuscia unavailable, signature cannot be verified", zap.String("vote", vr.VoteID))
+		return false
+	}
 	var reply VoteReplyMessage
 	if err := json.Unmarshal([]byte(inv.VoteMsg), &reply); err != nil || len(reply.CertChain) < 2 {
 		return false
@@ -318,12 +328,61 @@ func (m *Monitor) VerifyReply(ctx context.Context, inv *model.VoteInviteDO, vr *
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return false
 	}
-	if m.svc.d.Kuscia == nil {
-		return true
-	}
-	cert := m.svc.d.Kuscia.DomainCert(ctx, body.Voter, "")
-	if !CompareCertPubKey(cert, reply.CertChain[1]) {
+	// The signed reply must speak for this invite: same vote, same voter,
+	// same decision.
+	if body.VoteRequestID != vr.VoteID || !replyActionMatches(body.Action, inv.Action) {
 		return false
 	}
-	return ValidateCertChain([]string{reply.CertChain[0], reply.CertChain[1]})
+	if !m.voterSpeaksFor(ctx, body.Voter, inv.VoteParticipantID) {
+		return false
+	}
+	if d.Kuscia == nil {
+		return true
+	}
+	if body.timestamped() {
+		if _, reqBody, err := parseRequest(vr.RequestMsg); err == nil && reqBody.timestamped() &&
+			body.time().Before(reqBody.time().Add(-maxClockSkew)) {
+			return false
+		}
+	}
+	cert := d.Kuscia.DomainCert(ctx, body.Voter, "")
+	if err := verifySignerChain(reply.CertChain, cert, body.SignMeta, true); err != nil {
+		d.log().Info("vote reply signature rejected", zap.String("vote", vr.VoteID), zap.Error(err))
+		return false
+	}
+	return checkNonce(body.SignMeta, reply.Body) == nil
+}
+
+// voterSpeaksFor reports whether the signing voter node may vote for the
+// invite participant: the participant itself, a node of the participant
+// institution (AUTONOMY), or this CENTER platform signing for one of its
+// embedded nodes.
+func (m *Monitor) voterSpeaksFor(ctx context.Context, voter, participant string) bool {
+	if voter == "" {
+		return false
+	}
+	if voter == participant {
+		return true
+	}
+	d := m.svc.d
+	env := d.env()
+	if env.IsCenter() && voter == env.GetPlatformNodeId() && env.IsEmbeddedNode(participant) {
+		return true
+	}
+	var n model.NodeDO
+	if err := d.DB.WithContext(ctx).Where("node_id = ?", voter).First(&n).Error; err == nil {
+		return n.InstID != "" && n.InstID == participant
+	}
+	return false
+}
+
+// replyActionMatches maps the signed TEE-style action to the invite action.
+func replyActionMatches(signed, action string) bool {
+	switch signed {
+	case "APPROVE":
+		return action == ActionApproved
+	case "REJECT":
+		return action == ActionRejected
+	}
+	return false
 }

@@ -1,0 +1,17 @@
+# Keeps SHA-pinned actions, digest-pinned base images and Go modules current.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: {interval: weekly}
+    groups:
+      actions: {patterns: ["*"]}
+  - package-ecosystem: docker
+    directory: /deployments/docker
+    schedule: {interval: weekly}
+  - package-ecosystem: gomod
+    directory: /
+    schedule: {interval: weekly}
+    groups:
+      go-minor-patch:
+        update-types: [minor, patch]

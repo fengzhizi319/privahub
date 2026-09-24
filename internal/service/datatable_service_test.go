@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
@@ -260,8 +259,7 @@ func TestTeeJobConverter_Render(t *testing.T) {
 		DatasourceID: "ds", Kind: TeeJobKindPush, OperateInfo: `{"relativeUri":""}`}
 	req := c.Convert(GenTeeJob(m, []string{"alice", "tee"}, "", nil, nil))
 	assert.EqualValues(t, 3, req.MaxParallelism)
-	assert.True(t, strings.Contains(req.Tasks[0].InputConfig, `"output_uris":["dm://output?datasource_id=ds&id=tee-t9"]`) ||
-		strings.Contains(req.Tasks[0].InputConfig, `"output_uris":["dm://output?datasource_id=ds&id=tee-t9"]`))
+	assert.Contains(t, req.Tasks[0].InputConfig, `"output_uris":["dm://output?datasource_id=ds&id=tee-t9"]`)
 	assert.Contains(t, req.Tasks[0].InputConfig, `"capsule_manager_endpoint":"cm.tee.svc"`)
 	assert.Equal(t, "tee-x", BuildTeeDatatableID("tee", "x"))
 }

@@ -35,13 +35,13 @@ type NodeDO struct {
 	Description   string `gorm:"type:text;default:''" json:"description"`
 	ControlNodeID string `gorm:"type:varchar(64);not null" json:"control_node_id"`
 	NetAddress    string `gorm:"type:varchar(100)" json:"net_address"`
-	Token         string `gorm:"type:varchar(100)" json:"token"`
+	Token         string `gorm:"type:varchar(512);serializer:secret" json:"token"` // encrypted at rest
 	Type          string `gorm:"type:varchar(10);default:'normal'" json:"type"`
 	Mode          int    `gorm:"default:0;not null" json:"mode"` // 0:mpc 1:tee 2:mpc&tee
 	MasterNodeID  string `gorm:"type:varchar(64);default:'master'" json:"master_node_id"`
 	// Java NodeDO fields used by inst (P2P) node management.
 	InstID         string `gorm:"type:varchar(64);index;default:''" json:"inst_id"`
-	InstToken      string `gorm:"type:text" json:"-"`                                  // signed inst token (JWT)
+	InstToken      string `gorm:"type:text;serializer:secret" json:"-"`                // signed inst token (JWT), encrypted at rest
 	InstTokenState string `gorm:"type:varchar(16);default:''" json:"inst_token_state"` // UNUSED / USED
 	Protocol       string `gorm:"type:varchar(16);default:''" json:"protocol"`         // tls / mtls / notls
 }

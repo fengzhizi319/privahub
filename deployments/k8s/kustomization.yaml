@@ -1,0 +1,15 @@
+# kubectl apply -k deployments/k8s   (after creating the Secrets, see secret.example.yaml)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: privahub
+resources:
+  - namespace.yaml
+  - serviceaccount.yaml
+  - configmap.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml
+  - networkpolicy.yaml
+images:
+  - name: ghcr.io/fengzhizi319/privahub
+    newTag: "1.0.0"   # pin a released version (or digest:) — never latest

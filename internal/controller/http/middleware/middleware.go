@@ -99,12 +99,16 @@ func CORS(allowedOrigins ...string) gin.HandlerFunc {
 
 	return func(c *gin.Context) {
 		origin := c.GetHeader("Origin")
-		if origin != "" && (anyOrigin || originSet[origin]) {
+		if origin != "" && originSet[origin] {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Access-Control-Allow-Credentials", "true")
+		} else if origin != "" && anyOrigin {
+			// "*" never grants credentials: with cookie sessions that would
+			// let any site read authenticated responses.
+			c.Header("Access-Control-Allow-Origin", origin)
 		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization, X-Trace-ID, Trace-Id, User-Token, token, Accept-Language")
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Authorization, X-Trace-ID, Trace-Id, User-Token, token, Accept-Language, X-CSRF-Token, X-Privahub-Session")
 		c.Header("Access-Control-Max-Age", "86400")
 
 		if c.Request.Method == "OPTIONS" {
@@ -115,13 +119,53 @@ func CORS(allowedOrigins ...string) gin.HandlerFunc {
 	}
 }
 
+// DefaultContentSecurityPolicy is the CSP sent by the server. It matches the
+// <meta> CSP injected by the SPA build (web/apps/secretpad/vite.config.ts)
+// and adds the header-only directive frame-ancestors. style-src keeps
+// 'unsafe-inline' for runtime-inserted styles only; scripts are strictly
+// 'self' (no inline scripts, no eval).
+const DefaultContentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; " +
+	"object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+
+// SecurityHeaderOptions configures SecurityHeadersWith.
+type SecurityHeaderOptions struct {
+	// HSTS sends Strict-Transport-Security on every response (main port
+	// served over TLS or behind a declared TLS proxy). Requests that arrive
+	// over TLS directly always get it.
+	HSTS bool
+	// CSP overrides DefaultContentSecurityPolicy ("-" disables the header).
+	CSP string
+}
+
 // SecurityHeaders adds security-related HTTP response headers.
 func SecurityHeaders() gin.HandlerFunc {
+	return SecurityHeadersWith(SecurityHeaderOptions{})
+}
+
+// SecurityHeadersWith adds the security response headers: CSP,
+// X-Content-Type-Options, X-Frame-Options, Referrer-Policy,
+// Permissions-Policy, Cross-Origin-Opener-Policy, Cache-Control and (when
+// served over TLS) HSTS. The deprecated X-XSS-Protection header is not sent.
+func SecurityHeadersWith(o SecurityHeaderOptions) gin.HandlerFunc {
+	csp := o.CSP
+	if csp == "" {
+		csp = DefaultContentSecurityPolicy
+	}
 	return func(c *gin.Context) {
-		c.Header("X-Content-Type-Options", "nosniff")
-		c.Header("X-Frame-Options", "DENY")
-		c.Header("X-XSS-Protection", "1; mode=block")
-		c.Header("Cache-Control", "no-store")
+		h := c.Writer.Header()
+		if csp != "-" {
+			h.Set("Content-Security-Policy", csp)
+		}
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Cache-Control", "no-store")
+		if o.HSTS || c.Request.TLS != nil {
+			h.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+		}
 		c.Next()
 	}
 }
@@ -139,31 +183,10 @@ func ExtraHeaders(headers map[string]string) gin.HandlerFunc {
 	}
 }
 
-// AuditLog records structured audit information for all write operations
-// (POST/PUT/DELETE/PATCH) to /api/v1alpha1/ endpoints.
+// AuditLog records every state-changing /api request in the tamper-evident
+// security audit trail (see AuditTrail in audit_trail.go) and logs it.
 func AuditLog(log *zap.Logger) gin.HandlerFunc {
-	writeMethods := map[string]bool{
-		"POST": true, "PUT": true, "DELETE": true, "PATCH": true,
-	}
-	return func(c *gin.Context) {
-		if !writeMethods[c.Request.Method] || !strings.HasPrefix(c.Request.URL.Path, "/api/v1alpha1/") {
-			c.Next()
-			return
-		}
-
-		start := time.Now()
-		c.Next()
-
-		userID, _ := c.Get("user_id")
-		log.Info("audit",
-			zap.Any("user_id", userID),
-			zap.String("method", c.Request.Method),
-			zap.String("path", c.Request.URL.Path),
-			zap.Int("status", c.Writer.Status()),
-			zap.Duration("duration", time.Since(start)),
-			zap.String("ip", c.ClientIP()),
-		)
-	}
+	return AuditTrail(log)
 }
 
 // IPWhitelist restricts access to requests from allowed CIDR ranges.

@@ -136,7 +136,8 @@ func wireNodeDomain(db *gorm.DB, cfg *config.Config, log *zap.Logger, nodeServic
 		}()
 	}
 
-	instService := service.NewInstService(db, nodeService, cfg.Kuscia.CertsDir, cfg.Kuscia.CAFile, log)
+	instService := service.NewInstService(db, nodeService, cfg.Kuscia.CertsDir, cfg.Kuscia.CAFile, log).
+		WithRequireTLS(!cfg.IsDev())
 	return nodeDomainDeps{
 		InstService:        instService,
 		InstHandler:        v1.NewInstHandler(db, instService),

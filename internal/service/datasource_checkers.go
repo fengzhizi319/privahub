@@ -9,10 +9,12 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -29,15 +31,37 @@ type MysqlConfig struct {
 }
 
 // MysqlChecker performs real MySQL connectivity checks via go-sql-driver/mysql.
+// Connections go through a per-checker registered dial function that
+// enforces the SSRF IPFilter on the actual remote address.
 type MysqlChecker struct {
 	Timeout time.Duration
 	// open is overridable in tests.
 	open func(dsn string) (*sql.DB, error)
+	// network is the go-sql-driver network name bound to the guarded dialer.
+	network string
 }
 
-// NewMysqlChecker creates a MysqlChecker with a 5s timeout.
+var mysqlDialSeq atomic.Int64
+
+// NewMysqlChecker creates a MysqlChecker with a 5s timeout and no IP
+// filtering (use NewMysqlCheckerWithFilter for user supplied endpoints).
 func NewMysqlChecker() *MysqlChecker {
-	return &MysqlChecker{Timeout: 5 * time.Second, open: func(dsn string) (*sql.DB, error) { return sql.Open("mysql", dsn) }}
+	return NewMysqlCheckerWithFilter(NewDisabledIPFilter())
+}
+
+// NewMysqlCheckerWithFilter creates a MysqlChecker whose connections are
+// refused when the remote IP is blocked by f (checked at connect time, so DNS
+// rebinding cannot bypass it).
+func NewMysqlCheckerWithFilter(f *IPFilter) *MysqlChecker {
+	if f == nil {
+		f = NewDisabledIPFilter()
+	}
+	network := fmt.Sprintf("privahub-guarded-%d", mysqlDialSeq.Add(1))
+	mysql.RegisterDialContext(network, func(ctx context.Context, addr string) (net.Conn, error) {
+		return f.DialContext(ctx, "tcp", addr)
+	})
+	return &MysqlChecker{Timeout: 5 * time.Second, network: network,
+		open: func(dsn string) (*sql.DB, error) { return sql.Open("mysql", dsn) }}
 }
 
 func (m *MysqlChecker) dsn(cfg *MysqlConfig) string {
@@ -45,6 +69,9 @@ func (m *MysqlChecker) dsn(cfg *MysqlConfig) string {
 	c.User = cfg.User
 	c.Passwd = cfg.Password
 	c.Net = "tcp"
+	if m.network != "" {
+		c.Net = m.network
+	}
 	c.Addr = cfg.Endpoint
 	c.DBName = cfg.Database
 	c.Timeout = m.Timeout
@@ -110,15 +137,19 @@ type OdpsChecker struct {
 	now        func() time.Time
 }
 
-// NewOdpsChecker creates an OdpsChecker.
+// NewOdpsChecker creates an OdpsChecker without IP filtering (use
+// NewOdpsCheckerWithFilter for user supplied endpoints).
 func NewOdpsChecker() *OdpsChecker {
-	return &OdpsChecker{
-		httpClient: &http.Client{
-			Timeout:       10 * time.Second,
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-		now: time.Now,
+	return NewOdpsCheckerWithFilter(NewDisabledIPFilter())
+}
+
+// NewOdpsCheckerWithFilter creates an OdpsChecker whose HTTP client refuses
+// blocked remote addresses at connect time and never follows redirects.
+func NewOdpsCheckerWithFilter(f *IPFilter) *OdpsChecker {
+	if f == nil {
+		f = NewDisabledIPFilter()
 	}
+	return &OdpsChecker{httpClient: f.HTTPClient(10 * time.Second), now: time.Now}
 }
 
 type odpsError struct {

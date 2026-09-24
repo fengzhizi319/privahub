@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	"github.com/fengzhizi319/privahub/internal/audit"
 	"github.com/fengzhizi319/privahub/internal/service"
 	datasync "github.com/fengzhizi319/privahub/internal/service/sync"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
@@ -56,7 +57,7 @@ func (h *SyncHandler) VoteSyncCreate(c *gin.Context) {
 			response.FailArgs(c, errcode.SystemValidationError, err.Error())
 			return
 		}
-		response.FailWithMsg(c, errcode.SystemError, err.Error())
+		response.FailWithMsg(c, errcode.SystemError, "vote sync failed")
 		return
 	}
 	response.OKEmpty(c)
@@ -77,12 +78,23 @@ func (h *SyncHandler) DataSync(c *gin.Context) {
 		return
 	}
 	h.log.Info("dataSyncConsumer consumer", zap.String("origin", origin), zap.String("table", d.TableName), zap.String("action", d.Action))
-	if _, err := h.consumer.Apply(c.Request.Context(), datasync.ModeP2P, &d); err != nil {
-		if errors.Is(err, datasync.ErrTableNotAllowed) {
-			response.FailArgs(c, errcode.SystemValidationError, err.Error())
-			return
+	if _, err := h.consumer.ApplyFromPeer(c.Request.Context(), origin, &d); err != nil {
+		h.log.Warn("data sync failed", zap.String("origin", origin), zap.String("table", d.TableName),
+			zap.String("action", d.Action), zap.Error(err))
+		switch {
+		case errors.Is(err, datasync.ErrTableNotAllowed):
+			response.FailArgs(c, errcode.SystemValidationError, datasync.ErrTableNotAllowed.Error())
+		case errors.Is(err, datasync.ErrNotOwner):
+			audit.Record(c.Request.Context(), audit.Event{
+				Actor: origin, ActorType: audit.ActorNode, IP: c.ClientIP(), Action: audit.ActionAuthzDenied,
+				ResourceType: "sync:" + d.TableName, Result: audit.ResultDenied,
+				Reason: "P2P data sync row not owned by the sending node",
+				Extra:  map[string]string{"action": d.Action, "path": c.Request.URL.Path},
+			})
+			response.FailWithMsg(c, errcode.AuthFailed, "sync data is not owned by the sending node")
+		default:
+			response.FailWithMsg(c, errcode.SystemError, "data sync failed")
 		}
-		response.FailWithMsg(c, errcode.SystemError, err.Error())
 		return
 	}
 	response.OK(c, &d)

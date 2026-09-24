@@ -1,39 +1,131 @@
+# golangci-lint v2 configuration (golangci-lint >= 2.0).
+#
+# Used by `make lint`, `make check`, pre-commit (`--fast-only`) and CI
+# (.github/workflows/ci.yml). Keep the CI action's `version:` in sync with the
+# version developers run locally (currently v2.12.x).
+#
+# Exclusion policy: every disabled rule / exclusion below MUST carry a
+# justification comment. Do not add blanket path excludes for non-test code;
+# prefer a line-level `//nolint:gosec // <reason>` so the reason is reviewed
+# in the diff.
+version: "2"
+
 run:
-  timeout: 5m
-  go: "1.23"
+  timeout: 10m
+  go: "1.25"
+  tests: true
 
 linters:
+  default: none
   enable:
     - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
     - unused
-    - gofmt
-    - goimports
     - misspell
     - unconvert
     - bodyclose
     - noctx
     - gosec
-    - exportloopref
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment # memory-layout micro-optimisation, not a correctness/security issue
+        - shadow         # very noisy on idiomatic `err` shadowing; covered by review
+        - inline         # go:fix inline suggestions (reflect.Ptr -> Pointer): modernisation, not correctness
+    gosec:
+      excludes:
+        # G101 (hard-coded credentials) fires on config key names such as
+        # "jwt_secret" / "token_file" and on i18n strings. Real secrets are
+        # caught by gitleaks (.gitleaks.toml) which scans full history.
+        - G101
+        # G104 duplicates errcheck (which is enabled and has exclusions tuned).
+        - G104
+      config:
+        global:
+          audit: false
+    staticcheck:
+      checks:
+        - all
+        - -ST1000 # package comments: style only
+        - -ST1003 # naming (ID vs Id): generated/Java-compat JSON names
+        - -ST1016 # receiver name consistency: style only
+        - -ST1020 # comment form on exported funcs: style only
+        - -ST1021
+        - -ST1022
+        - -QF1001 # De Morgan rewrite suggestion: style only
+        - -QF1008 # "could remove embedded field from selector": style only
+        - -S1016  # struct-literal vs conversion: style only
+        - -ST1005 # capitalised error strings: user-facing i18n messages are kept verbatim from Java
+        - -ST1023 # redundant type in var decl: style only
+        - -QF1011 # could omit type in var decl: style only
+  exclusions:
+    generated: lax
+    presets:
+      - std-error-handling # errcheck on Close/Flush/etc, fmt.Fprint*
+    rules:
+      # Tests legitimately use fixed credentials, temp files with loose perms,
+      # httptest servers and weak RNG.
+      - path: _test\.go
+        linters:
+          - gosec
+          - noctx
+          - bodyclose
+          - errcheck
+      # zap's Logger.Sync() returns EINVAL/ENOTTY for stdout/stderr on Linux
+      # (uber-go/zap#328); the deferred call at process exit has nothing
+      # actionable to do with the error.
+      - linters: [errcheck]
+        text: "Error return value of `log.Sync` is not checked"
+      # G304/G703 "file inclusion / path traversal via variable": the paths
+      # below come exclusively from operator-controlled configuration (config
+      # file, PRIVAHUB_* env, CLI flag) read at start-up — never from an HTTP
+      # request. Request-derived paths MUST NOT be added here; they go through
+      # DataService.inDir()/filepath.Rel containment checks instead.
+      - path: cmd/server/main\.go
+        linters: [gosec]
+        text: "G304"        # inner_auth.tls.client_ca_file
+      - path: internal/controller/http/router\.go
+        linters: [gosec]
+        text: "G703"        # PRIVAHUB_WEB_DIR (SPA static root)
+      - path: internal/graphjob/settings\.go
+        linters: [gosec]
+        text: "G703"        # graph job settings yaml path
+      - path: internal/service/component_service\.go
+        linters: [gosec]
+        text: "G304"        # config/components.json
+      - path: internal/service/tee_graph\.go
+        linters: [gosec]
+        text: "G304"        # data.tee.cert_dir
+      - path: pkg/kuscia/client\.go
+        linters: [gosec]
+        text: "G304"        # kuscia.token (value or token-file path)
+      - path: pkg/tlsutil/
+        linters: [gosec]
+        text: "G304"        # server.tls.* / inner_auth.tls.* certificate & key files
+      - path: internal/audit/(anchor|retention|spool)\.go
+        linters: [gosec]
+        text: "G304"        # audit.spool_dir / archive_dir / anchor.file (+ fixed file names inside them)
+      # The OpenAPI generator is a build-time dev tool that never runs in the
+      # server process and only reads the repo's own source tree.
+      - path: cmd/openapi-gen/
+        linters:
+          - gosec
 
-linters-settings:
-  goimports:
-    local-prefixes: github.com/fengzhizi319/privahub
-  gosec:
-    excludes:
-      - G101 # Look for hard coded credentials (false positives on config)
-  govet:
-    enable-all: true
-    disable:
-      - fieldalignment
+formatters:
+  enable:
+    - gofmt
+    # TODO(goimports): the local-prefix import grouping is not yet applied to
+    # ~120 files; enable goimports once `golangci-lint fmt` has been run over
+    # the tree in a dedicated formatting-only commit.
+    # - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/fengzhizi319/privahub
 
 issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gosec
-  max-issues-per-linter: 50
-  max-same-issues: 10
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -22,9 +22,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/fengzhizi319/privahub/internal/audit"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/internal/dao/repository"
 	"github.com/fengzhizi319/privahub/pkg/auth"
@@ -43,6 +43,13 @@ var (
 	ErrTokenNotFound    = errors.New("token not found")
 	ErrSessionExpired   = errors.New("session expired")
 	ErrPasswordRequired = errors.New("password hash required")
+	// ErrPasswordTooWeak: the new password hash is in the weak dictionary.
+	ErrPasswordTooWeak = errors.New("password too weak")
+	// ErrPasswordReused: the new password equals a recently used one.
+	ErrPasswordReused = errors.New("password recently used")
+	// ErrRefreshTokenReused: a rotated (already used) refresh token was
+	// presented again; the whole session has been revoked.
+	ErrRefreshTokenReused = errors.New("refresh token reuse detected")
 )
 
 // AuthError carries a Java error code and its message arguments.
@@ -59,11 +66,23 @@ func newAuthError(sentinel error, code *errcode.ErrorCode, args ...string) *Auth
 	return &AuthError{Code: code, Args: args, err: sentinel}
 }
 
+// errLoginFailed is the single, uniform login failure: unknown user, wrong
+// password and "locked but wrong password" are indistinguishable, and the
+// remaining attempts are never disclosed.
+func errLoginFailed() *AuthError {
+	return newAuthError(ErrInvalidPassword, errcode.AuthLoginFailed)
+}
+
 // AuthOptions configures AuthService behaviour (see config.AuthConfig).
 type AuthOptions struct {
-	// MaxAttempts is the number of failed logins before locking (default 5).
+	// MaxAttempts is the number of failed logins from one client IP before
+	// that (account, IP) pair is locked (default 5).
 	MaxAttempts int
-	// LockDuration is the lock period after MaxAttempts failures (default 30m).
+	// AccountMaxAttempts is the number of failed logins across all IPs before
+	// the account itself is locked (default 4 x MaxAttempts). It is higher
+	// than MaxAttempts so a single attacker cannot lock an admin out.
+	AccountMaxAttempts int
+	// LockDuration is the lock period (default 30m).
 	LockDuration time.Duration
 	// SessionIdleTimeout is the sliding session expiry (default 24h, Java EXPIRE).
 	SessionIdleTimeout time.Duration
@@ -77,6 +96,12 @@ type AuthOptions struct {
 func (o *AuthOptions) withDefaults() {
 	if o.MaxAttempts <= 0 {
 		o.MaxAttempts = 5
+	}
+	if o.AccountMaxAttempts <= 0 {
+		o.AccountMaxAttempts = 4 * o.MaxAttempts
+	}
+	if o.AccountMaxAttempts < o.MaxAttempts {
+		o.AccountMaxAttempts = o.MaxAttempts
 	}
 	if o.LockDuration <= 0 {
 		o.LockDuration = 30 * time.Minute
@@ -94,22 +119,26 @@ func (o *AuthOptions) withDefaults() {
 // Password contract (documented for the frontend):
 //
 //	POST /api/login {name, passwordHash, passwordHashSm3?}
-//	  passwordHash    = lowercase hex SHA-256(password)   — the standard scheme,
-//	                    stored as user_accounts.password_hash.
+//	  passwordHash    = lowercase hex SHA-256(password)   — the standard scheme.
 //	  passwordHashSm3 = lowercase hex SM3(password)       — optional; only used for
-//	                    accounts migrated from Java SecretPad, whose DbDataInit and
-//	                    frontend stored/sent SM3(password). If the stored hash equals
-//	                    passwordHashSm3, login succeeds and the stored hash is
-//	                    upgraded in place to passwordHash (SHA-256).
+//	                    accounts migrated from Java SecretPad (stored SM3 hashes).
 //	  password        = accepted as an alias of passwordHash (the v1alpha1 route of
 //	                    the new frontend sends the SHA-256 hex in this field). Only in
-//	                    dev/test profiles is a raw plaintext password also hashed and
-//	                    compared server side.
+//	                    dev/test profiles is a raw plaintext password also hashed.
 //
-// Sessions: the access token (JWT) is stored in user_tokens together with the
-// UserContext snapshot (session_data). Every authenticated request must match a
-// user_tokens row whose gmt_token is within SessionIdleTimeout (sliding, 24h by
-// default like Java LoginInterceptor); logout deletes the row.
+// Storage: user_accounts.password_hash holds sm3kdf:v1 = SM3-KDF(salt, passwordHash)
+// (pkg/auth/password.go); legacy raw / wrapped rows are upgraded on login.
+//
+// Lockout: failures are counted per (account, client IP) — MaxAttempts locks
+// the pair — and per account — AccountMaxAttempts (higher) locks the account
+// for every IP. Unknown accounts run a dummy KDF and are counted the same way,
+// every failure returns the same AuthLoginFailed error, and "locked" is only
+// revealed to a caller that presented the correct password.
+//
+// Sessions: user_tokens stores the SM3 digest of the access token, the digest
+// of the only valid refresh token JTI (one-time-use rotation with reuse
+// detection) and the account password version; a password change bumps the
+// version and clears every session.
 type AuthService struct {
 	userRepo   repository.UserAccountsRepository
 	tokenRepo  repository.UserTokensRepository
@@ -118,16 +147,10 @@ type AuthService struct {
 	env        *EnvService
 	opts       AuthOptions
 
-	// failCache counts failed logins for non-existent users (Java USER_LOCK_CACHE).
-	failMu    sync.Mutex
-	failCache map[string]*failEntry
+	// throttle holds the per-(account, IP) and unknown-account counters.
+	throttle *loginThrottle
 
 	now func() time.Time
-}
-
-type failEntry struct {
-	count   int
-	expires time.Time
 }
 
 // NewAuthService creates a new AuthService with default options.
@@ -140,7 +163,7 @@ func NewAuthService(
 		userRepo:   userRepo,
 		tokenRepo:  tokenRepo,
 		jwtManager: jwtManager,
-		failCache:  make(map[string]*failEntry),
+		throttle:   newLoginThrottle(),
 		now:        time.Now,
 	}
 	if dber, ok := tokenRepo.(interface{ DB() *gorm.DB }); ok {
@@ -177,11 +200,15 @@ type LoginRequest struct {
 	PasswordHash string `json:"passwordHash"`
 	// PasswordHashSm3 is the SM3 hex of the password (legacy Java accounts).
 	PasswordHashSm3 string `json:"passwordHashSm3"`
+
+	// ClientIP is set by the handler (gin ClientIP, trusted proxies aware).
+	ClientIP string `json:"-"`
 }
 
 // LoginResponse is the Java UserContextDTO plus the Go token pair fields
 // (access_token/refresh_token/expires_at/token_type) and a legacy `user`
-// object kept for older frontend builds.
+// object kept for older frontend builds. mustChangePassword (UserContext)
+// tells the frontend to open the change-password screen.
 type LoginResponse struct {
 	auth.UserContext
 	*auth.TokenPair
@@ -198,64 +225,129 @@ type UserInfo struct {
 
 var hexHash = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
 
+// loginCandidates derives the password candidates of a login request.
+func (s *AuthService) loginCandidates(req *LoginRequest) auth.PasswordCandidates {
+	c := auth.PasswordCandidates{SM3: strings.TrimSpace(req.PasswordHashSm3)}
+	switch {
+	case hexHash.MatchString(strings.TrimSpace(req.PasswordHash)):
+		c.SHA256 = strings.TrimSpace(req.PasswordHash)
+	case hexHash.MatchString(strings.TrimSpace(req.Password)):
+		c.SHA256 = strings.TrimSpace(req.Password)
+	case s.opts.AllowPlaintextPassword && req.Password != "":
+		c.SHA256 = HashPassword(req.Password)
+	case s.opts.AllowPlaintextPassword && req.PasswordHash != "":
+		c.SHA256 = HashPassword(req.PasswordHash)
+	}
+	if c.SM3 != "" && !hexHash.MatchString(c.SM3) {
+		c.SM3 = ""
+	}
+	return c
+}
+
 // Login authenticates a user and returns the session UserContext + tokens.
 func (s *AuthService) Login(ctx context.Context, req *LoginRequest) (*LoginResponse, error) {
 	name := strings.TrimSpace(req.Username)
-	provided := req.PasswordHash
-	if provided == "" {
-		provided = req.Password
-	}
-	if name == "" || (provided == "" && req.PasswordHashSm3 == "") {
+	ip := strings.TrimSpace(req.ClientIP)
+	if name == "" || (req.PasswordHash == "" && req.Password == "" && req.PasswordHashSm3 == "") {
 		return nil, newAuthError(ErrPasswordRequired, errcode.SystemValidationError, "name/passwordHash required")
 	}
+	cand := s.loginCandidates(req)
+	now := s.now()
+	pairKey := throttleKey(name, ip)
 
 	user, err := s.userRepo.FindByName(ctx, name)
 	if err != nil || user == nil {
-		return nil, s.failUnknownUser(name)
+		// Equalise timing with a real verification, count like a real account.
+		auth.DummyPasswordWork()
+		pairLocked := s.throttle.fail(pairKey, now, s.opts.MaxAttempts, s.opts.LockDuration)
+		acctLocked := s.throttle.fail(accountKey(name), now, s.opts.AccountMaxAttempts, s.opts.LockDuration)
+		recordAuthEvent(ctx, audit.ActionLogin, name, ip, audit.ResultFailure, "unknown_user")
+		if pairLocked || acctLocked {
+			recordAuthEvent(ctx, audit.ActionLockout, name, ip, audit.ResultFailure, "unknown_user_threshold")
+		}
+		return nil, errLoginFailed()
 	}
 
-	now := s.now()
-	// Lock check; an expired lock resets the failure counter.
+	// Current lock state: (account, IP) pair or the whole account.
+	var lockedUntil time.Time
+	if until, ok := s.throttle.lockedUntil(pairKey, now); ok {
+		lockedUntil = until
+	}
 	if user.LockedInvalidTime != nil {
 		if user.LockedInvalidTime.After(now) {
-			return nil, newAuthError(ErrUserLocked, errcode.AuthUserIsLocked, minutesLeft(*user.LockedInvalidTime, now))
+			if user.LockedInvalidTime.After(lockedUntil) {
+				lockedUntil = *user.LockedInvalidTime
+			}
+		} else {
+			// Expired account lock: reset the account counter.
+			s.updateUserFields(ctx, user, map[string]interface{}{"failed_attempts": nil, "locked_invalid_time": nil})
+			user.FailedAttempts, user.LockedInvalidTime = nil, nil
 		}
-		user.LockedInvalidTime = nil
-		user.FailedAttempts = nil
-		_ = s.userRepo.Update(ctx, user)
 	}
 
-	matched, legacy := s.matchPassword(provided, req.Password, req.PasswordHashSm3, user.PasswordHash)
-	if !matched {
-		return nil, s.failKnownUser(ctx, user)
+	res := auth.VerifyStoredPassword(user.PasswordHash, cand)
+
+	if !lockedUntil.IsZero() {
+		// Locked: only a caller proving the password learns about the lock
+		// (so they know to wait); everybody else gets the uniform error and
+		// the counters are not extended.
+		if res.OK {
+			recordAuthEvent(ctx, audit.ActionLogin, name, ip, audit.ResultDenied, "locked")
+			return nil, newAuthError(ErrUserLocked, errcode.AuthUserIsLocked, minutesLeft(lockedUntil, now))
+		}
+		recordAuthEvent(ctx, audit.ActionLogin, name, ip, audit.ResultFailure, "invalid_credentials_while_locked")
+		return nil, errLoginFailed()
 	}
 
-	// Successful login: reset counters, upgrade legacy SM3 hash if applicable.
+	if !res.OK {
+		s.failKnownUser(ctx, user, pairKey, ip, now)
+		return nil, errLoginFailed()
+	}
+
+	// Success: reset counters, upgrade the stored hash when needed.
+	s.throttle.reset(pairKey)
 	if user.FailedAttempts != nil || user.LockedInvalidTime != nil {
-		user.FailedAttempts = nil
-		user.LockedInvalidTime = nil
-		_ = s.userRepo.Update(ctx, user)
+		s.updateUserFields(ctx, user, map[string]interface{}{"failed_attempts": nil, "locked_invalid_time": nil})
+		user.FailedAttempts, user.LockedInvalidTime = nil, nil
 	}
-	if legacy && hexHash.MatchString(req.PasswordHash) {
-		newHash := strings.ToLower(req.PasswordHash)
-		if err := s.userRepo.UpdatePassword(ctx, user.Name, newHash); err == nil {
-			user.PasswordHash = newHash
+	if res.NeedsRehash && cand.SHA256 != "" {
+		if stored, err := auth.HashClientPassword(cand.SHA256); err == nil {
+			if err := s.userRepo.UpdatePassword(ctx, user.Name, stored); err == nil {
+				user.PasswordHash = stored
+			}
 		}
 	}
 
-	uc := s.BuildUserContext(ctx, user)
-	sid := uuid.New().String()
-	uc.SessionID = sid
-	tokenPair, err := s.jwtManager.GenerateTokenPairWithSession(
-		strconv.FormatInt(user.ID, 10), user.Name, user.OwnerType, user.OwnerID, sid)
+	resp, err := s.createSession(ctx, user)
 	if err != nil {
 		return nil, err
 	}
-	uc.Token = tokenPair.AccessToken
-	if err := s.storeSession(ctx, uc); err != nil {
+	reason := ""
+	if user.MustChangePassword {
+		reason = "must_change_password"
+	}
+	recordAuthEvent(ctx, audit.ActionLogin, name, ip, audit.ResultSuccess, reason)
+	return resp, nil
+}
+
+// createSession issues the token pair and stores the session row.
+func (s *AuthService) createSession(ctx context.Context, user *model.UserAccountsDO) (*LoginResponse, error) {
+	uc := s.BuildUserContext(ctx, user)
+	sid := uuid.New().String()
+	uc.SessionID = sid
+	uc.MustChangePassword = user.MustChangePassword
+	uc.PwdVer = user.PasswordVersion
+	tokenPair, err := s.jwtManager.GenerateSessionTokens(auth.SessionTokenParams{
+		UserID: strconv.FormatInt(user.ID, 10), Username: user.Name, OwnerType: user.OwnerType,
+		OwnerID: user.OwnerID, SessionID: sid, PwdVer: user.PasswordVersion,
+	})
+	if err != nil {
 		return nil, err
 	}
-
+	if err := s.storeSession(ctx, uc, tokenPair); err != nil {
+		return nil, err
+	}
+	uc.Token = tokenPair.AccessToken
 	return &LoginResponse{
 		UserContext: *uc,
 		TokenPair:   tokenPair,
@@ -268,21 +360,37 @@ func (s *AuthService) Login(ctx context.Context, req *LoginRequest) (*LoginRespo
 	}, nil
 }
 
-// matchPassword returns (matched, matchedViaLegacySm3).
-func (s *AuthService) matchPassword(hash, rawPassword, sm3Hash, stored string) (bool, bool) {
-	if stored == "" {
-		return false, false
+// failKnownUser counts a failed login of an existing account: the (account,
+// IP) pair locks after MaxAttempts, the account after AccountMaxAttempts.
+func (s *AuthService) failKnownUser(ctx context.Context, user *model.UserAccountsDO, pairKey, ip string, now time.Time) {
+	recordAuthEvent(ctx, audit.ActionLogin, user.Name, ip, audit.ResultFailure, "invalid_credentials")
+	if s.throttle.fail(pairKey, now, s.opts.MaxAttempts, s.opts.LockDuration) {
+		recordAuthEvent(ctx, audit.ActionLockout, user.Name, ip, audit.ResultFailure, "account_ip_threshold")
 	}
-	if hash != "" && constEq(strings.ToLower(hash), strings.ToLower(stored)) {
-		return true, false
+	attempts := 1
+	if user.FailedAttempts != nil {
+		attempts = *user.FailedAttempts + 1
 	}
-	if sm3Hash != "" && constEq(strings.ToLower(sm3Hash), strings.ToLower(stored)) {
-		return true, true
+	user.FailedAttempts = &attempts
+	fields := map[string]interface{}{"failed_attempts": attempts}
+	if attempts >= s.opts.AccountMaxAttempts {
+		lock := now.Add(s.opts.LockDuration)
+		user.LockedInvalidTime = &lock
+		fields["locked_invalid_time"] = lock
+		recordAuthEvent(ctx, audit.ActionLockout, user.Name, ip, audit.ResultFailure, "account_threshold")
 	}
-	if s.opts.AllowPlaintextPassword && rawPassword != "" && constEq(HashPassword(rawPassword), strings.ToLower(stored)) {
-		return true, false
+	s.updateUserFields(ctx, user, fields)
+}
+
+// updateUserFields writes selected columns (targeted update so concurrent
+// password changes are never overwritten); without a DB handle it falls back
+// to the repository full-row update.
+func (s *AuthService) updateUserFields(ctx context.Context, user *model.UserAccountsDO, fields map[string]interface{}) {
+	if s.db != nil {
+		_ = s.db.WithContext(ctx).Model(&model.UserAccountsDO{}).Where("id = ?", user.ID).Updates(fields).Error
+		return
 	}
-	return false, false
+	_ = s.userRepo.Update(ctx, user)
 }
 
 func constEq(a, b string) bool { return hmac.Equal([]byte(a), []byte(b)) }
@@ -293,52 +401,6 @@ func minutesLeft(until, now time.Time) string {
 		m = 1
 	}
 	return strconv.Itoa(m)
-}
-
-// failUnknownUser counts failures for non-existent accounts in memory so that
-// the response is indistinguishable from a wrong password (no enumeration).
-func (s *AuthService) failUnknownUser(name string) error {
-	s.failMu.Lock()
-	defer s.failMu.Unlock()
-	now := s.now()
-	e := s.failCache[name]
-	if e == nil || now.After(e.expires) {
-		e = &failEntry{}
-		s.failCache[name] = e
-	}
-	if e.count >= s.opts.MaxAttempts {
-		return newAuthError(ErrUserLocked, errcode.AuthUserIsLocked, minutesLeft(e.expires, now))
-	}
-	e.count++
-	e.expires = now.Add(s.opts.LockDuration)
-	if e.count >= s.opts.MaxAttempts {
-		return newAuthError(ErrUserLocked, errcode.AuthUserIsLocked, strconv.Itoa(int(s.opts.LockDuration.Minutes())))
-	}
-	// Opportunistic cleanup of expired entries.
-	if len(s.failCache) > 10000 {
-		for k, v := range s.failCache {
-			if now.After(v.expires) {
-				delete(s.failCache, k)
-			}
-		}
-	}
-	return newAuthError(ErrInvalidPassword, errcode.AuthUserPasswordError, strconv.Itoa(s.opts.MaxAttempts-e.count))
-}
-
-func (s *AuthService) failKnownUser(ctx context.Context, user *model.UserAccountsDO) error {
-	attempts := 1
-	if user.FailedAttempts != nil {
-		attempts = *user.FailedAttempts + 1
-	}
-	user.FailedAttempts = &attempts
-	if attempts >= s.opts.MaxAttempts {
-		lock := s.now().Add(s.opts.LockDuration)
-		user.LockedInvalidTime = &lock
-		_ = s.userRepo.Update(ctx, user)
-		return newAuthError(ErrUserLocked, errcode.AuthUserIsLocked, strconv.Itoa(int(s.opts.LockDuration.Minutes())))
-	}
-	_ = s.userRepo.Update(ctx, user)
-	return newAuthError(ErrInvalidPassword, errcode.AuthUserPasswordError, strconv.Itoa(s.opts.MaxAttempts-attempts))
 }
 
 // BuildUserContext builds the Java UserContextDTO for an account (without token).
@@ -454,123 +516,6 @@ func QueryAPIResourceCodes(ctx context.Context, db *gorm.DB, userType, userKey s
 	}
 	sort.Strings(codes)
 	return codes
-}
-
-// Logout deletes the current session (only the given token), like Java
-// userTokensRepository.deleteByNameAndToken.
-func (s *AuthService) Logout(ctx context.Context, username, token string) error {
-	if s.db == nil {
-		return s.tokenRepo.DeleteByName(ctx, username)
-	}
-	return s.db.WithContext(ctx).Unscoped().
-		Where("name = ? AND token = ?", username, token).
-		Delete(&model.UserTokensDO{}).Error
-}
-
-// ClearUserSessions deletes all sessions of a user (after password change).
-func (s *AuthService) ClearUserSessions(ctx context.Context, username string) error {
-	return ClearUserSessions(ctx, s.db, username)
-}
-
-// ClearUserSessions deletes all user_tokens rows of a user.
-func ClearUserSessions(ctx context.Context, db *gorm.DB, username string) error {
-	if db == nil {
-		return nil
-	}
-	return db.WithContext(ctx).Unscoped().Where("name = ?", username).Delete(&model.UserTokensDO{}).Error
-}
-
-// RefreshToken issues a new token pair for a still-valid session. The refresh
-// token must belong to an existing session (logout invalidates it).
-func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*auth.TokenPair, error) {
-	claims, err := s.jwtManager.ValidateToken(refreshToken)
-	if err != nil {
-		return nil, err
-	}
-	if claims.TokenType != auth.RefreshToken {
-		return nil, auth.ErrInvalidToken
-	}
-	if s.db == nil || claims.SessionID == "" {
-		return nil, ErrTokenNotFound
-	}
-	var row model.UserTokensDO
-	if err := s.db.WithContext(ctx).
-		Where("name = ? AND session_id = ?", claims.Username, claims.SessionID).
-		First(&row).Error; err != nil {
-		return nil, ErrTokenNotFound
-	}
-	if row.GmtToken != nil && s.now().Sub(*row.GmtToken) > s.opts.SessionIdleTimeout {
-		_ = s.db.WithContext(ctx).Unscoped().Delete(&row).Error
-		return nil, ErrSessionExpired
-	}
-	pair, err := s.jwtManager.RefreshAccessToken(refreshToken)
-	if err != nil {
-		return nil, err
-	}
-	now := s.now()
-	updates := map[string]interface{}{"token": pair.AccessToken, "gmt_token": &now}
-	if uc, err := auth.UserContextFromJSON(row.SessionData); err == nil {
-		uc.Token = pair.AccessToken
-		updates["session_data"] = uc.ToJSON()
-	}
-	if err := s.db.WithContext(ctx).Model(&row).Updates(updates).Error; err != nil {
-		return nil, err
-	}
-	return pair, nil
-}
-
-// ValidateSession checks token against user_tokens with sliding expiry and
-// returns the session UserContext (Java LoginInterceptor.processByUserRequest).
-func (s *AuthService) ValidateSession(ctx context.Context, token string) (*auth.UserContext, error) {
-	if token == "" {
-		return nil, ErrTokenNotFound
-	}
-	row, err := s.tokenRepo.FindByToken(ctx, token)
-	if err != nil || row == nil {
-		return nil, ErrTokenNotFound
-	}
-	now := s.now()
-	if row.GmtToken == nil || now.Sub(*row.GmtToken) > s.opts.SessionIdleTimeout {
-		if s.db != nil {
-			_ = s.db.WithContext(ctx).Unscoped().Delete(row).Error
-		}
-		return nil, ErrSessionExpired
-	}
-	// Slide the expiry; throttle writes to at most one per minute per session.
-	if now.Sub(*row.GmtToken) > time.Minute && s.db != nil {
-		_ = s.db.WithContext(ctx).Model(&model.UserTokensDO{}).
-			Where("id = ?", row.ID).Update("gmt_token", now).Error
-	}
-	if strings.TrimSpace(row.SessionData) == "" {
-		return nil, ErrTokenNotFound
-	}
-	uc, err := auth.UserContextFromJSON(row.SessionData)
-	if err != nil {
-		return nil, ErrTokenNotFound
-	}
-	uc.Token = token
-	uc.SessionID = row.SessionID
-	return uc, nil
-}
-
-// storeSession saves the session row.
-func (s *AuthService) storeSession(ctx context.Context, uc *auth.UserContext) error {
-	now := s.now()
-	return s.tokenRepo.Create(ctx, &model.UserTokensDO{
-		Name:        uc.Name,
-		Token:       uc.Token,
-		GmtToken:    &now,
-		SessionData: uc.ToJSON(),
-		SessionID:   uc.SessionID,
-	})
-}
-
-// verifyPassword checks a client-supplied credential against the stored hash:
-// direct (constant-time) comparison of the SHA-256 hex, plus server-side
-// hashing of a plaintext password when AllowPlaintextPassword (dev) is set.
-func (s *AuthService) verifyPassword(password, hashedPassword string) bool {
-	ok, _ := s.matchPassword(password, password, "", hashedPassword)
-	return ok
 }
 
 // HashPassword creates a SHA-256 hash of a password.

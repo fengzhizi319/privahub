@@ -6,15 +6,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/fengzhizi319/privahub/pkg/innerauth"
 	"io"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/fengzhizi319/privahub/internal/audit"
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
+	"github.com/fengzhizi319/privahub/pkg/innerauth"
 	"gorm.io/gorm"
 )
 
@@ -26,6 +27,8 @@ var (
 	ErrRemoteNotConfigured  = errors.New("kuscia gateway is not configured")
 	ErrNodeUserWrongPwd     = errors.New("wrong password")
 	ErrNodeUserInvalidParam = errors.New("invalid parameter")
+	ErrNodeUserWeakPwd      = errors.New("password too weak")
+	ErrNodeUserReusedPwd    = errors.New("password recently used")
 )
 
 // NodeUserService handles node-specific (EDGE) user management
@@ -75,6 +78,10 @@ type NodeUserCreateRequest struct {
 	UserNameAlt  string `json:"userName"`
 	PasswordHash string `json:"passwordHash"`
 	Password     string `json:"password"`
+
+	// MustChangePassword marks the account (e.g. a node's generated initial
+	// account) so its first session is restricted to the password change.
+	MustChangePassword bool `json:"-"`
 }
 
 // ResetNodeUserPwdRequest is the Java ResetNodeUserPwdRequest: the account
@@ -142,9 +149,12 @@ func (s *NodeUserService) Create(ctx context.Context, req *NodeUserCreateRequest
 		req.Name = req.UserNameAlt
 	}
 	req.UserName = req.Name
-	pwd := clientPasswordHash(req.PasswordHash, req.Password)
-	if req.NodeID == "" || req.Name == "" || pwd == "" {
+	clientHash := clientPasswordHash(req.PasswordHash, req.Password)
+	if req.NodeID == "" || req.Name == "" || clientHash == "" {
 		return ErrNodeUserInvalidParam
+	}
+	if auth.IsWeakPasswordHash(clientHash) {
+		return ErrNodeUserWeakPwd
 	}
 
 	var nodeCount int64
@@ -166,12 +176,19 @@ func (s *NodeUserService) Create(ctx context.Context, req *NodeUserCreateRequest
 		return ErrNodeUserExists
 	}
 
+	pwd, err := auth.HashClientPassword(clientHash)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		user := &model.UserAccountsDO{
-			Name:         req.Name,
-			PasswordHash: pwd,
-			OwnerType:    auth.OwnerTypeEdge,
-			OwnerID:      req.NodeID,
+			Name:               req.Name,
+			PasswordHash:       pwd,
+			OwnerType:          auth.OwnerTypeEdge,
+			OwnerID:            req.NodeID,
+			MustChangePassword: req.MustChangePassword,
+			GmtPasswordChanged: &now,
 		}
 		if err := tx.Create(user).Error; err != nil {
 			return err
@@ -201,15 +218,34 @@ func (s *NodeUserService) ResetPassword(ctx context.Context, req *ResetNodeUserP
 	if user.OwnerID != req.NodeID {
 		return ErrNodeUserNotFound
 	}
-	if !constEq(strings.ToLower(user.PasswordHash), strings.ToLower(req.PasswordHash)) {
+	if !auth.VerifyStoredPassword(user.PasswordHash, auth.PasswordCandidates{SHA256: req.PasswordHash}).OK {
+		recordAuthEvent(ctx, audit.ActionPasswordChange, user.Name, "", audit.ResultFailure, "node_reset_wrong_old_password")
 		return ErrNodeUserWrongPwd
 	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&user).Update("password_hash", strings.ToLower(req.NewPasswordHash)).Error; err != nil {
+	newHash := strings.ToLower(strings.TrimSpace(req.NewPasswordHash))
+	if !hexHash.MatchString(newHash) {
+		return ErrNodeUserInvalidParam
+	}
+	if auth.IsWeakPasswordHash(newHash) {
+		return ErrNodeUserWeakPwd
+	}
+	if isPasswordReused(&user, newHash) {
+		return ErrNodeUserReusedPwd
+	}
+	updates, err := newPasswordUpdates(&user, newHash, false, time.Now())
+	if err != nil {
+		return err
+	}
+	if err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.UserAccountsDO{}).Where("id = ?", user.ID).Updates(updates).Error; err != nil {
 			return err
 		}
 		return tx.Unscoped().Where("name = ?", user.Name).Delete(&model.UserTokensDO{}).Error
-	})
+	}); err != nil {
+		return err
+	}
+	recordAuthEvent(ctx, audit.ActionPasswordChange, user.Name, "", audit.ResultSuccess, "node_reset")
+	return nil
 }
 
 // NodeUserErrorCode maps NodeUserService errors to Java error codes + args.
@@ -226,6 +262,10 @@ func NodeUserErrorCode(err error, req interface{}) (*errcode.ErrorCode, string) 
 		return errcode.SystemValidationError, "user not found"
 	case errors.Is(err, ErrNodeUserWrongPwd):
 		return errcode.SystemValidationError, "wrong password"
+	case errors.Is(err, ErrNodeUserWeakPwd):
+		return errcode.AuthPasswordTooWeak, ""
+	case errors.Is(err, ErrNodeUserReusedPwd):
+		return errcode.AuthPasswordReused, ""
 	case errors.Is(err, ErrNodeUserInvalidParam):
 		return errcode.SystemValidationError, "nodeId/name/passwordHash/newPasswordHash required"
 	case errors.Is(err, ErrRemoteNotConfigured):

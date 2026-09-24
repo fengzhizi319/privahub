@@ -122,6 +122,9 @@ func TestRouteInterfaceResourceCoverage(t *testing.T) {
 		if middleware.PublicPaths[p] {
 			n++
 		}
+		if middleware.AuditorPaths[p] {
+			n++
+		}
 		switch {
 		case n == 0:
 			missing = append(missing, ri.Method+" "+p)

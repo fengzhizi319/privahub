@@ -10,6 +10,7 @@ func TestValidate_PlatformModes(t *testing.T) {
 	for _, m := range []string{"master", "CENTER", "lite", "EDGE", "autonomy", "P2P", "TEST"} {
 		c := &Config{Server: ServerConfig{Mode: m, HTTPPort: 8080}, Database: DatabaseConfig{Driver: "sqlite"},
 			Auth: AuthConfig{JWTSecret: strongSecret}}
+		secureTransport(c)
 		if err := c.Validate(); err != nil {
 			t.Errorf("mode %q should be valid: %v", m, err)
 		}
@@ -30,8 +31,9 @@ func TestValidate_JWTSecretRequiredInNonDevProfile(t *testing.T) {
 const strongSecret = "a-very-long-random-secret-value-123456"
 
 func baseConfig(profile string) *Config {
-	return &Config{Profile: profile, Server: ServerConfig{Mode: "master", HTTPPort: 8080, InnerPort: 9001, InnerBindAddress: "127.0.0.1"},
+	c := &Config{Profile: profile, Server: ServerConfig{Mode: "master", HTTPPort: 8080, InnerPort: 9001, InnerBindAddress: "127.0.0.1"},
 		Database: DatabaseConfig{Driver: "sqlite"}, Auth: AuthConfig{JWTSecret: strongSecret}}
+	return secureTransport(c)
 }
 
 // No profile (and every non-dev profile) is production for secrets.
@@ -79,7 +81,10 @@ func TestValidate_InnerPortExposure(t *testing.T) {
 		mutate  func(*Config)
 		wantErr bool
 	}{
-		{"loopback", nil, false},
+		{"loopback without auth (production)", nil, true},
+		{"loopback without auth (dev)", func(c *Config) { c.Profile = "dev" }, false},
+		{"loopback with token", func(c *Config) { c.Server.InnerAuth.Token = "0123456789abcdef-token" }, false},
+		{"loopback with allowlist", func(c *Config) { c.Server.InnerAuth.AllowedCIDRs = []string{"127.0.0.1"} }, false},
 		{"0.0.0.0 without auth", func(c *Config) { c.Server.InnerBindAddress = "0.0.0.0" }, true},
 		{"empty address binds all", func(c *Config) { c.Server.InnerBindAddress = "" }, true},
 		{"0.0.0.0 with token", func(c *Config) {
@@ -105,6 +110,7 @@ func TestValidate_InnerPortExposure(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := baseConfig("")
+			c.Server.InnerAuth = InnerAuthConfig{}
 			if tc.mutate != nil {
 				tc.mutate(c)
 			}
@@ -171,7 +177,7 @@ func TestLoad_AuthAndServerDefaults(t *testing.T) {
 	if cfg.Server.InnerBindAddress != "127.0.0.1" || len(cfg.Server.InnerPortPaths) != 5 {
 		t.Errorf("inner port defaults wrong: %q %v", cfg.Server.InnerBindAddress, cfg.Server.InnerPortPaths)
 	}
-	if cfg.Server.UploadMaxSize != -1 || cfg.Server.MaxBodySize != 32<<20 {
+	if cfg.Server.UploadMaxSize != DefaultUploadMaxSize || cfg.Server.MaxBodySize != 32<<20 {
 		t.Errorf("body limits wrong: %d %d", cfg.Server.UploadMaxSize, cfg.Server.MaxBodySize)
 	}
 	if len(cfg.Server.CORSAllowedOrigins) == 0 || len(cfg.Server.ExtraResponseHeaders) == 0 {

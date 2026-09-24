@@ -28,6 +28,8 @@ type testPKI struct {
 	caPEM   string
 	leafPEM string
 	keyB64  string // base64(PEM PKCS#8)
+	// caKeyB64 is the domain (CA) key, base64(PEM PKCS#8).
+	caKeyB64 string
 }
 
 func newTestPKI(t *testing.T, cn string) *testPKI {
@@ -53,17 +55,22 @@ func newTestPKI(t *testing.T, cn string) *testPKI {
 	leafTpl := &x509.Certificate{
 		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "vote"},
 		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		// Kuscia GenerateKeyCerts: KeyEncipherment | DigitalSignature.
+		KeyUsage: x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
 	}
 	leafDER, err := x509.CreateCertificate(rand.Reader, leafTpl, caCert, &leafKey.PublicKey, caKey)
 	if err != nil {
 		t.Fatal(err)
 	}
+	caPKCS8, _ := x509.MarshalPKCS8PrivateKey(caKey)
 	pkcs8, _ := x509.MarshalPKCS8PrivateKey(leafKey)
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8})
 	return &testPKI{
 		caPEM:   string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})),
 		leafPEM: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER})),
 		keyB64:  base64.StdEncoding.EncodeToString(keyPEM),
+		caKeyB64: base64.StdEncoding.EncodeToString(
+			pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: caPKCS8})),
 	}
 }
 

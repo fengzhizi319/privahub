@@ -1,0 +1,53 @@
+# gitleaks configuration (gitleaks >= 8.19).
+#
+#   make secrets            # full git history + working tree
+#   CI: .github/workflows/ci.yml job "secrets" (fetch-depth: 0 => full history)
+#
+# Extends the upstream default rule set. Allowlist entries must be NARROW
+# (path AND/OR exact regex), each with a justification. Never allowlist a
+# whole directory of production code. If a real secret is found, follow
+# docs/security/runbooks/credential-leak.md — rotating is mandatory,
+# allowlisting is not a fix.
+title = "privahub gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "privahub-jwt-hs-secret-assignment"
+description = "Literal assigned to a jwt_secret / aes_key / inner token config key"
+regex = '''(?i)(jwt_secret|aes_key|inner_token|metrics_token|admin_password)\s*[:=]\s*["']([^"'\s$<{]{16,})["']'''
+secretGroup = 2
+entropy = 3.0
+keywords = ["jwt_secret", "aes_key", "inner_token", "metrics_token", "admin_password"]
+  [[rules.allowlists]]
+  description = "Documented dev/sample values that the server REFUSES outside PRIVAHUB_PROFILE=dev|test"
+  regexes = ['''privahub-dev-secret-change-in-production''', '''12345678901234567890123456789012''',
+             '''(?i)(change-?me|do-not-use|replace[_-]?with|example|placeholder)''']
+
+# ---------------------------------------------------------------------------
+# Global allowlists (known, non-secret fixtures)
+# ---------------------------------------------------------------------------
+[[allowlists]]
+description = "Truncated example JWTs in API documentation ('eyJ...' with trailing ellipsis)"
+paths = ['''^docs/(api|example)\.md$''']
+regexes = ['''eyJhbGciOiJIUzI1NiIs[A-Za-z0-9_.-]*\.\.\.''']
+
+[[allowlists]]
+description = "Deterministic test keys in Go unit tests (not used by any deployment)"
+paths = ['''^pkg/config/(config_auth|security)_test\.go$''', '''^pkg/crypto/.*_test\.go$''', '''^internal/audit/.*_test\.go$''']
+regexTarget = "line"
+regexes = ['''(?i)(testAESKey|AESKey|JWTSecret|strongSecret)\s*=\s*"[0-9a-fA-FX]{32,64}"''', '''0123456789abcdef''']
+
+[[allowlists]]
+description = "Makefile recipe lines (tool invocations, not credentials)"
+paths = ['''^Makefile$''']
+
+[[allowlists]]
+description = "Example manifests / env templates contain placeholders only"
+paths = ['''^deployments/.*\.example(\.yaml)?$''', '''^deployments/k8s/secret\.example\.yaml$''']
+regexes = ['''REPLACE_WITH_[A-Za-z0-9_]+''']
+
+[[allowlists]]
+description = "Local databases, build output and the separate web repo (scanned by its own CI)"
+paths = ['''\.db$''', '''^bin/''', '''^web/''', '''(^|/)node_modules/''', '''^data/''']
