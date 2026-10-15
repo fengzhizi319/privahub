@@ -104,7 +104,10 @@ type DownloadInfo struct {
 	Path string
 	// Archive streams Path as tar.gz (directories, Model / Rule results).
 	Archive bool
-	// Size is the plain file size (-1 for archives: unknown, chunked).
+	// ORC streams Path (an ORC table written by SecretFlow) converted to CSV.
+	ORC bool
+	// Size is the plain file size (-1 for archives / ORC conversion: unknown,
+	// chunked).
 	Size int64
 }
 
@@ -120,6 +123,10 @@ func (d *DownloadInfo) WriteTo(w io.Writer) (int64, error) {
 	cw := &countingWriter{w: w}
 	if d.Archive {
 		err := writeTarGz(cw, d.Path)
+		return cw.n, err
+	}
+	if d.ORC {
+		err := writeORCAsCSV(cw, d.Path)
 		return cw.n, err
 	}
 	f, err := os.Open(d.Path)
@@ -353,6 +360,15 @@ func (s *DataService) Download(ctx context.Context, req *DownloadDataRequest) (*
 	}
 	if !st.Mode().IsRegular() {
 		return nil, bizErr(errcode.DataFileNotExistsError, "")
+	}
+	// SecretFlow output tables are ORC files: convert to the promised CSV.
+	// An unreadable ORC file is sent as-is under its real extension.
+	if isORCFile(path) {
+		if err := checkORCReadable(path); err != nil {
+			s.log.Warn("orc result not convertible, sending raw file", zap.String("path", path), zap.Error(err))
+			return &DownloadInfo{FileName: base + ".orc", Path: path, Size: st.Size()}, nil
+		}
+		return &DownloadInfo{FileName: base + ".csv", Path: path, ORC: true, Size: -1}, nil
 	}
 	return &DownloadInfo{FileName: base + ".csv", Path: path, Size: st.Size()}, nil
 }

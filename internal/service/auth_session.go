@@ -34,14 +34,15 @@ func (s *AuthService) storeSession(ctx context.Context, uc *auth.UserContext, pa
 	snapshot.Token = ""
 	refreshExp := pair.RefreshExpiresAt
 	return s.tokenRepo.Create(ctx, &model.UserTokensDO{
-		Name:             uc.Name,
-		Token:            auth.TokenDigest(pair.AccessToken),
-		GmtToken:         &now,
-		SessionData:      snapshot.ToJSON(),
-		SessionID:        uc.SessionID,
-		RefreshJTI:       auth.RefreshJTIDigest(pair.RefreshJTI),
-		PwdVer:           uc.PwdVer,
-		GmtRefreshExpire: &refreshExp,
+		Name:                 uc.Name,
+		Token:                auth.TokenDigest(pair.AccessToken),
+		GmtToken:             &now,
+		SessionData:          snapshot.ToJSON(),
+		SessionID:            uc.SessionID,
+		RefreshJTI:           auth.RefreshJTIDigest(pair.RefreshJTI),
+		PwdVer:               uc.PwdVer,
+		AuthorizationVersion: uc.AuthorizationVersion,
+		GmtRefreshExpire:     &refreshExp,
 	})
 }
 
@@ -91,14 +92,14 @@ func (s *AuthService) sessionExpired(row *model.UserTokensDO, now time.Time) boo
 	return row.GmtRefreshExpire != nil && now.After(*row.GmtRefreshExpire)
 }
 
-// accountState returns the current password version and must-change flag of
+// accountState returns the current password/grant epochs and must-change flag of
 // an account; ok=false when the account no longer exists.
-func (s *AuthService) accountState(ctx context.Context, name string) (pwdVer int64, mustChange bool, ok bool) {
+func (s *AuthService) accountState(ctx context.Context, name string) (pwdVer int64, authzVer int64, mustChange bool, ok bool) {
 	u, err := s.userRepo.FindByName(ctx, name)
 	if err != nil || u == nil {
-		return 0, false, false
+		return 0, 0, false, false
 	}
-	return u.PasswordVersion, u.MustChangePassword, true
+	return u.PasswordVersion, u.AuthorizationVersion, u.MustChangePassword, true
 }
 
 // RefreshToken rotates the token pair of a still-valid session. Refresh
@@ -133,8 +134,8 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*a
 		s.revokeSession(ctx, &row, "expired")
 		return nil, ErrSessionExpired
 	}
-	if pv, _, ok := s.accountState(ctx, row.Name); !ok || pv != row.PwdVer || pv != claims.PwdVer {
-		s.revokeSession(ctx, &row, "password_changed")
+	if pv, av, _, ok := s.accountState(ctx, row.Name); !ok || pv != row.PwdVer || pv != claims.PwdVer || av != row.AuthorizationVersion {
+		s.revokeSession(ctx, &row, "credentials_changed")
 		return nil, ErrSessionExpired
 	}
 	sessionEnd := claims.ExpiresAt.Time
@@ -176,7 +177,7 @@ func (s *AuthService) RefreshToken(ctx context.Context, refreshToken string) (*a
 // ValidateSession checks token against user_tokens with sliding expiry and
 // returns the session UserContext (Java LoginInterceptor.processByUserRequest).
 // The session is rejected (and deleted) when idle, past its absolute end, or
-// when the account password version changed since login.
+// when the account password or authorization version changed since login.
 func (s *AuthService) ValidateSession(ctx context.Context, token string) (*auth.UserContext, error) {
 	if token == "" {
 		return nil, ErrTokenNotFound
@@ -192,9 +193,9 @@ func (s *AuthService) ValidateSession(ctx context.Context, token string) (*auth.
 		}
 		return nil, ErrSessionExpired
 	}
-	pv, mustChange, ok := s.accountState(ctx, row.Name)
-	if !ok || pv != row.PwdVer {
-		s.revokeSession(ctx, row, "password_changed")
+	pv, av, mustChange, ok := s.accountState(ctx, row.Name)
+	if !ok || pv != row.PwdVer || av != row.AuthorizationVersion {
+		s.revokeSession(ctx, row, "credentials_changed")
 		return nil, ErrSessionExpired
 	}
 	// Slide the expiry; throttle writes to at most one per minute per session.
@@ -213,5 +214,6 @@ func (s *AuthService) ValidateSession(ctx context.Context, token string) (*auth.
 	uc.SessionID = row.SessionID
 	uc.MustChangePassword = mustChange
 	uc.PwdVer = pv
+	uc.AuthorizationVersion = av
 	return uc, nil
 }

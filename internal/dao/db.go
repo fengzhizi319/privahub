@@ -2,9 +2,11 @@
 // for the Privahub platform.
 //
 // Supported drivers:
-//   - sqlite: Pure-Go driver (modernc.org/sqlite), zero CGO required.
+//   - sqlite: gorm.io/driver/sqlite (github.com/mattn/go-sqlite3, CGO).
 //     Ideal for development and single-node deployments.
 //     DSN format: "privahub.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+//     (the "_pragma=" form is translated to mattn options and transactions
+//     default to BEGIN IMMEDIATE, see NormalizeSQLiteDSN).
 //   - mysql: Production-grade driver for multi-instance deployments.
 //     DSN format: "user:pass@tcp(host:3306)/dbname?charset=utf8mb4&parseTime=True"
 //
@@ -35,7 +37,11 @@ func NewDB(cfg *config.DatabaseConfig, logger *zap.Logger) (*gorm.DB, error) {
 
 	switch cfg.Driver {
 	case "sqlite":
-		dialector = sqlite.Open(cfg.DSN)
+		dsn, unknown := NormalizeSQLiteDSN(cfg.DSN)
+		if len(unknown) > 0 {
+			logger.Warn("ignoring unsupported sqlite _pragma DSN options", zap.Strings("pragmas", unknown))
+		}
+		dialector = sqlite.Open(dsn)
 	case "mysql":
 		dialector = mysql.Open(cfg.DSN)
 	default:

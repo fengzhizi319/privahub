@@ -213,51 +213,27 @@ type PlatformProvider interface {
 // RBACConfig holds configuration for the RBAC middleware.
 type RBACConfig struct {
 	Enabled       bool          // Whether RBAC enforcement is active
-	CacheDuration time.Duration // How long to cache role lookups
+	CacheDuration time.Duration // Deprecated: privileged checks deliberately bypass TTL caches.
 }
 
-// roleCache caches user -> role codes.
-type roleCache struct {
-	mu      sync.RWMutex
-	entries map[string]*cacheEntry
-	ttl     time.Duration
-}
-
-type cacheEntry struct {
-	roles     map[string]bool
-	expiresAt time.Time
-}
-
-var userRoles = &roleCache{entries: make(map[string]*cacheEntry), ttl: 60 * time.Second}
-
-// InvalidateUserCache removes a user's cached roles (call after role changes).
-func InvalidateUserCache(userKey string) {
-	userRoles.mu.Lock()
-	delete(userRoles.entries, userKey)
-	userRoles.mu.Unlock()
-}
+// InvalidateUserCache is retained for handler compatibility. Privileged role
+// checks now read the authoritative DB on every request: process-local TTLs
+// delayed revocation and could share grants between databases with the same
+// username. No positive grant survives a failed query or a role deletion.
+func InvalidateUserCache(_ string) {}
 
 func loadRoles(ctx context.Context, db *gorm.DB, userKey string) map[string]bool {
-	userRoles.mu.RLock()
-	if e, ok := userRoles.entries[userKey]; ok && time.Now().Before(e.expiresAt) {
-		userRoles.mu.RUnlock()
-		return e.roles
-	}
-	userRoles.mu.RUnlock()
-
 	roles := map[string]bool{}
-	var rels []model.SysUserPermissionRelDO
-	if db != nil {
-		if err := db.WithContext(ctx).Where("user_key = ? AND target_type = ?", userKey, "ROLE").
-			Find(&rels).Error; err == nil {
-			for _, r := range rels {
-				roles[r.TargetCode] = true
-			}
-		}
+	if db == nil || userKey == "" {
+		return roles
 	}
-	userRoles.mu.Lock()
-	userRoles.entries[userKey] = &cacheEntry{roles: roles, expiresAt: time.Now().Add(userRoles.ttl)}
-	userRoles.mu.Unlock()
+	var rels []model.SysUserPermissionRelDO
+	if err := db.WithContext(ctx).Where("user_key = ? AND target_type = ? AND user_type IN ?", userKey, "ROLE", []string{auth.PermissionUserTypeUser, auth.PermissionUserTypeEdgeUser}).Find(&rels).Error; err != nil {
+		return roles
+	}
+	for _, rel := range rels {
+		roles[rel.TargetCode] = true
+	}
 	return roles
 }
 
@@ -277,11 +253,11 @@ func CheckInterfaceResource(ctx context.Context, db *gorm.DB, platform PlatformP
 	if code == "" {
 		return true
 	}
-	if platform != nil && platform.IsEdge() {
-		return true // ignore check for edge platform
-	}
 	if u == nil {
 		return false
+	}
+	if platform != nil && platform.IsEdge() {
+		return true // legacy edge-platform interface policy, authenticated only
 	}
 	if u.IsCenterOwner() {
 		return true // ignore check for center user
@@ -315,9 +291,6 @@ func nodeInInst(ctx context.Context, db *gorm.DB, nodeID, instID string) bool {
 func RBAC(db *gorm.DB, platform PlatformProvider, cfg RBACConfig) gin.HandlerFunc {
 	if !cfg.Enabled {
 		return func(c *gin.Context) { c.Next() }
-	}
-	if cfg.CacheDuration > 0 {
-		userRoles.ttl = cfg.CacheDuration
 	}
 	return func(c *gin.Context) {
 		u := CurrentUser(c)

@@ -548,3 +548,40 @@ func TestModelPack_PageFilterDetailInfo(t *testing.T) {
 		t.Fatalf("missing model: %v", err)
 	}
 }
+
+// Even a valid caller project must not authorize a model owned by a different
+// project. These calls must fail before any Kuscia lookup or deployment.
+func TestModel_ProjectBinding(t *testing.T) {
+	db := setupModelTestDB(t)
+	pack := seedPack(db, "foreign-model", model.ModelStatsInit)
+	svc := NewModelService(db, nil)
+	ctx := context.Background()
+	for _, projectID := range []string{"other-project", ""} {
+		if _, err := svc.ModelPackInfo(ctx, pack.ModelID, projectID); padCode(err) != errcode.ProjectModelNotFound.Code {
+			t.Fatalf("info project %q: %v", projectID, err)
+		}
+		if _, err := svc.ModelPackDetail(ctx, pack.ModelID, projectID); padCode(err) != errcode.ProjectModelNotFound.Code {
+			t.Fatalf("detail project %q: %v", projectID, err)
+		}
+		if err := svc.CreateModelServing(ctx, &CreateModelServingRequest{ModelID: pack.ModelID, ProjectID: projectID}); padCode(err) != errcode.ProjectModelNotFound.Code {
+			t.Fatalf("serving project %q: %v", projectID, err)
+		}
+	}
+	if err := svc.CreateModelServing(ctx, &CreateModelServingRequest{ModelID: pack.ModelID, ProjectID: pack.ProjectID}); padCode(err) != errcode.SystemValidationError.Code {
+		t.Fatalf("empty serving reported success: %v", err)
+	}
+	var got model.ProjectModelPackDO
+	if err := db.Where("model_id = ?", pack.ModelID).First(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.ModelStats != pack.ModelStats || got.ServingID != "" {
+		t.Fatalf("rejected deployment modified model: %+v", got)
+	}
+	mock := true
+	if msg := ValidateServingPartyConfigs([]ServingPartyConfig{
+		{NodeID: "alice", FeatureTableID: "mock", IsMock: &mock},
+		{NodeID: "alice", FeatureTableID: "mock", IsMock: &mock},
+	}); !strings.Contains(msg, "unique") {
+		t.Fatalf("duplicate parties accepted: %s", msg)
+	}
+}

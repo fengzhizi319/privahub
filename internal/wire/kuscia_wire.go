@@ -40,6 +40,7 @@ func NewKusciaClients(cfg *config.Config, log *zap.Logger) (*kuscia.Client, *kus
 		CAFile:             kc.CAFile,
 		Token:              kc.Token,
 		InsecureSkipVerify: kc.InsecureSkipVerify,
+		HTTPProxy:          kc.HTTPProxy,
 	}
 	client := kuscia.NewClient(&base)
 	if err := client.Err(); err != nil {
@@ -64,6 +65,7 @@ func NewKusciaClients(cfg *config.Config, log *zap.Logger) (*kuscia.Client, *kus
 				CertFile: wireFirstNonEmpty(n.CertFile, kc.CertFile), KeyFile: wireFirstNonEmpty(n.KeyFile, kc.KeyFile),
 				CAFile: wireFirstNonEmpty(n.CAFile, kc.CAFile), Token: wireFirstNonEmpty(n.Token, kc.Token),
 				InsecureSkipVerify: kc.InsecureSkipVerify,
+				HTTPProxy:          kc.HTTPProxy,
 			},
 		}
 		if err := pool.Register(ep); err != nil {

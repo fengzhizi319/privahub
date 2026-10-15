@@ -66,7 +66,7 @@ func TestValidateServingPartyConfigs_Valid(t *testing.T) {
 	if msg := service.ValidateServingPartyConfigs([]service.ServingPartyConfig{{NodeID: "a", FeatureTableID: "ft", IsMock: &mock}}); msg != "" {
 		t.Errorf("valid config rejected: %s", msg)
 	}
-	if msg := service.ValidateServingPartyConfigs(nil); msg != "" {
-		t.Errorf("empty partyConfigs rejected: %s", msg)
+	if msg := service.ValidateServingPartyConfigs(nil); msg == "" {
+		t.Error("empty deployment must be rejected instead of reporting a false success")
 	}
 }

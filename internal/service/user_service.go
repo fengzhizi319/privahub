@@ -197,7 +197,7 @@ func (s *UserService) CreateUser(ctx context.Context, req *CreateUserRequest) (*
 			}
 			for _, roleCode := range req.RoleCodes {
 				rel := &model.SysUserPermissionRelDO{
-					UserType:   "USER",
+					UserType:   accountPermissionType(user.OwnerType),
 					UserKey:    req.Name,
 					TargetType: "ROLE",
 					TargetCode: roleCode,
@@ -226,7 +226,7 @@ func (s *UserService) CreateUser(ctx context.Context, req *CreateUserRequest) (*
 		}
 		for _, roleCode := range req.RoleCodes {
 			_ = s.permRepo.Create(ctx, &model.SysUserPermissionRelDO{
-				UserType:   "USER",
+				UserType:   accountPermissionType(user.OwnerType),
 				UserKey:    req.Name,
 				TargetType: "ROLE",
 				TargetCode: roleCode,
@@ -261,6 +261,16 @@ func (s *UserService) ListUsers(ctx context.Context) (*UserListResponse, error) 
 	}, nil
 }
 
+// accountPermissionType keeps human accounts separate from virtual NODE
+// principals sharing the same textual name. EDGE API grants are looked up
+// under EDGE_USER by AuthService.BuildUserContext.
+func accountPermissionType(ownerType string) string {
+	if ownerType == auth.OwnerTypeEdge {
+		return auth.PermissionUserTypeEdgeUser
+	}
+	return auth.PermissionUserTypeUser
+}
+
 // UpdateUser updates a user's roles and nodes.
 // Role and node updates use delete-then-insert wrapped in a database transaction
 // to prevent data loss on partial failure.
@@ -270,31 +280,46 @@ func (s *UserService) UpdateUser(ctx context.Context, req *UpdateUserRequest) er
 		return ErrUserNotFound
 	}
 
-	if req.OwnerType != "" {
-		user.OwnerType = req.OwnerType
-	}
-	if req.OwnerID != "" {
-		user.OwnerID = req.OwnerID
-	}
-	if err := s.userRepo.Update(ctx, user); err != nil {
-		return err
-	}
-
-	// Use transaction when db is available to ensure atomicity of delete-then-insert
-	if s.db != nil && (req.RoleCodes != nil || req.NodeIDs != nil) {
+	// Ownership, grants and session revocation must commit together. Targeted
+	// updates cannot overwrite a concurrent password change with the stale
+	// account row loaded above. Existing access AND refresh sessions are removed:
+	// an old credential must never keep grants after a downgrade, nor gain new
+	// grants after a promotion (the caller signs in again for the new policy).
+	if s.db != nil {
 		return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			if req.RoleCodes != nil {
-				if err := tx.Where("user_key = ?", req.Name).Delete(&model.SysUserPermissionRelDO{}).Error; err != nil {
+			fields := map[string]interface{}{}
+			if req.OwnerType != "" {
+				fields["owner_type"] = req.OwnerType
+			}
+			if req.OwnerID != "" {
+				fields["owner_id"] = req.OwnerID
+			}
+			policyChanged := len(fields) > 0 || req.RoleCodes != nil || req.NodeIDs != nil
+			if policyChanged {
+				fields["authorization_version"] = gorm.Expr("authorization_version + 1")
+			}
+			if len(fields) > 0 {
+				if err := tx.Model(&model.UserAccountsDO{}).Where("id = ?", user.ID).Updates(fields).Error; err != nil {
 					return err
 				}
-				for _, roleCode := range req.RoleCodes {
-					rel := &model.SysUserPermissionRelDO{
-						UserType:   "USER",
-						UserKey:    req.Name,
-						TargetType: "ROLE",
-						TargetCode: roleCode,
-					}
-					if err := tx.Create(rel).Error; err != nil {
+			}
+			if req.OwnerType != "" && req.RoleCodes == nil {
+				if err := tx.Model(&model.SysUserPermissionRelDO{}).
+					Where("user_key = ? AND target_type = ? AND user_type IN ?", req.Name, "ROLE", []string{auth.PermissionUserTypeUser, auth.PermissionUserTypeEdgeUser}).
+					Update("user_type", accountPermissionType(req.OwnerType)).Error; err != nil {
+					return err
+				}
+			}
+			if req.RoleCodes != nil {
+				if err := tx.Where("user_key = ? AND target_type = ? AND user_type IN ?", req.Name, "ROLE", []string{auth.PermissionUserTypeUser, auth.PermissionUserTypeEdgeUser}).Delete(&model.SysUserPermissionRelDO{}).Error; err != nil {
+					return err
+				}
+				ownerType := user.OwnerType
+				if req.OwnerType != "" {
+					ownerType = req.OwnerType
+				}
+				for _, roleCode := range distinctStrings(req.RoleCodes) {
+					if err := tx.Create(&model.SysUserPermissionRelDO{UserType: accountPermissionType(ownerType), UserKey: req.Name, TargetType: "ROLE", TargetCode: roleCode}).Error; err != nil {
 						return err
 					}
 				}
@@ -303,18 +328,26 @@ func (s *UserService) UpdateUser(ctx context.Context, req *UpdateUserRequest) er
 				if err := tx.Where("user_id = ?", req.Name).Delete(&model.SysUserNodeRelDO{}).Error; err != nil {
 					return err
 				}
-				for _, nodeID := range req.NodeIDs {
-					rel := &model.SysUserNodeRelDO{
-						UserID: req.Name,
-						NodeID: nodeID,
-					}
-					if err := tx.Create(rel).Error; err != nil {
+				for _, nodeID := range distinctStrings(req.NodeIDs) {
+					if err := tx.Create(&model.SysUserNodeRelDO{UserID: req.Name, NodeID: nodeID}).Error; err != nil {
 						return err
 					}
 				}
 			}
+			if len(fields) > 0 || req.RoleCodes != nil || req.NodeIDs != nil {
+				return tx.Unscoped().Where("name = ?", req.Name).Delete(&model.UserTokensDO{}).Error
+			}
 			return nil
 		})
+	}
+	if req.OwnerType != "" {
+		user.OwnerType = req.OwnerType
+	}
+	if req.OwnerID != "" {
+		user.OwnerID = req.OwnerID
+	}
+	if err := s.userRepo.Update(ctx, user); err != nil {
+		return err
 	}
 
 	// Fallback without transaction (when db is nil, e.g. in unit tests)
@@ -353,10 +386,15 @@ func (s *UserService) DeleteUser(ctx context.Context, name string) error {
 	// Use transaction when db is available to ensure atomicity
 	if s.db != nil {
 		return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			if err := tx.Where("user_key = ?", name).Delete(&model.SysUserPermissionRelDO{}).Error; err != nil {
+			if err := tx.Where("user_key = ? AND user_type IN ?", name, []string{auth.PermissionUserTypeUser, auth.PermissionUserTypeEdgeUser}).Delete(&model.SysUserPermissionRelDO{}).Error; err != nil {
 				return err
 			}
 			if err := tx.Where("user_id = ?", name).Delete(&model.SysUserNodeRelDO{}).Error; err != nil {
+				return err
+			}
+			// Delete refresh state as well, preventing a recreated username
+			// from inheriting a deleted account's credential.
+			if err := tx.Unscoped().Where("name = ?", name).Delete(&model.UserTokensDO{}).Error; err != nil {
 				return err
 			}
 			return tx.Delete(&model.UserAccountsDO{}, user.ID).Error

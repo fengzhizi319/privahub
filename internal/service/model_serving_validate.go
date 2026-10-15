@@ -11,6 +11,10 @@ import (
 // minCPU / maxCPU / minMemory / maxMemory @NotBlank. It returns "" when valid,
 // otherwise the VALIDATION_ERROR message.
 func ValidateServingPartyConfigs(parties []ServingPartyConfig) string {
+	if len(parties) == 0 {
+		return "partyConfigs must not be empty"
+	}
+	seen := make(map[string]bool, len(parties))
 	for i, p := range parties {
 		prefix := fmt.Sprintf("partyConfigs[%d].", i)
 		switch {
@@ -21,6 +25,12 @@ func ValidateServingPartyConfigs(parties []ServingPartyConfig) string {
 		case p.IsMock == nil:
 			return prefix + "isMock must not be null"
 		}
+		// Kuscia parties are a list, while party_configs is a map keyed by node.
+		// Duplicate ids would silently overwrite configuration on only one side.
+		if seen[p.NodeID] {
+			return prefix + "nodeId must be unique"
+		}
+		seen[p.NodeID] = true
 		for j, r := range p.Resources {
 			rp := fmt.Sprintf("%sresources[%d].", prefix, j)
 			for _, f := range []struct{ name, v string }{

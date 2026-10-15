@@ -51,6 +51,10 @@ type JobStatusSyncService struct {
 	// watch-based sync (job_sync_watch.go)
 	watcher      JobWatcher
 	pool         *kuscia.ClientPool
+	nodeReady    WatchNodeReadyFunc // readiness gate of pool-node watches
+	readyEvery   time.Duration      // readiness recheck period (default watchBackoffMax)
+	backoffMin   time.Duration      // watch reconnect back-off bounds (tests; default watchBackoffMin/Max)
+	backoffMax   time.Duration
 	watchState   watchState
 	applyMu      sync.Mutex // serializes watch / poll status application
 	missMu       sync.Mutex
@@ -308,6 +312,16 @@ func (s *JobStatusSyncService) updateJob(ctx context.Context, h *jobHolder, deta
 			if to == graphjob.TaskSucceed && from != graphjob.TaskSucceed {
 				task.Status = to
 				succeeded = append(succeeded, task)
+			}
+		}
+		// A FAILED / STOPPED Kuscia job never starts its remaining tasks
+		// (Kuscia keeps reporting them as "Pending"): stop them like
+		// ProjectJobDO.stop() so no task of a finished job stays INITIALIZED /
+		// RUNNING — the DAG would otherwise show them as queued and keep
+		// polling graph/node/status forever.
+		if st, ok := jobUpdates["status"].(string); ok && (st == graphjob.JobFailed || st == graphjob.JobStopped) {
+			if err := stopJobTasksTx(tx, h.projectID, h.jobID, now); err != nil {
+				return err
 			}
 		}
 		if len(jobUpdates) == 0 {

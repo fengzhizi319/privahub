@@ -18,9 +18,6 @@ const (
 	DataResourceInstID    DataResourceType = "INST_ID"
 )
 
-// projectStatusArchived is Java ProjectStatusEnum.ARCHIVED.
-const projectStatusArchived = 2
-
 // DataResourceAuth implements Java DataResourceAspect + DefaultDataResourceAuth:
 // whether the current user may access a node / project / institution.
 //
@@ -30,8 +27,7 @@ const projectStatusArchived = 2
 //   - NODE_ID: ownerId == nodeId, or the node belongs to the user's institution
 //     (node.inst_id == ownerId).
 //   - PROJECT_ID: AUTONOMY -> project_inst(project, ownerId) exists; otherwise
-//     project_node(project, ownerId) exists. An ARCHIVED project is still
-//     readable while it has project nodes (Java checkNodeArchive).
+//     project_node(project, ownerId) exists. Archival never widens membership.
 //   - INST_ID: ownerId == instId, or the owner node belongs to instId.
 type DataResourceAuth struct {
 	db  *gorm.DB
@@ -95,17 +91,7 @@ func (a *DataResourceAuth) checkProject(ctx context.Context, user *auth.UserCont
 		a.db.WithContext(ctx).Model(&model.ProjectNodeDO{}).
 			Where("project_id = ? AND node_id = ?", projectID, user.OwnerID).Count(&count)
 	}
-	if count > 0 {
-		return true
-	}
-	var project model.ProjectDO
-	if err := a.db.WithContext(ctx).Where("project_id = ?", projectID).First(&project).Error; err != nil {
-		return false
-	}
-	if int(project.Status) == projectStatusArchived {
-		var nodes int64
-		a.db.WithContext(ctx).Model(&model.ProjectNodeDO{}).Where("project_id = ?", projectID).Count(&nodes)
-		return nodes > 0
-	}
-	return false
+	// Archived projects retain existing membership; they must not become
+	// visible to unrelated tenants merely because another member exists.
+	return count > 0
 }

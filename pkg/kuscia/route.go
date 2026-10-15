@@ -27,10 +27,10 @@ type RouteEndpoint struct {
 
 // TokenConfig configures token-based route authentication.
 type TokenConfig struct {
-	DestinationPublicKey string `json:"destination_public_key,omitempty"`
-	RollingUpdatePeriod  int64  `json:"rolling_update_period,omitempty"`
-	SourcePublicKey      string `json:"source_public_key,omitempty"`
-	TokenGenMethod       string `json:"token_gen_method,omitempty"`
+	DestinationPublicKey string    `json:"destination_public_key,omitempty"`
+	RollingUpdatePeriod  FlexInt64 `json:"rolling_update_period,omitempty"`
+	SourcePublicKey      string    `json:"source_public_key,omitempty"`
+	TokenGenMethod       string    `json:"token_gen_method,omitempty"`
 }
 
 // MTLSConfig configures mTLS route authentication.

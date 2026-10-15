@@ -170,11 +170,7 @@ func (a *App) MetricsHandlers(h gin.HandlerFunc) []gin.HandlerFunc {
 // DataResourceMiddleware enforces the Java @DataResource checks
 // (middleware.DataResourceRoutes) on authenticated routes.
 func (a *App) DataResourceMiddleware() gin.HandlerFunc {
-	white := a.Config.Auth.DataResourceWhitelist
-	if len(white) == 0 {
-		white = middleware.DefaultAutonomyWhitelist
-	}
-	return middleware.DataResourceGuard(white)
+	return middleware.DataResourceGuard(nil)
 }
 
 func newUserLimiter(cfg *config.Config) *middleware.KeyedLimiter {

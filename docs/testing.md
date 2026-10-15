@@ -2,11 +2,7 @@
 
 ## 1. 测试概览
 
-| 指标 | 数值 |
-|------|------|
-| 测试文件 | 5 |
-| 测试用例 | 55 |
-| 覆盖包 | internal/service, pkg/kuscia, internal/controller/http/middleware |
+迁移验收使用 [业务矩阵与一键系统测试](migration-acceptance.md)。测试数量以实际运行报告为准，避免静态数字失真。
 
 ## 2. 运行测试
 

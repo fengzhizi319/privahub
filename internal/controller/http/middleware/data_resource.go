@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/fengzhizi319/privahub/internal/service"
-	"github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/gin-gonic/gin"
 )
 
@@ -240,33 +239,10 @@ var DataResourceExempt = map[string]string{
 	"/api/v1alpha1/data/sync":        "node rpc; per-table ownership enforced by the P2P sync consumer",
 }
 
-// DefaultAutonomyWhitelist is Java application-p2p.yaml white-list.paths:
-// AUTONOMY (P2P) users skip the data-resource check on these routes (their
-// services scope the result by institution / project participation).
-var DefaultAutonomyWhitelist = []string{
-	"/api/v1alpha1/p2p/node/delete",
-	"/api/v1alpha1/p2p/project/update",
-	"/api/v1alpha1/graph/list",
-	"/api/v1alpha1/project/get",
-	"/api/v1alpha1/project/job/list",
-	"/api/v1alpha1/project/job/get",
-	"/api/v1alpha1/project/datatable/get",
-	"/api/v1alpha1/project/job/task/output",
-	"/api/v1alpha1/project/job/task/logs",
-	"/api/v1alpha1/data/create",
-	"/api/v1alpha1/datatable/list",
-	"/api/v1alpha1/graph/node/status",
-	"/api/v1alpha1/graph/detail",
-	"/api/v1alpha1/graph/node/output",
-	"/api/v1alpha1/graph/node/logs",
-	"/api/v1alpha1/inst/get",
-	"/api/v1alpha1/inst/node/list",
-	"/api/v1alpha1/inst/node/add",
-	"/api/v1alpha1/inst/node/token",
-	"/api/v1alpha1/inst/node/newToken",
-	"/api/v1alpha1/inst/node/delete",
-	"/api/v1alpha1/inst/node/register",
-}
+// DefaultAutonomyWhitelist is deprecated and intentionally empty. A route
+// allowlist must not bypass resource ownership checks for AUTONOMY callers.
+// Keep the symbol for compatibility with integrations building this package.
+var DefaultAutonomyWhitelist = []string{}
 
 // CtxVerifiedResourceIDs is the gin context key holding the ids
 // DataResourceGuard verified (map canonical field name -> id). Handlers may
@@ -290,7 +266,8 @@ func VerifiedResourceID(c *gin.Context, field string) (string, bool) {
 //     one JSON value), so the id read here is the id every handler binding
 //     receives;
 //   - EDGE platform: only NODE_ID rules are checked (DataResourceAuth.Check);
-//   - AUTONOMY users skip whitelisted paths (Java white-list.paths);
+//   - AUTONOMY callers must pass the same ownership checks; legacy
+//     route-wide bypasses are deliberately unsupported;
 //   - CENTER owner users are never checked (Java: ownerType == CENTER; EDGE /
 //     P2P accounts on a CENTER platform are checked);
 //   - otherwise the id is read from the JSON body through CanonicalJSONKey and
@@ -298,11 +275,7 @@ func VerifiedResourceID(c *gin.Context, field string) (string, bool) {
 //
 // Verified ids are stored under CtxVerifiedResourceIDs. Denials answer HTTP
 // 200 with AUTH_FAILED. Install after authentication.
-func DataResourceGuard(autonomyWhitelist []string) gin.HandlerFunc {
-	white := make(map[string]bool, len(autonomyWhitelist))
-	for _, p := range autonomyWhitelist {
-		white[p] = true
-	}
+func DataResourceGuard(_ []string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		path := c.FullPath()
 		if path == "" {
@@ -328,10 +301,6 @@ func DataResourceGuard(autonomyWhitelist []string) gin.HandlerFunc {
 			return
 		}
 		if u.IsCenterOwner() {
-			c.Next()
-			return
-		}
-		if u.PlatformType == auth.PlatformTypeAutonomy && white[path] {
 			c.Next()
 			return
 		}

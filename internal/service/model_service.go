@@ -228,6 +228,21 @@ func (s *ModelService) findPack(ctx context.Context, modelID string) (*model.Pro
 	return &m, nil
 }
 
+// findProjectPack binds the model to the project checked by the HTTP resource
+// guard. Checking projectId alone is insufficient when modelId is independently
+// supplied: otherwise a caller could use its own project to access another's model.
+// Return the normal not-found error so the foreign model's existence is not leaked.
+func (s *ModelService) findProjectPack(ctx context.Context, modelID, projectID string) (*model.ProjectModelPackDO, error) {
+	pack, err := s.findPack(ctx, modelID)
+	if err != nil {
+		return nil, err
+	}
+	if projectID == "" || pack.ProjectID != projectID {
+		return nil, padErrBase(ErrModelNotFound, errcode.ProjectModelNotFound)
+	}
+	return pack, nil
+}
+
 func (s *ModelService) findServing(ctx context.Context, servingID string) (*model.ProjectModelServingDO, error) {
 	var sv model.ProjectModelServingDO
 	if servingID == "" || s.db.WithContext(ctx).Where("serving_id = ?", servingID).First(&sv).Error != nil {
@@ -480,7 +495,7 @@ func (s *ModelService) RefreshPublishing(ctx context.Context, pack *model.Projec
 // ModelPackDetail mirrors ModelManagementServiceImpl.modelPackDetail: the
 // per-party feature columns = model report schema ∩ own sample table schema.
 func (s *ModelService) ModelPackDetail(ctx context.Context, modelID, projectID string) (*ModelPackDetailVO, error) {
-	pack, err := s.findPack(ctx, modelID)
+	pack, err := s.findProjectPack(ctx, modelID, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +565,7 @@ func filterOwnSchema(columns []string, own []kuscia.DataColumn) []string {
 
 // ModelPackInfo mirrors ModelManagementServiceImpl.modelPackInfo.
 func (s *ModelService) ModelPackInfo(ctx context.Context, modelID, projectID string) (*ModelPackInfoVO, error) {
-	pack, err := s.findPack(ctx, modelID)
+	pack, err := s.findProjectPack(ctx, modelID, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -586,12 +601,14 @@ func (s *ModelService) ModelPackInfo(ctx context.Context, modelID, projectID str
 
 // CreateModelServing mirrors ModelManagementServiceImpl.createModelServing.
 func (s *ModelService) CreateModelServing(ctx context.Context, req *CreateModelServingRequest) error {
-	pack, err := s.findPack(ctx, req.ModelID)
+	pack, err := s.findProjectPack(ctx, req.ModelID, req.ProjectID)
 	if err != nil {
 		return err
 	}
-	if len(req.PartyConfigs) == 0 {
-		return nil
+	// Validate in the service too: background/internal callers do not pass
+	// through bean-style HTTP validation. Empty deployments must never succeed.
+	if msg := ValidateServingPartyConfigs(req.PartyConfigs); msg != "" {
+		return padErr(errcode.SystemValidationError, msg)
 	}
 	nodeIDs := make([]string, 0, len(req.PartyConfigs))
 	for _, p := range req.PartyConfigs {

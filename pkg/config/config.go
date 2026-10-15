@@ -267,6 +267,10 @@ type KusciaConfig struct {
 	Token              string        `mapstructure:"token"`                // Token header value or file path
 	InsecureSkipVerify bool          `mapstructure:"insecure_skip_verify"` // dev only
 	Timeout            time.Duration `mapstructure:"timeout"`              // request timeout (default 30s)
+	// HTTPProxy: proxy for KusciaAPI HTTP requests. Empty (default) = direct
+	// connection, ignoring HTTP(S)_PROXY; "env" = honour HTTP(S)_PROXY /
+	// NO_PROXY; otherwise a proxy URL (see kuscia.ClientConfig.HTTPProxy).
+	HTTPProxy string `mapstructure:"http_proxy"`
 
 	// CertsDir stores certs uploaded by inst node/register (Java secretpad.certs.dir-path).
 	CertsDir string `mapstructure:"certs_dir"`
@@ -327,9 +331,8 @@ type AuthConfig struct {
 	AdminName           string `mapstructure:"admin_name"`
 	AdminPassword       string `mapstructure:"admin_password"`
 	InitialPasswordFile string `mapstructure:"initial_password_file"`
-	// DataResourceWhitelist lists routes on which AUTONOMY (P2P) users skip
-	// the data-resource (node/project owner) check (Java white-list.paths).
-	// Empty uses the Java default list (middleware.DefaultAutonomyWhitelist).
+	// DataResourceWhitelist is deprecated: route-wide ownership bypasses
+	// are unsupported. Nonempty values are rejected during validation.
 	DataResourceWhitelist []string `mapstructure:"data_resource_whitelist"`
 
 	// JWTPreviousSecrets are former jwt_secret values still accepted for
@@ -416,6 +419,9 @@ func Load(cfgFile string) (*Config, error) {
 	if err := cfg.Crypto.loadExternalKeys(os.Environ()); err != nil {
 		return nil, err
 	}
+	if err := cfg.Kuscia.applyNodeEnvOverrides(os.Environ()); err != nil {
+		return nil, err
+	}
 	cfg.Profile = profile
 	if cfg.Observability.MetricsAccess == "" {
 		// /metrics is open only in development profiles (upgrade over Java,
@@ -439,6 +445,9 @@ func Load(cfgFile string) (*Config, error) {
 
 // Validate checks configuration for required fields and valid values.
 func (c *Config) Validate() error {
+	if len(c.Auth.DataResourceWhitelist) > 0 {
+		return fmt.Errorf("auth.data_resource_whitelist is no longer supported: remove route-wide ownership bypasses and grant explicit project/node membership")
+	}
 	validModes := map[string]bool{
 		"master": true, "center": true, "lite": true, "edge": true,
 		"autonomy": true, "p2p": true, "test": true,

@@ -92,6 +92,9 @@ kuscia:
   api_port: 8083  # KusciaAPI gRPC port
   http_port: 8082 # KusciaAPI HTTP port (used by privahub)
   protocol: "notls" # production requires tls or mtls (notls only with PRIVAHUB_PROFILE=dev|test)
+  # KusciaAPI requests connect directly and ignore HTTP(S)_PROXY by default.
+  # "env" honours HTTP(S)_PROXY / NO_PROXY; any other value is a proxy URL.
+  # http_proxy: ""
 
 observability:
   enable_metrics: true

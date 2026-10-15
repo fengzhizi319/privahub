@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -66,6 +67,33 @@ type ClientConfig struct {
 	// InsecureSkipVerify disables server cert verification (dev only; used
 	// when protocol is tls/mtls and no CAFile is configured).
 	InsecureSkipVerify bool `mapstructure:"insecure_skip_verify" json:"insecure_skip_verify,omitempty"`
+	// HTTPProxy selects the proxy for KusciaAPI requests (kuscia.http_proxy).
+	// Empty (default) connects directly: KusciaAPI lives on loopback / the
+	// private network, and a developer's HTTP(S)_PROXY would otherwise answer
+	// for unresolvable Kuscia hosts (e.g. "HTTP 502" for a missing tee lite).
+	// "env" uses HTTP(S)_PROXY / NO_PROXY; any other value is a proxy URL.
+	HTTPProxy string `mapstructure:"http_proxy" json:"http_proxy,omitempty"`
+}
+
+// HTTPProxyFromEnv is the ClientConfig.HTTPProxy value that honours the
+// HTTP_PROXY / HTTPS_PROXY / NO_PROXY environment variables.
+const HTTPProxyFromEnv = "env"
+
+// proxyFunc returns the http.Transport.Proxy for ClientConfig.HTTPProxy
+// (nil = direct connection).
+func proxyFunc(v string) (func(*http.Request) (*url.URL, error), error) {
+	v = strings.TrimSpace(v)
+	switch strings.ToLower(v) {
+	case "", "none", "direct":
+		return nil, nil
+	case HTTPProxyFromEnv, "environment":
+		return http.ProxyFromEnvironment, nil
+	}
+	u, err := url.Parse(v)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("kuscia: invalid http_proxy %q (use \"\", %q or a proxy URL)", v, HTTPProxyFromEnv)
+	}
+	return http.ProxyURL(u), nil
 }
 
 // DefaultClientConfig returns a default configuration for local development.
@@ -110,11 +138,18 @@ func NewClientE(cfg *ClientConfig) (*Client, error) {
 	scheme := "http"
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	var initErr error
+	proxy, perr := proxyFunc(cp.HTTPProxy)
+	if perr != nil {
+		initErr = perr
+	}
+	transport.Proxy = proxy
 	if proto == "tls" || proto == "mtls" || proto == "https" {
 		scheme = "https"
 		tlsCfg, err := buildTLSConfig(&cp, proto == "mtls")
 		if err != nil {
-			initErr = err
+			if initErr == nil {
+				initErr = err
+			}
 		} else {
 			transport.TLSClientConfig = tlsCfg
 		}

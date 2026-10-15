@@ -124,7 +124,7 @@ func (h *DataHandler) Download(c *gin.Context) {
 	// Stream the payload (io.Copy / on-the-fly tar.gz) instead of reading it
 	// into memory; archives have no known length and are sent chunked.
 	c.Header("Content-Type", "application/octet-stream")
-	if !info.Archive {
+	if info.Size >= 0 {
 		c.Header("Content-Length", strconv.FormatInt(info.Size, 10))
 	}
 	c.Status(200)

@@ -80,6 +80,40 @@ func (s *JobStatusSyncService) SetWatcher(w JobWatcher) { s.watcher = w }
 // and stopped on pool changes) in addition to the default watcher.
 func (s *JobStatusSyncService) SetPool(pool *kuscia.ClientPool) { s.pool = pool }
 
+// WatchNodeReadyFunc reports whether the KusciaAPI of a pool node is worth
+// watching now (e.g. its domain has a Ready Kuscia instance).
+type WatchNodeReadyFunc func(ctx context.Context, domainID string) bool
+
+// SetWatchNodeReady installs the readiness gate of pool-node watches: while it
+// returns false the node is not connected to (checked again every
+// watchBackoffMax), so an absent node (CENTER "tee" without a tee lite) does
+// not produce a failing watch every minute. nil watches every node.
+func (s *JobStatusSyncService) SetWatchNodeReady(fn WatchNodeReadyFunc) { s.nodeReady = fn }
+
+// domainQuerier is the KusciaAPI domain query used by KusciaDomainReady.
+type domainQuerier interface {
+	QueryDomain(ctx context.Context, domainID string) (*kuscia.QueryDomainResponse, error)
+}
+
+// KusciaDomainReady returns a WatchNodeReadyFunc for CENTER deployments: a
+// node is watched when its domain exists on the master and has at least one
+// Ready instance. Transport errors report ready (the watch itself then
+// retries with back-off), so a master outage does not disable watches.
+func KusciaDomainReady(q domainQuerier, timeout time.Duration) WatchNodeReadyFunc {
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	return func(ctx context.Context, domainID string) bool {
+		cctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		resp, err := q.QueryDomain(cctx, domainID)
+		if err != nil {
+			return kuscia.ErrorCode(err) == 0
+		}
+		return resp != nil && resp.Data.IsReady()
+	}
+}
+
 // WatchConnected reports whether the job watch is healthy: every watch
 // stream that is not unsupported is connected (and at least one is).
 func (s *JobStatusSyncService) WatchConnected() bool {
@@ -276,15 +310,58 @@ func (s *JobStatusSyncService) watchLoop() {
 	s.watchNode(ctx, "", s.watcher)
 }
 
+// sleepCtx waits d or until ctx ends (false).
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
 // watchNode keeps one watch stream open until ctx ends; it reconnects with
 // back-off and gives up (polling only) when the endpoint is unsupported.
+// Logging is de-duplicated: the first failure is a WARN, repeated failures
+// are DEBUG and the recovery is an INFO. Pool nodes rejected by the
+// readiness gate (SetWatchNodeReady) are not connected to until ready.
 func (s *JobStatusSyncService) watchNode(ctx context.Context, node string, w JobWatcher) {
 	log := s.log.With(zap.String("node", node))
-	backoff := watchBackoffMin
+	minB, maxB := s.watchBackoff()
+	backoff := minB
+	failures := 0
+	paused := false
+	recovered := func() {
+		if failures > 0 {
+			log.Info("kuscia job watch recovered", zap.Int("failed_attempts", failures))
+			failures = 0
+		}
+	}
 	for {
+		if node != "" && s.nodeReady != nil {
+			if !s.nodeReady(ctx, node) {
+				if ctx.Err() != nil {
+					return
+				}
+				if !paused {
+					log.Info("kuscia job watch paused: node has no ready Kuscia instance; rechecking periodically",
+						zap.Duration("interval", s.readyRecheck()))
+					paused = true
+				}
+				if !sleepCtx(ctx, s.readyRecheck()) {
+					return
+				}
+				continue
+			}
+			if paused {
+				log.Info("kuscia job watch resumed: node is ready")
+				paused = false
+			}
+		}
 		started := time.Now()
 		err := w.WatchJobs(ctx, watchTimeoutSeconds, func(ev *kuscia.WatchJobEvent) error {
 			s.setWatchConnected(node, true)
+			recovered()
 			s.HandleWatchEvent(ctx, ev)
 			return nil
 		})
@@ -304,19 +381,26 @@ func (s *JobStatusSyncService) watchNode(ctx context.Context, node string, w Job
 			log.Info("kuscia job watch not supported, falling back to polling", zap.Error(err))
 			return
 		}
-		if err != nil {
-			log.Warn("kuscia job watch failed, retrying", zap.Error(err), zap.Duration("backoff", backoff))
+		if time.Since(started) > maxB {
+			backoff = minB // the stream was healthy for a while
 		}
-		if time.Since(started) > watchBackoffMax {
-			backoff = watchBackoffMin // the stream was healthy for a while
+		switch {
+		case err == nil:
+			recovered()
+		case failures == 0:
+			log.Warn("kuscia job watch failed, retrying (repeated failures are logged at DEBUG until it recovers)",
+				zap.Error(err), zap.Duration("backoff", backoff))
+			failures++
+		default:
+			failures++
+			log.Debug("kuscia job watch still failing", zap.Error(err), zap.Int("failed_attempts", failures),
+				zap.Duration("backoff", backoff))
 		}
-		select {
-		case <-ctx.Done():
+		if !sleepCtx(ctx, backoff) {
 			return
-		case <-time.After(backoff):
 		}
-		if backoff *= 2; backoff > watchBackoffMax {
-			backoff = watchBackoffMax
+		if backoff *= 2; backoff > maxB {
+			backoff = maxB
 		}
 	}
 }
@@ -491,4 +575,25 @@ func stopJobTasksTx(tx *gorm.DB, projectID, jobID string, now time.Time) error {
 		}
 	}
 	return nil
+}
+
+// readyRecheck is the readiness recheck period of a paused pool-node watch.
+func (s *JobStatusSyncService) readyRecheck() time.Duration {
+	if s.readyEvery > 0 {
+		return s.readyEvery
+	}
+	_, maxB := s.watchBackoff()
+	return maxB
+}
+
+// watchBackoff returns the reconnect back-off bounds.
+func (s *JobStatusSyncService) watchBackoff() (time.Duration, time.Duration) {
+	minB, maxB := watchBackoffMin, watchBackoffMax
+	if s.backoffMin > 0 {
+		minB = s.backoffMin
+	}
+	if s.backoffMax > 0 {
+		maxB = s.backoffMax
+	}
+	return minB, maxB
 }

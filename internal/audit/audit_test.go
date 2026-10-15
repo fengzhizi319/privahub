@@ -203,7 +203,10 @@ func TestAnchorDetectsRewrite(t *testing.T) {
 		db.Save(&rows[i])
 	}
 	db.Model(&model.AuditChainTailDO{}).Where("id = 1").Update("hash", prev)
-	if r := verify(t, s.Store(), VerifyOptions{Anchors: anchors}); r.Valid || r.BreakKind != BreakAnchor || r.BrokenSeq != 10 {
+	// The first anchor at or after the rewritten seq 2 must disagree. Besides
+	// the explicit AnchorNow at seq 10, the startup anchor may have caught a
+	// partially flushed chain (seq 2..9) under load, which then reports first.
+	if r := verify(t, s.Store(), VerifyOptions{Anchors: anchors}); r.Valid || r.BreakKind != BreakAnchor || r.BrokenSeq < 2 || r.BrokenSeq > 10 {
 		t.Fatalf("rewrite not detected: %+v", r)
 	}
 	// Truncation below an anchor.

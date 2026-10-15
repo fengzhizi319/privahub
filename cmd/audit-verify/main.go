@@ -20,6 +20,7 @@ import (
 	"os"
 
 	"github.com/fengzhizi319/privahub/internal/audit"
+	"github.com/fengzhizi319/privahub/internal/dao"
 	"github.com/fengzhizi319/privahub/pkg/config"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/sqlite"
@@ -64,7 +65,8 @@ func run(args []string) int {
 	var dial gorm.Dialector
 	switch *driver {
 	case "sqlite":
-		dial = sqlite.Open(*dsn)
+		sqliteDSN, _ := dao.NormalizeSQLiteDSN(*dsn)
+		dial = sqlite.Open(sqliteDSN)
 	case "mysql":
 		dial = mysql.Open(*dsn)
 	default:

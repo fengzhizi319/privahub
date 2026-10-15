@@ -17,6 +17,7 @@ import (
 	"github.com/fengzhizi319/privahub/pkg/config"
 	"github.com/fengzhizi319/privahub/pkg/errcode"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -134,10 +135,9 @@ func TestDataResourceGuard_RejectsForeignIDs(t *testing.T) {
 		name      string
 		mode      string
 		ownerType string
-		skipWhite bool
 	}{
 		{name: "center-platform/edge-user", mode: "master", ownerType: auth.OwnerTypeEdge},
-		{name: "autonomy-platform/p2p-user", mode: "autonomy", ownerType: auth.OwnerTypeP2P, skipWhite: true},
+		{name: "autonomy-platform/p2p-user", mode: "autonomy", ownerType: auth.OwnerTypeP2P},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,21 +148,12 @@ func TestDataResourceGuard_RejectsForeignIDs(t *testing.T) {
 			// The platform node owner passes interface RBAC, isolating the data check.
 			token := loginAs(t, app, "u-"+tc.mode, tc.ownerType, "self-node")
 			r := NewRouter(zap.NewNop(), app)
-			white := map[string]bool{}
-			for _, p := range middleware.DefaultAutonomyWhitelist {
-				white[p] = true
-			}
 			for _, path := range sortedRules() {
 				if strings.HasPrefix(path, "/api/v1alpha1/user/node/") {
 					continue // inner-port only; covered below
 				}
 				code, msg := callAPI(t, r, token, path, foreignBody)
 				denied := code == errcode.AuthFailed.Code && strings.Contains(msg, "No permission to access the data")
-				if tc.skipWhite && white[path] {
-					// Java white-list.paths: the aspect is skipped for P2P users
-					// (the handler / service may still scope the request).
-					continue
-				}
 				if !denied {
 					t.Errorf("%s: foreign id not rejected: code=%d msg=%q", path, code, msg)
 				}
@@ -260,4 +251,24 @@ func TestFeatureTableAliasesRemoved(t *testing.T) {
 			t.Errorf("%s must not be registered", ri.Path)
 		}
 	}
+}
+
+// AUTONOMY must use project_inst membership even for paths formerly on the
+// Java route-wide bypass list. Explicit legacy configuration cannot restore it.
+func TestAutonomyProjectMembershipCannotBeBypassed(t *testing.T) {
+	app := newTestAppWith(t, func(c *config.Config) {
+		c.Server.Mode = "autonomy"
+		c.Server.NodeID = "self-node"
+	})
+	app.Config.Auth.DataResourceWhitelist = []string{"/api/v1alpha1/graph/list"}
+	require.NoError(t, app.DB.Create(&model.ProjectDO{ProjectID: "member-project", Name: "Member"}).Error)
+	require.NoError(t, app.DB.Create(&model.ProjectDO{ProjectID: "foreign-project", Name: "Foreign"}).Error)
+	require.NoError(t, app.DB.Create(&model.ProjectInstDO{ProjectID: "member-project", InstID: "self-node"}).Error)
+	token := loginAs(t, app, "institution-user", auth.OwnerTypeP2P, "self-node")
+	router := NewRouter(zap.NewNop(), app)
+	code, msg := callAPI(t, router, token, "/api/v1alpha1/graph/list", `{"projectId":"member-project"}`)
+	require.Equal(t, 0, code, msg)
+	code, msg = callAPI(t, router, token, "/api/v1alpha1/graph/list", `{"projectId":"foreign-project"}`)
+	require.Equal(t, errcode.AuthFailed.Code, code, msg)
+	require.Contains(t, msg, "No permission to access the data")
 }

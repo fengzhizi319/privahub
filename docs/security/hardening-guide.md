@@ -14,6 +14,8 @@ dev/test profile in production — it silently relaxes most of these checks.
 Reference deployments: `deployments/k8s/` (kustomize) and
 `deployments/docker/docker-compose.yml`.
 
+See [authorization review](authorization-review.md) for session revocation, credential header rules, and the distinction between incoming sessions and outgoing Kuscia tokens.
+
 ## 1. Profile and process
 
 - [ ] `PRIVAHUB_PROFILE` unset (or a non-dev profile such as `edge`/`p2p`).

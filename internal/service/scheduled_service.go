@@ -357,11 +357,12 @@ type ScheduledGraphCreateRequest struct {
 
 // PageScheduledRequest is the /scheduled/page request.
 type PageScheduledRequest struct {
-	ProjectID string `json:"projectId"`
-	Search    string `json:"search"`
-	Status    string `json:"status"`
-	Page      int    `json:"page"`
-	Size      int    `json:"size"`
+	ProjectID string            `json:"projectId"`
+	Search    string            `json:"search"`
+	Status    string            `json:"status"`
+	Page      int               `json:"page"`
+	Size      int               `json:"size"`
+	Sort      map[string]string `json:"sort"`
 }
 
 // PageScheduledVO is one /scheduled/page row.
@@ -399,10 +400,11 @@ type ScheduledInfoRequest struct {
 
 // TaskPageScheduledRequest is the /scheduled/task/page request.
 type TaskPageScheduledRequest struct {
-	ScheduleID string `json:"scheduleId"`
-	Search     string `json:"search"`
-	Page       int    `json:"page"`
-	Size       int    `json:"size"`
+	ScheduleID string            `json:"scheduleId"`
+	Search     string            `json:"search"`
+	Page       int               `json:"page"`
+	Size       int               `json:"size"`
+	Sort       map[string]string `json:"sort"`
 }
 
 // TaskPageScheduledVO is one /scheduled/task/page row.
@@ -713,9 +715,9 @@ func (s *ScheduledService) findSchedule(ctx context.Context, scheduleID string) 
 	return &sc, nil
 }
 
-func (s *ScheduledService) findTask(ctx context.Context, scheduleTaskID string) (*model.ProjectScheduleTaskDO, error) {
+func (s *ScheduledService) findTask(ctx context.Context, scheduleID, scheduleTaskID string) (*model.ProjectScheduleTaskDO, error) {
 	var t model.ProjectScheduleTaskDO
-	if err := s.db.WithContext(ctx).Where("schedule_task_id = ?", scheduleTaskID).First(&t).Error; err != nil {
+	if err := s.db.WithContext(ctx).Where("schedule_id = ? AND schedule_task_id = ?", scheduleID, scheduleTaskID).First(&t).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, &ScheduledError{Code: errcode.ScheduledScheduleTaskNotExist, Msg: scheduleTaskID}
 		}
@@ -727,8 +729,29 @@ func (s *ScheduledService) findTask(ctx context.Context, scheduleTaskID string) 
 func (s *ScheduledService) haveTaskRunning(ctx context.Context, scheduleID string) (bool, error) {
 	var cnt int64
 	err := s.db.WithContext(ctx).Model(&model.ProjectScheduleTaskDO{}).
-		Where("schedule_id = ? AND status = ?", scheduleID, model.ScheduledStatusRunning).Count(&cnt).Error
+		Where("schedule_id = ? AND status IN ?", scheduleID, []string{model.ScheduledStatusRunning, model.ScheduledStatusStopping}).Count(&cnt).Error
 	return cnt > 0, err
+}
+
+// schedulePageOrder accepts only mapped columns and literal SQL directions.
+// Never pass the client's sort keys/directions directly into GORM Order.
+// Twin keys from the compatibility middleware are intentionally ignored; the
+// canonical camelCase keys are retained, and id provides stable page boundaries.
+func schedulePageOrder(q *gorm.DB, requested, columns map[string]string, fallback string) *gorm.DB {
+	ordered := false
+	for _, key := range sortedMapKeys(requested) {
+		column, ok := columns[key]
+		direction := strings.ToUpper(requested[key])
+		if !ok || (direction != "ASC" && direction != "DESC") {
+			continue
+		}
+		q = q.Order(column + " " + direction)
+		ordered = true
+	}
+	if !ordered {
+		q = q.Order(fallback)
+	}
+	return q.Order("id DESC")
 }
 
 func encodeJobRequest(req *kuscia.CreateJobRequest) (string, error) {
@@ -971,7 +994,8 @@ func (s *ScheduledService) QueryPage(ctx context.Context, req *PageScheduledRequ
 		return nil, schedErr(errcode.ParamError, "projectId is required")
 	}
 	page, size := normPage(req.Page, req.Size, 10)
-	q := s.db.WithContext(ctx).Model(&model.ProjectScheduleDO{}).Where("project_id = ?", req.ProjectID)
+	q := s.db.WithContext(ctx).Model(&model.ProjectScheduleDO{}).
+		Where("project_id = ? AND owner = ?", req.ProjectID, scheduleUserFrom(ctx).OwnerID)
 	if req.Search != "" {
 		q = q.Where("schedule_id LIKE ? ESCAPE '!'", sqlutil.Contains(req.Search))
 	}
@@ -983,17 +1007,33 @@ func (s *ScheduledService) QueryPage(ctx context.Context, req *PageScheduledRequ
 		return nil, err
 	}
 	var rows []model.ProjectScheduleDO
-	if err := q.Order("gmt_create DESC, id DESC").Offset((page - 1) * size).Limit(size).Find(&rows).Error; err != nil {
+	if err := schedulePageOrder(q, req.Sort, map[string]string{"createTime": "create_time"}, "gmt_create DESC").
+		Offset((page - 1) * size).Limit(size).Find(&rows).Error; err != nil {
 		return nil, err
+	}
+	// Resolve running flags in one query rather than one COUNT per schedule.
+	// Both RUNNING and STOPPING are active: a stop acknowledgement is not a
+	// terminal Kuscia status, so the plan cannot be safely offlined yet.
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ScheduleID)
+	}
+	var runningIDs []string
+	if len(ids) > 0 {
+		if err := s.db.WithContext(ctx).Model(&model.ProjectScheduleTaskDO{}).
+			Where("schedule_id IN ? AND status IN ?", ids, []string{model.ScheduledStatusRunning, model.ScheduledStatusStopping}).
+			Distinct("schedule_id").Pluck("schedule_id", &runningIDs).Error; err != nil {
+			return nil, err
+		}
+	}
+	runningSet := make(map[string]bool, len(runningIDs))
+	for _, id := range runningIDs {
+		runningSet[id] = true
 	}
 	ownerName := s.ownerName(ctx, scheduleUserFrom(ctx).OwnerID)
 	list := make([]PageScheduledVO, 0, len(rows))
 	for i := range rows {
 		r := &rows[i]
-		running, err := s.haveTaskRunning(ctx, r.ScheduleID)
-		if err != nil {
-			return nil, err
-		}
 		ct := r.CreateTime
 		list = append(list, PageScheduledVO{
 			ScheduleID:    r.ScheduleID,
@@ -1001,7 +1041,7 @@ func (s *ScheduledService) QueryPage(ctx context.Context, req *PageScheduledRequ
 			ScheduleStats: r.Status,
 			Creator:       r.Creator,
 			CreateTime:    s.fmtLocal(&ct),
-			TaskRunning:   running,
+			TaskRunning:   runningSet[r.ScheduleID],
 			Owner:         r.Owner,
 			OwnerName:     ownerName,
 		})
@@ -1031,15 +1071,15 @@ func (s *ScheduledService) Offline(ctx context.Context, req *ScheduledOfflineReq
 	if err != nil {
 		return err
 	}
+	if err := checkScheduleOwner(ctx, sc.Owner); err != nil {
+		return err
+	}
 	running, err := s.haveTaskRunning(ctx, req.ScheduleID)
 	if err != nil {
 		return err
 	}
 	if running {
 		return &ScheduledError{Code: errcode.ScheduledScheduleRunningNotOffline}
-	}
-	if err := checkScheduleOwner(ctx, sc.Owner); err != nil {
-		return err
 	}
 	// Setting DOWN pauses the schedule: the engine only fires tasks of UP schedules.
 	return s.db.WithContext(ctx).Model(&model.ProjectScheduleDO{}).
@@ -1067,6 +1107,9 @@ func (s *ScheduledService) Info(ctx context.Context, req *ScheduledInfoRequest) 
 	if err != nil {
 		return nil, err
 	}
+	if err := checkScheduleOwner(ctx, sc.Owner); err != nil {
+		return nil, err
+	}
 	var snap scheduleJobSnapshot
 	if sc.JobInfo == "" || json.Unmarshal([]byte(sc.JobInfo), &snap) != nil {
 		return nil, &ScheduledError{Code: errcode.ScheduledProjectJobNotExist}
@@ -1081,7 +1124,8 @@ func (s *ScheduledService) Info(ctx context.Context, req *ScheduledInfoRequest) 
 // TaskPage implements /scheduled/task/page.
 func (s *ScheduledService) TaskPage(ctx context.Context, req *TaskPageScheduledRequest) (*ScheduledPage[TaskPageScheduledVO], error) {
 	page, size := normPage(req.Page, req.Size, 10)
-	q := s.db.WithContext(ctx).Model(&model.ProjectScheduleTaskDO{})
+	q := s.db.WithContext(ctx).Model(&model.ProjectScheduleTaskDO{}).
+		Where("owner = ?", scheduleUserFrom(ctx).OwnerID)
 	if req.ScheduleID != "" {
 		q = q.Where("schedule_id = ?", req.ScheduleID)
 	}
@@ -1093,7 +1137,10 @@ func (s *ScheduledService) TaskPage(ctx context.Context, req *TaskPageScheduledR
 		return nil, err
 	}
 	var rows []model.ProjectScheduleTaskDO
-	if err := q.Order("gmt_create DESC, schedule_task_expect_start DESC, id DESC").Offset((page - 1) * size).Limit(size).Find(&rows).Error; err != nil {
+	if err := schedulePageOrder(q, req.Sort, map[string]string{
+		"scheduleTaskExpectStartTime": "schedule_task_expect_start", "scheduleTaskStartTime": "schedule_task_start_time",
+		"scheduleTaskEndTime": "schedule_task_end_time", "createTime": "gmt_create",
+	}, "gmt_create DESC, schedule_task_expect_start DESC").Offset((page - 1) * size).Limit(size).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	list := make([]TaskPageScheduledVO, 0, len(rows))
@@ -1118,7 +1165,7 @@ func (s *ScheduledService) TaskPage(ctx context.Context, req *TaskPageScheduledR
 // STOPPED, and the rest of the schedule is not paused (Java paused the whole
 // Quartz group without marking the schedule DOWN, leaving it unrecoverable).
 func (s *ScheduledService) TaskStop(ctx context.Context, req *TaskStopScheduledRequest) error {
-	task, err := s.findTask(ctx, req.ScheduleTaskID)
+	task, err := s.findTask(ctx, req.ScheduleID, req.ScheduleTaskID)
 	if err != nil {
 		return err
 	}
@@ -1185,7 +1232,7 @@ func (s *ScheduledService) TaskRerun(ctx context.Context, req *TaskReRunSchedule
 	if sc.Status == model.ScheduledStatusDown {
 		return schedErr(errcode.ScheduledProjectJobRestartError, "schedule is down")
 	}
-	task, err := s.findTask(ctx, req.ScheduleTaskID)
+	task, err := s.findTask(ctx, req.ScheduleID, req.ScheduleTaskID)
 	if err != nil {
 		return err
 	}
@@ -1259,8 +1306,11 @@ func (s *ScheduledService) TaskInfo(ctx context.Context, req *TaskInfoScheduledR
 	if err != nil {
 		return nil, err
 	}
-	task, err := s.findTask(ctx, req.ScheduleTaskID)
+	task, err := s.findTask(ctx, req.ScheduleID, req.ScheduleTaskID)
 	if err != nil {
+		return nil, err
+	}
+	if err := checkScheduleOwner(ctx, task.Owner); err != nil {
 		return nil, err
 	}
 	var sj model.ProjectScheduleJobDO

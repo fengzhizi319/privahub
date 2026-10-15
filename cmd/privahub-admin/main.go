@@ -49,6 +49,7 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/fengzhizi319/privahub/internal/audit"
+	"github.com/fengzhizi319/privahub/internal/dao"
 	"github.com/fengzhizi319/privahub/internal/service"
 	pauth "github.com/fengzhizi319/privahub/pkg/auth"
 	"github.com/fengzhizi319/privahub/pkg/config"
@@ -192,7 +193,8 @@ func openDB(driver, dsn string) (*gorm.DB, error) {
 	var dial gorm.Dialector
 	switch driver {
 	case "sqlite":
-		dial = sqlite.Open(dsn)
+		sqliteDSN, _ := dao.NormalizeSQLiteDSN(dsn)
+		dial = sqlite.Open(sqliteDSN)
 	case "mysql":
 		dial = mysql.Open(dsn)
 	default:

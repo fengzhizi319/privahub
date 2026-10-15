@@ -1011,3 +1011,91 @@ func TestScheduledStatusFrom(t *testing.T) {
 		}
 	}
 }
+
+// Tenant isolation must apply before pagination and before returning job snapshots.
+func TestScheduled_TenantIsolation(t *testing.T) {
+	f := newSchedFixture(t)
+	if err := f.svc.CreateScheduler(f.ctx, dailyCreate("tenant-a")); err != nil {
+		t.Fatal(err)
+	}
+	task := f.tasks(t)[0]
+	other := auth.ContextWithClaims(context.Background(), &auth.Claims{OwnerID: "bob"})
+	_, err := f.svc.Info(other, &ScheduledInfoRequest{ScheduleID: "tenant-a"})
+	expectCode(t, err, errcode.ScheduledUserNotOwner)
+	_, err = f.svc.TaskInfo(other, &TaskInfoScheduledRequest{ScheduleID: "tenant-a", ScheduleTaskID: task.ScheduleTaskID})
+	expectCode(t, err, errcode.ScheduledUserNotOwner)
+	for _, scheduleID := range []string{"", "tenant-a"} {
+		page, err := f.svc.TaskPage(other, &TaskPageScheduledRequest{ScheduleID: scheduleID, Size: 10})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if page.Total != 0 || len(page.List) != 0 {
+			t.Fatalf("other tenant tasks exposed: %+v", page)
+		}
+	}
+	page, err := f.svc.QueryPage(other, &PageScheduledRequest{ProjectID: "p1", Size: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 0 || len(page.List) != 0 {
+		t.Fatalf("other tenant schedules exposed: %+v", page)
+	}
+}
+
+func TestScheduled_TaskMustBelongToRequestedSchedule(t *testing.T) {
+	f := newSchedFixture(t)
+	for _, id := range []string{"parent-a", "parent-b"} {
+		if err := f.svc.CreateScheduler(f.ctx, dailyCreate(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	task := f.tasks(t)[0]
+	wrongID := "parent-a"
+	if task.ScheduleID == wrongID {
+		wrongID = "parent-b"
+	}
+	_, err := f.svc.TaskInfo(f.ctx, &TaskInfoScheduledRequest{ScheduleID: wrongID, ScheduleTaskID: task.ScheduleTaskID})
+	expectCode(t, err, errcode.ScheduledScheduleTaskNotExist)
+	expectCode(t, f.svc.TaskStop(f.ctx, &TaskStopScheduledRequest{ScheduleID: wrongID, ScheduleTaskID: task.ScheduleTaskID}), errcode.ScheduledScheduleTaskNotExist)
+	expectCode(t, f.svc.TaskRerun(f.ctx, &TaskReRunScheduledRequest{ScheduleID: wrongID, ScheduleTaskID: task.ScheduleTaskID}), errcode.ScheduledScheduleTaskNotExist)
+	if got := f.task(t, task.ScheduleTaskID).Status; got != task.Status {
+		t.Fatalf("task changed: %s -> %s", task.Status, got)
+	}
+	if len(f.kuscia.stopped) != 0 || len(f.kuscia.created) != 0 || len(f.kuscia.restarted) != 0 || len(f.kuscia.deleted) != 0 {
+		t.Fatal("rejected request reached Kuscia")
+	}
+}
+
+func TestScheduled_SortAndStopping(t *testing.T) {
+	f := newSchedFixture(t)
+	if err := f.svc.CreateScheduler(f.ctx, dailyCreate("sort-1")); err != nil {
+		t.Fatal(err)
+	}
+	asc, err := f.svc.TaskPage(f.ctx, &TaskPageScheduledRequest{ScheduleID: "sort-1", Size: 100, Sort: map[string]string{"scheduleTaskExpectStartTime": "ASC"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc, err := f.svc.TaskPage(f.ctx, &TaskPageScheduledRequest{ScheduleID: "sort-1", Size: 100, Sort: map[string]string{"scheduleTaskExpectStartTime": "DESC"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(asc.List) < 2 || asc.List[0].ScheduleTaskID != desc.List[len(desc.List)-1].ScheduleTaskID {
+		t.Fatal("requested sorting ignored")
+	}
+	// Untrusted SQL fragments must not become GORM Order clauses.
+	if _, err := f.svc.TaskPage(f.ctx, &TaskPageScheduledRequest{Sort: map[string]string{"id; DROP TABLE project_schedule_task": "ASC", "createTime": "DESC; --"}}); err != nil {
+		t.Fatal(err)
+	}
+	task := f.tasks(t)[0]
+	if err := f.db.Model(&model.ProjectScheduleTaskDO{}).Where("id = ?", task.ID).Update("status", model.ScheduledStatusStopping).Error; err != nil {
+		t.Fatal(err)
+	}
+	page, err := f.svc.QueryPage(f.ctx, &PageScheduledRequest{ProjectID: "p1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.List) != 1 || !page.List[0].TaskRunning {
+		t.Fatal("STOPPING must remain active in UI")
+	}
+	expectCode(t, f.svc.Offline(f.ctx, &ScheduledOfflineRequest{ScheduleID: "sort-1"}), errcode.ScheduledScheduleRunningNotOffline)
+}

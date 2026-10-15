@@ -8,6 +8,12 @@
 
 ---
 
+## 当前验收入口（2026-10-15）
+
+最新证据、业务矩阵和未验收外部链路见 [业务迁移验收](migration-acceptance.md)。
+下文保留历史评估过程，不应将历史“100% 路由覆盖”解释为全业务验收通过。
+新增 Java 源码独立基线为 25 个控制器、121 个路由，系统门禁见 `scripts/test_migration.sh`。
+
 ## 一、背景与目标
 
 `clwork/privahub` 是从 `sfwork/secretpad` 迁移而来的 Go 重构版后端，`clwork/privahub/web` 是配套的全新前端（Feature-Sliced 架构）。迁移版前端在重写时已按照全功能版的业务能力定义了完整的 API 契约（`web/openapi/secretpad.openapi.json` + `packages/api-client`，**统一 camelCase**），但 Go 后端尚未实现其中全部端点，且**已实现端点的请求/响应契约与前端存在系统性不一致**，导致部分页面功能在迁移版中不可用。
@@ -155,6 +161,22 @@
 - 顺带为 `InstNodeToken`/`RefreshNode` 请求绑定补充 `nodeId` camelCase 变体（防御性，中间件本已扩展孪生键）。`inst/node/register`（原生 fetch + `json_data` query + multipart）复查正确，无需修复。
 
 `go build`/`vet`/`test` 全过。
+
+---
+
+## 2.14 业务语义复核：周期任务租户隔离（2026-10-15）
+
+此前“离线可验证的迁移工作已全部完成”“唯一剩余差距为 Kuscia 运行时深度”的结论仅覆盖当时核查范围，不能作为业务等价性的完整结论。路由存在、Zod 可选字段通过校验、页面存在均不能证明功能迁移完成。
+
+本轮直接对照旧项目 `ScheduledServiceImpl` 与 Go `ScheduledService`，确认并补齐以下遗漏：
+
+- `scheduled/info`、`scheduled/task/info`：迁移旧项目已实现的 owner 校验，防止其他租户读取作业和图详情。
+- `scheduled/page`、`scheduled/task/page`：在数据库查询及计数前加入 owner 条件，保证分页列表和 total 均隔离。
+- `scheduled/task/info|stop|rerun`：统一按 `(scheduleId, scheduleTaskId)` 查询执行实例，拒绝将一个计划的 ID 与另一个计划的实例拼接使用；归属不符时返回现有任务不存在错误，避免操作 Kuscia 或修改实例。
+
+保留 Go 版已有改进：数据库持久化触发器、状态 CAS 领取、重启恢复，以及停止单个实例不暂停整个计划。无需引入旧版 Quartz 或复制 Java 分层。
+
+新增回归测试覆盖跨租户详情读取、指定/未指定计划的任务分页、计划分页，以及错配计划与实例的详情/停止/重跑请求。该复核只覆盖周期任务上述接口，其他模块仍需逐条核对业务行为、权限、状态转换及运行时副作用；不据此宣称全量迁移完成。
 
 ---
 

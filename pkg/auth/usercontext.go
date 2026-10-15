@@ -71,6 +71,8 @@ type UserContext struct {
 	MustChangePassword bool `json:"mustChangePassword,omitempty"`
 	// PwdVer is the account password version the session was created with.
 	PwdVer int64 `json:"-"`
+	// AuthorizationVersion is stored on the session row, never trusted from JSON.
+	AuthorizationVersion int64 `json:"-"`
 }
 
 // IsCenterOwner reports whether the user is a CENTER platform user (full data

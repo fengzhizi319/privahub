@@ -225,6 +225,12 @@ func NewApp(db *gorm.DB, cfg *config.Config, log *zap.Logger) *App {
 		// Polling resolves each job's channel; one watch per pool node.
 		jobSyncService.SetKuscia(kusciaRouter)
 		jobSyncService.SetPool(kusciaPool)
+		// CENTER: every lite domain is managed by this master, so a pool node
+		// (e.g. "tee" registered by TeeResourceInit) is watched only while its
+		// domain has a Ready instance — no failing watch without a tee lite.
+		if envService.IsCenter() {
+			jobSyncService.SetWatchNodeReady(service.KusciaDomainReady(kusciaClient, cfg.Kuscia.Timeout))
+		}
 	}
 	// Model export (pack) jobs: status sync writes project_model_pack on success.
 	modelService.WithKusciaPool(kusciaPool).WithEnv(envService).WithGraphService(graphService).WithLogger(log)

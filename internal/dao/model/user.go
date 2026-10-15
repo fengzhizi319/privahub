@@ -21,6 +21,10 @@ type UserAccountsDO struct {
 	// PasswordVersion is bumped on every password change/reset; tokens carry
 	// it (JWT "pv") so older tokens stop working.
 	PasswordVersion int64 `gorm:"not null;default:0" json:"-"`
+	// AuthorizationVersion is a credential epoch bumped atomically on grant
+	// or ownership changes. It prevents a concurrent login from publishing
+	// a stale session after the administrator has revoked existing sessions.
+	AuthorizationVersion int64 `gorm:"not null;default:0" json:"-"`
 	// PasswordHistory is a JSON array of the previous stored (KDF) hashes,
 	// newest first, used to reject password reuse.
 	PasswordHistory string `gorm:"type:text" json:"-"`
@@ -48,6 +52,8 @@ type UserTokensDO struct {
 	RefreshJTI string `gorm:"type:varchar(64)" json:"-"`
 	// PwdVer is the account password version the session was created with.
 	PwdVer int64 `gorm:"not null;default:0" json:"-"`
+	// AuthorizationVersion binds this session to the account's grant epoch.
+	AuthorizationVersion int64 `gorm:"not null;default:0" json:"-"`
 	// GmtRefreshExpire is the absolute session end (refresh token expiry of
 	// the login; rotations never extend it).
 	GmtRefreshExpire *time.Time `json:"-"`

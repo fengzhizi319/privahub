@@ -337,6 +337,7 @@ func (s *AuthService) createSession(ctx context.Context, user *model.UserAccount
 	uc.SessionID = sid
 	uc.MustChangePassword = user.MustChangePassword
 	uc.PwdVer = user.PasswordVersion
+	uc.AuthorizationVersion = user.AuthorizationVersion
 	tokenPair, err := s.jwtManager.GenerateSessionTokens(auth.SessionTokenParams{
 		UserID: strconv.FormatInt(user.ID, 10), Username: user.Name, OwnerType: user.OwnerType,
 		OwnerID: user.OwnerID, SessionID: sid, PwdVer: user.PasswordVersion,

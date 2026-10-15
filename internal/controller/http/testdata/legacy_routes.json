@@ -1,0 +1,728 @@
+[
+  {
+    "controller": "ApprovalController",
+    "method": "POST",
+    "path": "/api/v1alpha1/approval/create",
+    "listener": "main"
+  },
+  {
+    "controller": "ApprovalController",
+    "method": "POST",
+    "path": "/api/v1alpha1/approval/pull/status",
+    "listener": "main"
+  },
+  {
+    "controller": "AuthController",
+    "method": "POST",
+    "path": "/api/login",
+    "listener": "main"
+  },
+  {
+    "controller": "AuthController",
+    "method": "POST",
+    "path": "/api/logout",
+    "listener": "main"
+  },
+  {
+    "controller": "CenterDataSyncController",
+    "method": "GET",
+    "path": "/sync",
+    "listener": "inner"
+  },
+  {
+    "controller": "CloudLogController",
+    "method": "POST",
+    "path": "/api/v1alpha1/cloud_log/sls",
+    "listener": "main"
+  },
+  {
+    "controller": "ComponentVersionController",
+    "method": "POST",
+    "path": "/api/v1alpha1/version/list",
+    "listener": "main"
+  },
+  {
+    "controller": "DataController",
+    "method": "POST",
+    "path": "/api/v1alpha1/data/create",
+    "listener": "main"
+  },
+  {
+    "controller": "DataController",
+    "method": "POST",
+    "path": "/api/v1alpha1/data/download",
+    "listener": "main"
+  },
+  {
+    "controller": "DataController",
+    "method": "POST",
+    "path": "/api/v1alpha1/data/upload",
+    "listener": "main"
+  },
+  {
+    "controller": "DataSourceController",
+    "method": "POST",
+    "path": "/api/v1alpha1/datasource/create",
+    "listener": "main"
+  },
+  {
+    "controller": "DataSourceController",
+    "method": "POST",
+    "path": "/api/v1alpha1/datasource/delete",
+    "listener": "main"
+  },
+  {
+    "controller": "DataSourceController",
+    "method": "POST",
+    "path": "/api/v1alpha1/datasource/detail",
+    "listener": "main"
+  },
+  {
+    "controller": "DataSourceController",
+    "method": "POST",
+    "path": "/api/v1alpha1/datasource/list",
+    "listener": "main"
+  },
+  {
+    "controller": "DataSourceController",
+    "method": "POST",
+    "path": "/api/v1alpha1/datasource/nodes",
+    "listener": "main"
+  },
+  {
+    "controller": "DataSyncController",
+    "method": "POST",
+    "path": "/api/v1alpha1/data/sync",
+    "listener": "inner"
+  },
+  {
+    "controller": "DatatableController",
+    "method": "POST",
+    "path": "/api/v1alpha1/datatable/create",
+    "listener": "main"
+  },
+  {
+    "controller": "DatatableController",
+    "method": "POST",
+    "path": "/api/v1alpha1/datatable/delete",
+    "listener": "main"
+  },
+  {
+    "controller": "DatatableController",
+    "method": "POST",
+    "path": "/api/v1alpha1/datatable/get",
+    "listener": "main"
+  },
+  {
+    "controller": "DatatableController",
+    "method": "POST",
+    "path": "/api/v1alpha1/datatable/list",
+    "listener": "main"
+  },
+  {
+    "controller": "DatatableController",
+    "method": "POST",
+    "path": "/api/v1alpha1/datatable/pushToTee",
+    "listener": "main"
+  },
+  {
+    "controller": "FeatureDatasourceController",
+    "method": "POST",
+    "path": "/api/v1alpha1/feature_datasource/auth/list",
+    "listener": "main"
+  },
+  {
+    "controller": "FeatureDatasourceController",
+    "method": "POST",
+    "path": "/api/v1alpha1/feature_datasource/create",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/component/batch",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/component/i18n",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/component/list",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/graph/create",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/graph/delete",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/graph/detail",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/graph/list",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/graph/meta/update",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/graph/node/logs",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/graph/node/max_index",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/graph/node/output",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/graph/node/status",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/graph/node/update",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/graph/start",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/graph/stop",
+    "listener": "main"
+  },
+  {
+    "controller": "GraphController",
+    "method": "POST",
+    "path": "/api/v1alpha1/graph/update",
+    "listener": "main"
+  },
+  {
+    "controller": "InstController",
+    "method": "POST",
+    "path": "/api/v1alpha1/inst/get",
+    "listener": "main"
+  },
+  {
+    "controller": "InstController",
+    "method": "POST",
+    "path": "/api/v1alpha1/inst/node/add",
+    "listener": "main"
+  },
+  {
+    "controller": "InstController",
+    "method": "POST",
+    "path": "/api/v1alpha1/inst/node/delete",
+    "listener": "main"
+  },
+  {
+    "controller": "InstController",
+    "method": "POST",
+    "path": "/api/v1alpha1/inst/node/list",
+    "listener": "main"
+  },
+  {
+    "controller": "InstController",
+    "method": "POST",
+    "path": "/api/v1alpha1/inst/node/newToken",
+    "listener": "main"
+  },
+  {
+    "controller": "InstController",
+    "method": "POST",
+    "path": "/api/v1alpha1/inst/node/register",
+    "listener": "main"
+  },
+  {
+    "controller": "InstController",
+    "method": "POST",
+    "path": "/api/v1alpha1/inst/node/token",
+    "listener": "main"
+  },
+  {
+    "controller": "MessageController",
+    "method": "POST",
+    "path": "/api/v1alpha1/message/detail",
+    "listener": "main"
+  },
+  {
+    "controller": "MessageController",
+    "method": "POST",
+    "path": "/api/v1alpha1/message/list",
+    "listener": "main"
+  },
+  {
+    "controller": "MessageController",
+    "method": "POST",
+    "path": "/api/v1alpha1/message/pending",
+    "listener": "main"
+  },
+  {
+    "controller": "MessageController",
+    "method": "POST",
+    "path": "/api/v1alpha1/message/reply",
+    "listener": "main"
+  },
+  {
+    "controller": "ModelExportController",
+    "method": "POST",
+    "path": "/api/v1alpha1/model/modelPartyPath",
+    "listener": "main"
+  },
+  {
+    "controller": "ModelExportController",
+    "method": "POST",
+    "path": "/api/v1alpha1/model/pack",
+    "listener": "main"
+  },
+  {
+    "controller": "ModelExportController",
+    "method": "POST",
+    "path": "/api/v1alpha1/model/status",
+    "listener": "main"
+  },
+  {
+    "controller": "ModelManagementController",
+    "method": "POST",
+    "path": "/api/v1alpha1/model/delete",
+    "listener": "main"
+  },
+  {
+    "controller": "ModelManagementController",
+    "method": "POST",
+    "path": "/api/v1alpha1/model/detail",
+    "listener": "main"
+  },
+  {
+    "controller": "ModelManagementController",
+    "method": "POST",
+    "path": "/api/v1alpha1/model/discard",
+    "listener": "main"
+  },
+  {
+    "controller": "ModelManagementController",
+    "method": "POST",
+    "path": "/api/v1alpha1/model/info",
+    "listener": "main"
+  },
+  {
+    "controller": "ModelManagementController",
+    "method": "POST",
+    "path": "/api/v1alpha1/model/page",
+    "listener": "main"
+  },
+  {
+    "controller": "ModelManagementController",
+    "method": "POST",
+    "path": "/api/v1alpha1/model/serving/create",
+    "listener": "main"
+  },
+  {
+    "controller": "ModelManagementController",
+    "method": "POST",
+    "path": "/api/v1alpha1/model/serving/delete",
+    "listener": "main"
+  },
+  {
+    "controller": "ModelManagementController",
+    "method": "POST",
+    "path": "/api/v1alpha1/model/serving/detail",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeController",
+    "method": "POST",
+    "path": "/api/v1alpha1/node/create",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeController",
+    "method": "POST",
+    "path": "/api/v1alpha1/node/delete",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeController",
+    "method": "POST",
+    "path": "/api/v1alpha1/node/get",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeController",
+    "method": "POST",
+    "path": "/api/v1alpha1/node/list",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeController",
+    "method": "POST",
+    "path": "/api/v1alpha1/node/newToken",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeController",
+    "method": "POST",
+    "path": "/api/v1alpha1/node/page",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeController",
+    "method": "POST",
+    "path": "/api/v1alpha1/node/refresh",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeController",
+    "method": "POST",
+    "path": "/api/v1alpha1/node/result/detail",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeController",
+    "method": "POST",
+    "path": "/api/v1alpha1/node/result/list",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeController",
+    "method": "POST",
+    "path": "/api/v1alpha1/node/token",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeController",
+    "method": "POST",
+    "path": "/api/v1alpha1/node/update",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeRouteController",
+    "method": "POST",
+    "path": "/api/v1alpha1/nodeRoute/delete",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeRouteController",
+    "method": "POST",
+    "path": "/api/v1alpha1/nodeRoute/get",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeRouteController",
+    "method": "POST",
+    "path": "/api/v1alpha1/nodeRoute/listNode",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeRouteController",
+    "method": "POST",
+    "path": "/api/v1alpha1/nodeRoute/page",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeRouteController",
+    "method": "POST",
+    "path": "/api/v1alpha1/nodeRoute/refresh",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeRouteController",
+    "method": "POST",
+    "path": "/api/v1alpha1/nodeRoute/update",
+    "listener": "main"
+  },
+  {
+    "controller": "NodeUserController",
+    "method": "POST",
+    "path": "/api/v1alpha1/user/node/resetPassword",
+    "listener": "inner"
+  },
+  {
+    "controller": "P2PProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/p2p/project/archive",
+    "listener": "main"
+  },
+  {
+    "controller": "P2PProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/p2p/project/create",
+    "listener": "main"
+  },
+  {
+    "controller": "P2PProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/p2p/project/list",
+    "listener": "main"
+  },
+  {
+    "controller": "P2PProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/p2p/project/participants",
+    "listener": "main"
+  },
+  {
+    "controller": "P2PProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/p2p/project/update",
+    "listener": "main"
+  },
+  {
+    "controller": "P2pNodeController",
+    "method": "POST",
+    "path": "/api/v1alpha1/p2p/node/create",
+    "listener": "main"
+  },
+  {
+    "controller": "P2pNodeController",
+    "method": "POST",
+    "path": "/api/v1alpha1/p2p/node/delete",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/create",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/datasource/list",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/datatable/add",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/datatable/delete",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/datatable/get",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/delete",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/get",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/getOutTable",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/inst/add",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/job/get",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/job/list",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/job/stop",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/job/task/logs",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/job/task/output",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/list",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/node/add",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/tee/list",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/update",
+    "listener": "main"
+  },
+  {
+    "controller": "ProjectController",
+    "method": "POST",
+    "path": "/api/v1alpha1/project/update/tableConfig",
+    "listener": "main"
+  },
+  {
+    "controller": "RemoteUserController",
+    "method": "POST",
+    "path": "/api/v1alpha1/user/remote/resetPassword",
+    "listener": "main"
+  },
+  {
+    "controller": "ScheduledController",
+    "method": "POST",
+    "path": "/api/v1alpha1/scheduled/del",
+    "listener": "main"
+  },
+  {
+    "controller": "ScheduledController",
+    "method": "POST",
+    "path": "/api/v1alpha1/scheduled/graph/create",
+    "listener": "main"
+  },
+  {
+    "controller": "ScheduledController",
+    "method": "POST",
+    "path": "/api/v1alpha1/scheduled/graph/once/success",
+    "listener": "main"
+  },
+  {
+    "controller": "ScheduledController",
+    "method": "POST",
+    "path": "/api/v1alpha1/scheduled/id",
+    "listener": "main"
+  },
+  {
+    "controller": "ScheduledController",
+    "method": "POST",
+    "path": "/api/v1alpha1/scheduled/info",
+    "listener": "main"
+  },
+  {
+    "controller": "ScheduledController",
+    "method": "POST",
+    "path": "/api/v1alpha1/scheduled/job/list",
+    "listener": "main"
+  },
+  {
+    "controller": "ScheduledController",
+    "method": "POST",
+    "path": "/api/v1alpha1/scheduled/offline",
+    "listener": "main"
+  },
+  {
+    "controller": "ScheduledController",
+    "method": "POST",
+    "path": "/api/v1alpha1/scheduled/page",
+    "listener": "main"
+  },
+  {
+    "controller": "ScheduledController",
+    "method": "POST",
+    "path": "/api/v1alpha1/scheduled/task/info",
+    "listener": "main"
+  },
+  {
+    "controller": "ScheduledController",
+    "method": "POST",
+    "path": "/api/v1alpha1/scheduled/task/page",
+    "listener": "main"
+  },
+  {
+    "controller": "ScheduledController",
+    "method": "POST",
+    "path": "/api/v1alpha1/scheduled/task/rerun",
+    "listener": "main"
+  },
+  {
+    "controller": "ScheduledController",
+    "method": "POST",
+    "path": "/api/v1alpha1/scheduled/task/stop",
+    "listener": "main"
+  },
+  {
+    "controller": "UserController",
+    "method": "POST",
+    "path": "/api/v1alpha1/user/get",
+    "listener": "main"
+  },
+  {
+    "controller": "UserController",
+    "method": "POST",
+    "path": "/api/v1alpha1/user/updatePwd",
+    "listener": "main"
+  },
+  {
+    "controller": "VoteSyncController",
+    "method": "POST",
+    "path": "/api/v1alpha1/vote_sync/create",
+    "listener": "inner"
+  }
+]

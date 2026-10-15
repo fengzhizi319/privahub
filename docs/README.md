@@ -150,6 +150,8 @@ privahub/
 | `PRIVAHUB_SERVER_INNER_PORT` | 内部端口 | 9001 |
 | `PRIVAHUB_KUSCIA_API_ADDRESS` | Kuscia 地址 | 127.0.0.1 |
 | `PRIVAHUB_KUSCIA_API_PORT` | Kuscia 端口 | 8083 |
+| `PRIVAHUB_KUSCIA_HTTP_PORT` / `PRIVAHUB_KUSCIA_GATEWAY` | KusciaAPI HTTP 端口 / 网关地址 | 8082 / — |
+| `PRIVAHUB_KUSCIA_NODES_<DOMAIN>_{HOST,PORT,HTTP_PORT,PROTOCOL}` | 覆盖 `kuscia.nodes` 中对应 `domain_id` 的节点（DOMAIN 大写，非字母数字替换为 `_`，如 `KUSCIA_SYSTEM`） | — |
 
 ### 配置文件
 
@@ -173,3 +175,7 @@ privahub/
 ## 许可证
 
 Apache License 2.0
+
+- [业务迁移验收与系统测试](migration-acceptance.md)：独立 Java 路由基线、业务证据矩阵、隔离测试脚本。
+
+- [认证与权限复核](security/authorization-review.md)：Scope Key 边界、会话撤权、授权版本与安全回归。

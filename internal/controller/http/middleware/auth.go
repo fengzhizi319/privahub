@@ -56,12 +56,45 @@ func extractHeaderToken(c *gin.Context) string {
 		return t
 	}
 	if h := c.GetHeader("Authorization"); h != "" {
-		parts := strings.SplitN(h, " ", 2)
+		parts := strings.Fields(h)
 		if len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
 			return strings.TrimSpace(parts[1])
 		}
 	}
 	return strings.TrimSpace(c.GetHeader("token"))
+}
+
+// credentialHeadersValid rejects ambiguous credentials before selecting an
+// identity. In particular a malformed Authorization header must not silently
+// fall back to an ambient browser cookie. Identical legacy/Bearer tokens are
+// accepted for client compatibility; conflicting or repeated headers fail closed.
+func credentialHeadersValid(c *gin.Context) bool {
+	selected := ""
+	for _, name := range []string{"User-Token", "Authorization", "token"} {
+		values := c.Request.Header.Values(name)
+		if len(values) > 1 {
+			return false
+		}
+		if len(values) == 0 {
+			continue
+		}
+		value := strings.TrimSpace(values[0])
+		if strings.EqualFold(name, "Authorization") {
+			parts := strings.Fields(value)
+			if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+				return false
+			}
+			value = parts[1]
+		}
+		if value == "" || strings.ContainsAny(value, " \t\r\n,") {
+			return false
+		}
+		if selected != "" && selected != value {
+			return false
+		}
+		selected = value
+	}
+	return true
 }
 
 // MustChangePasswordAllowed lists the routes a must_change_password session
@@ -150,6 +183,10 @@ func SessionAuth(jwtManager *auth.JWTManager, sessions SessionValidator, enabled
 //
 // On failure the request has been aborted and ok is false.
 func authenticateSession(c *gin.Context, jwtManager *auth.JWTManager, sessions SessionValidator) (u *auth.UserContext, token string, fromCookie bool, ok bool) {
+	if !credentialHeadersValid(c) {
+		abortAuthFailed(c, "ambiguous or malformed authentication headers")
+		return nil, "", false, false
+	}
 	token, fromCookie = ExtractTokenWithSource(c)
 	if token == "" {
 		abortAuthFailed(c, "login is required")

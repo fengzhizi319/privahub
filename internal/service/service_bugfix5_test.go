@@ -24,6 +24,7 @@ func setupBugfix5TestDB(t *testing.T) *gorm.DB {
 		&model.FeatureTableDO{},
 		&model.ProjectFeatureTableDO{},
 		&model.UserAccountsDO{},
+		&model.UserTokensDO{},
 		&model.SysUserPermissionRelDO{},
 		&model.SysUserNodeRelDO{},
 		&model.ProjectDO{},

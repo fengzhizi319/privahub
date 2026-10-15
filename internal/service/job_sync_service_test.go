@@ -124,6 +124,58 @@ func TestSyncJob_FailedWithPartyReasons(t *testing.T) {
 	}
 }
 
+// Regression (system test 2026-09-25): when a Kuscia job fails, tasks it
+// never started are still reported as "Pending"; they must become STOPPED
+// instead of staying INITIALIZED (the DAG polled graph/node/status forever).
+func TestSyncJob_FailedStopsPendingTasks(t *testing.T) {
+	f := newGraphFixture(t)
+	f.seedPSIProject()
+	jobID := startPSI(t, f)
+	taskID := jobID + "-g1-node-3"
+	downstream := jobID + "-g1-node-9"
+	if err := f.db.Create(&model.ProjectJobTaskDO{ProjectID: "p1", JobID: jobID, TaskID: downstream, Parties: "[]",
+		Status: graphjob.TaskInitialized, GraphNodeID: "g1-node-9"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	// Running event: a Pending task stays INITIALIZED.
+	if err := f.sync.SyncJob(ctx, jobID, &kuscia.JobStatusDetailInfo{State: "Running", Tasks: []kuscia.JobTaskStatusDetail{
+		{TaskID: taskID, State: "Running"}, {TaskID: downstream, State: "Pending"}}}); err != nil {
+		t.Fatal(err)
+	}
+	var task model.ProjectJobTaskDO
+	f.db.Where("task_id = ?", downstream).First(&task)
+	if task.Status != graphjob.TaskInitialized {
+		t.Fatalf("running job: downstream %s", task.Status)
+	}
+	err := f.sync.SyncJob(ctx, jobID, &kuscia.JobStatusDetailInfo{State: "Failed", ErrMsg: "job failed", EndTime: "2026-09-24T10:00:00Z",
+		Tasks: []kuscia.JobTaskStatusDetail{{TaskID: taskID, State: "Failed", ErrMsg: "boom"}, {TaskID: downstream, State: "Pending"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var failed, stopped model.ProjectJobTaskDO
+	f.db.Where("task_id = ?", taskID).First(&failed)
+	if failed.Status != graphjob.TaskFailed {
+		t.Fatalf("failed task %s", failed.Status)
+	}
+	f.db.Where("task_id = ?", downstream).First(&stopped)
+	if stopped.Status != graphjob.TaskStopped {
+		t.Fatalf("pending task of failed job must be STOPPED, got %s", stopped.Status)
+	}
+	if l := strings.Join(taskLogs(f, jobID, downstream), "\n"); !strings.Contains(l, "stop") {
+		t.Fatalf("stop log missing: %q", l)
+	}
+	st, err := f.graph.ListNodeStatus(adminCtx(), &ListGraphNodeStatusRequest{ProjectID: "p1", GraphID: "g1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range st.Nodes {
+		if n.Status == graphjob.TaskInitialized || n.Status == graphjob.TaskRunning {
+			t.Fatalf("node %s still %s after job failed", n.GraphNodeID, n.Status)
+		}
+	}
+}
+
 func TestSyncJob_ReportResultAndOutput(t *testing.T) {
 	f := newGraphFixture(t)
 	f.seedPSIProject()

@@ -6,6 +6,7 @@ import (
 
 	"github.com/fengzhizi319/privahub/internal/dao/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // EdgeDataSyncService handles edge data synchronization state tracking.
@@ -46,23 +47,14 @@ func (s *EdgeDataSyncService) GetSyncLogs(ctx context.Context) ([]SyncLogVO, err
 }
 
 // UpsertSyncLog creates or updates a sync log entry for a table.
-// Uses a transaction to prevent race conditions on concurrent upserts.
+// A single atomic upsert is safe when several sync streams checkpoint the
+// same table concurrently; a read-then-create transaction can still race.
 func (s *EdgeDataSyncService) UpsertSyncLog(ctx context.Context, tableName string) error {
 	now := time.Now().Format("2006-01-02 15:04:05")
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var existing model.EdgeDataSyncLogDO
-		err := tx.Where("table_name = ?", tableName).First(&existing).Error
-		if err == nil {
-			return tx.Model(&existing).
-				Update("last_update_time", now).Error
-		}
-
-		log := &model.EdgeDataSyncLogDO{
-			SyncTableName:  tableName,
-			LastUpdateTime: now,
-		}
-		return tx.Create(log).Error
-	})
+	return s.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "table_name"}},
+		DoUpdates: clause.AssignmentColumns([]string{"last_update_time"}),
+	}).Create(&model.EdgeDataSyncLogDO{SyncTableName: tableName, LastUpdateTime: now}).Error
 }
 
 // GetLastSyncTime returns the last sync time for a specific table.

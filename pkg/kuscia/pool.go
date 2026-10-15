@@ -132,7 +132,14 @@ func (p *ClientPool) Register(ep NodeEndpoint) error {
 	if err := ep.Validate(); err != nil {
 		return err
 	}
-	c, err := NewClientE(&ep.ClientConfig)
+	// Endpoints without an explicit proxy inherit kuscia.http_proxy from the
+	// default client (tee / inst node/register / persisted endpoints); the
+	// stored endpoint keeps its own (empty) value.
+	cc := ep.ClientConfig
+	if cc.HTTPProxy == "" && p.def != nil {
+		cc.HTTPProxy = p.def.cfg.HTTPProxy
+	}
+	c, err := NewClientE(&cc)
 	if err != nil {
 		return err
 	}
