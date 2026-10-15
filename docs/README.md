@@ -1,5 +1,7 @@
 # Privahub
 
+面向平台使用者的完整操作说明与真实界面截图见 [使用手册](user_guide.md)，涵盖开发栈启动、数据接入、DAG 计算、结果、调度、权限与多平台入口。
+
 SecretPad 后端的 Go 语言重构实现，基于 Gin + GORM 构建，完整迁移自 Java Spring Boot 版本。
 
 ## 项目概览

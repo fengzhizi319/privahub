@@ -439,6 +439,12 @@ type TaskInfoScheduledRequest struct {
 
 // ScheduleListProjectJobRequest is the /scheduled/job/list request.
 type ScheduleListProjectJobRequest struct {
+	// Optional filters are applied before pagination, never just to the current page.
+	SearchKey string `json:"searchKey,omitempty"`
+	Status    string `json:"status,omitempty"`
+	StartTime string `json:"startTime,omitempty"`
+	EndTime   string `json:"endTime,omitempty"`
+
 	ProjectID      string `json:"projectId"`
 	GraphID        string `json:"graphId"`
 	ScheduleTaskID string `json:"scheduleTaskId"`
@@ -1422,11 +1428,24 @@ func (s *ScheduledService) ListProjectJob(ctx context.Context, req *ScheduleList
 	}
 	page, size := normPage(req.PageNum, req.PageSize, 10)
 	q := s.db.WithContext(ctx).Model(&model.ProjectScheduleJobDO{}).Where("project_id = ?", req.ProjectID)
+	// Rendering a future trigger creates a job shell (including platform-side
+	// read tasks), but has not submitted a computation. Use the authoritative
+	// schedule-task state so pre-rendered RUNNING shells never masquerade as
+	// executions. A subquery keeps pagination/count consistent and avoids N+1
+	// lookups; pending triggers remain visible through scheduled/task/page.
+	executedTasks := s.db.WithContext(ctx).Model(&model.ProjectScheduleTaskDO{}).
+		Select("schedule_task_id").Where("project_id = ? AND status <> ?", req.ProjectID, model.ScheduledStatusToBeRun)
+	q = q.Where("schedule_task_id IN (?)", executedTasks)
 	if req.GraphID != "" {
 		q = q.Where("graph_id = ?", req.GraphID)
 	}
 	if req.ScheduleTaskID != "" {
 		q = q.Where("schedule_task_id = ?", req.ScheduleTaskID)
+	}
+	var filterErr error
+	q, filterErr = applyJobListFilters(q, req.ProjectID, req.SearchKey, req.Status, req.StartTime, req.EndTime)
+	if filterErr != nil {
+		return nil, filterErr
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {

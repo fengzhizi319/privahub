@@ -328,6 +328,8 @@ func TestScheduled_StatusesNormalized(t *testing.T) {
 	f.db.Model(&model.ProjectScheduleDO{}).Where("id = ?", sc.ID).
 		Update("job_info", strings.ReplaceAll(sc.JobInfo, `"SUCCEED"`, `"Succeeded"`))
 	tk := f.tasks(t)[0]
+	// This fixture represents an executed task, not a future rendered trigger.
+	f.db.Model(&model.ProjectScheduleTaskDO{}).Where("id = ?", tk.ID).Update("status", model.ScheduledStatusSucceed)
 	f.db.Model(&model.ProjectScheduleJobDO{}).Where("job_id = ?", tk.ScheduleJobID).Update("status", "SUCCEEDED")
 	f.db.Model(&model.ProjectJobTaskDO{}).Where("task_id = ?", tk.ScheduleJobID+"-n1").Update("status", "Succeeded")
 	f.db.Model(&model.ProjectJobTaskDO{}).Where("task_id = ?", tk.ScheduleJobID+"-n2").Update("status", "PENDING")

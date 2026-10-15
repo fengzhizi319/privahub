@@ -1,0 +1,22 @@
+{
+  "completed": true,
+  "errors": [],
+  "records": [
+    {
+      "image": "projects-grouped.png",
+      "sha256": "e9a1382d33d36534d8d65072bdfc879775170c7660c51b1dfc963c13fad73f90"
+    },
+    {
+      "image": "projects-list.png",
+      "sha256": "9a92e4dbceb3516f85c20c35ea396b11ecb71518b20e30cc8d404d6d5a115e73"
+    },
+    {
+      "image": "projects-mobile.png",
+      "sha256": "3b6c4c271686cab5c96ec51cbb8b18a93a9373f0afb2adcfaa17a4f8fe08f03e"
+    },
+    {
+      "image": "scenes-filtered.png",
+      "sha256": "741365c3a337bc9c9439055847a64e906a805fe82d0acfa004604329cc02f07b"
+    }
+  ]
+}

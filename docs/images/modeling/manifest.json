@@ -1,0 +1,902 @@
+{
+  "completed": true,
+  "createdAt": "2026-10-15T04:02:45.046Z",
+  "records": [
+    {
+      "image": "ss_sgd-canvas.png",
+      "route": "/dag?projectId=jfhqjlgb&graphId=tysfwkst",
+      "case": "ss_sgd",
+      "status": "SUCCEED",
+      "projectId": "jfhqjlgb",
+      "graphId": "tysfwkst",
+      "jobId": "imfs",
+      "nodes": [
+        {
+          "id": "tysfwkst-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "tysfwkst-node-2",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "tysfwkst-node-3",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "tysfwkst-node-4",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "tysfwkst-node-5",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "tysfwkst-node-6",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "tysfwkst-node-7",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "b61a46242c199637f5d9d924ad9141696d5cfbfa784c690af49c1e7b3f0d5bbf"
+    },
+    {
+      "image": "ss_sgd-results.png",
+      "route": "/results?ownerId=alice&resultName=imfs",
+      "case": "ss_sgd",
+      "jobId": "imfs",
+      "sha256": "3565854aab754bfdad6c4149c855886222e4f95cd10351bfd8a970aa29701223"
+    },
+    {
+      "image": "ss_sgd-detail.png",
+      "route": "/results?ownerId=alice&resultName=imfs",
+      "case": "ss_sgd",
+      "jobId": "imfs",
+      "sha256": "65742fafd35a2d248f63dcbd8c3febba72266ce9ff586f63e4661a0eb00acbb6"
+    },
+    {
+      "image": "ss_glm-canvas.png",
+      "route": "/dag?projectId=pokpioid&graphId=xfpgwqzr",
+      "case": "ss_glm",
+      "status": "SUCCEED",
+      "projectId": "pokpioid",
+      "graphId": "xfpgwqzr",
+      "jobId": "tkbt",
+      "nodes": [
+        {
+          "id": "xfpgwqzr-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "xfpgwqzr-node-2",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "xfpgwqzr-node-3",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "xfpgwqzr-node-4",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "xfpgwqzr-node-5",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "xfpgwqzr-node-6",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "xfpgwqzr-node-7",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "fdfb8e7996432d3af26d2ae5091b3711a69ef255a8fedf5289aa22535b199717"
+    },
+    {
+      "image": "ss_glm-results.png",
+      "route": "/results?ownerId=alice&resultName=tkbt",
+      "case": "ss_glm",
+      "jobId": "tkbt",
+      "sha256": "a30cca1e5c1529b9aadc9d15cd0abbf3f5266556630543049da5e83d914d16cd"
+    },
+    {
+      "image": "ss_glm-detail.png",
+      "route": "/results?ownerId=alice&resultName=tkbt",
+      "case": "ss_glm",
+      "jobId": "tkbt",
+      "sha256": "cce724b7299b7cc5a0a428efe9703819bdd1f4d554e5e009c2f65ee39f3da0c4"
+    },
+    {
+      "image": "sgb-canvas.png",
+      "route": "/dag?projectId=konztqwp&graphId=cgrusgos",
+      "case": "sgb",
+      "status": "SUCCEED",
+      "projectId": "konztqwp",
+      "graphId": "cgrusgos",
+      "jobId": "vuit",
+      "nodes": [
+        {
+          "id": "cgrusgos-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "cgrusgos-node-2",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "cgrusgos-node-3",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "cgrusgos-node-4",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "cgrusgos-node-5",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "cgrusgos-node-6",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "cgrusgos-node-7",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "a0eb0e9c1d2f67a3e0198105fc97b8ad5480d8dc1771c63b5a84bf0825ca4327"
+    },
+    {
+      "image": "sgb-results.png",
+      "route": "/results?ownerId=alice&resultName=vuit",
+      "case": "sgb",
+      "jobId": "vuit",
+      "sha256": "899850b5d89e4a7fd7cf2601d302c84f6a508f94a565f425785114eb963904b4"
+    },
+    {
+      "image": "sgb-detail.png",
+      "route": "/results?ownerId=alice&resultName=vuit",
+      "case": "sgb",
+      "jobId": "vuit",
+      "sha256": "9423a38443ca15b33310a777230231483cab49793a00aa6078251a85f44b5eb5"
+    },
+    {
+      "image": "ss_xgb-canvas.png",
+      "route": "/dag?projectId=jjgsmsrn&graphId=ejpvyloc",
+      "case": "ss_xgb",
+      "status": "SUCCEED",
+      "projectId": "jjgsmsrn",
+      "graphId": "ejpvyloc",
+      "jobId": "bpbq",
+      "nodes": [
+        {
+          "id": "ejpvyloc-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "ejpvyloc-node-2",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "ejpvyloc-node-3",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "ejpvyloc-node-4",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "ejpvyloc-node-5",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "ejpvyloc-node-6",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "ejpvyloc-node-7",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "5a69613d53e5617b23b4ca8edd0a27640b5bae207846de79662e2f57f38b7208"
+    },
+    {
+      "image": "ss_xgb-results.png",
+      "route": "/results?ownerId=alice&resultName=bpbq",
+      "case": "ss_xgb",
+      "jobId": "bpbq",
+      "sha256": "293a241baa8dc6acbdae20e7886d4590db25551b68d9f738e4fad725c474f9d8"
+    },
+    {
+      "image": "ss_xgb-detail.png",
+      "route": "/results?ownerId=alice&resultName=bpbq",
+      "case": "ss_xgb",
+      "jobId": "bpbq",
+      "sha256": "01be26bbd9f7a843a83a4a9756f2bb501213d3dc114ca1cd00c7f7ce1370bebc"
+    },
+    {
+      "image": "gnb-canvas.png",
+      "route": "/dag?projectId=vvaguwlb&graphId=nrpymslu",
+      "case": "gnb",
+      "status": "SUCCEED",
+      "projectId": "vvaguwlb",
+      "graphId": "nrpymslu",
+      "jobId": "zmkq",
+      "nodes": [
+        {
+          "id": "nrpymslu-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "nrpymslu-node-2",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "nrpymslu-node-3",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "nrpymslu-node-4",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "nrpymslu-node-5",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "nrpymslu-node-6",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "nrpymslu-node-7",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "41981321ccf6d0e1b2b9aba01fa79bd06913bc851e3c830bc6813673242448d0"
+    },
+    {
+      "image": "gnb-results.png",
+      "route": "/results?ownerId=alice&resultName=zmkq",
+      "case": "gnb",
+      "jobId": "zmkq",
+      "sha256": "781b98a8db8a7fae978516559549200024ba97ecfbef19e2113f37d83d957b0c"
+    },
+    {
+      "image": "gnb-detail.png",
+      "route": "/results?ownerId=alice&resultName=zmkq",
+      "case": "gnb",
+      "jobId": "zmkq",
+      "sha256": "dbe608203fff3b98549477edcf45868daf13f764e9c9b1afbc9a95f9221ee2ad"
+    },
+    {
+      "image": "knn-canvas.png",
+      "route": "/dag?projectId=jxkbtqfi&graphId=taocnxod",
+      "case": "knn",
+      "status": "SUCCEED",
+      "projectId": "jxkbtqfi",
+      "graphId": "taocnxod",
+      "jobId": "lirh",
+      "nodes": [
+        {
+          "id": "taocnxod-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "taocnxod-node-2",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "taocnxod-node-3",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "taocnxod-node-4",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "taocnxod-node-5",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "taocnxod-node-6",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "taocnxod-node-7",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "b83e5ccda418123e14adc8ced436e3abdb1ad841fb386ca8eafe1aa6cad36a48"
+    },
+    {
+      "image": "knn-results.png",
+      "route": "/results?ownerId=alice&resultName=lirh",
+      "case": "knn",
+      "jobId": "lirh",
+      "sha256": "13af0b5f64245daa8ccbe76a1dda4a14e443acb8606c7f59376f2a9b4412ff66"
+    },
+    {
+      "image": "knn-detail.png",
+      "route": "/results?ownerId=alice&resultName=lirh",
+      "case": "knn",
+      "jobId": "lirh",
+      "sha256": "7038cadd99cd390b4c92ecea85ab360bcb998a720dfeebcc08ae8642dcece9f2"
+    },
+    {
+      "image": "kmeans-canvas.png",
+      "route": "/dag?projectId=biagotxy&graphId=onsblmfh",
+      "case": "kmeans",
+      "status": "SUCCEED",
+      "projectId": "biagotxy",
+      "graphId": "onsblmfh",
+      "jobId": "ypia",
+      "nodes": [
+        {
+          "id": "onsblmfh-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "onsblmfh-node-2",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "onsblmfh-node-3",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "onsblmfh-node-4",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "onsblmfh-node-5",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "onsblmfh-node-6",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "94d7f69650bfa594e265152109e1de74c9855e57a218d1666934289d226c5a57"
+    },
+    {
+      "image": "kmeans-results.png",
+      "route": "/results?ownerId=alice&resultName=ypia",
+      "case": "kmeans",
+      "jobId": "ypia",
+      "sha256": "ca09269000849a8b9dea2ae7e26b88098db5d6d7f519f4a92f082bcb78c67e2e"
+    },
+    {
+      "image": "kmeans-detail.png",
+      "route": "/results?ownerId=alice&resultName=ypia",
+      "case": "kmeans",
+      "jobId": "ypia",
+      "sha256": "4697f9e88a92831e3e55efeddd79068966b7c6b2bff5781cd326804b085ba336"
+    },
+    {
+      "image": "gpc-canvas.png",
+      "route": "/dag?projectId=miigjawt&graphId=wgdtfjjd",
+      "case": "gpc",
+      "status": "SUCCEED",
+      "projectId": "miigjawt",
+      "graphId": "wgdtfjjd",
+      "jobId": "fdhm",
+      "nodes": [
+        {
+          "id": "wgdtfjjd-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "wgdtfjjd-node-2",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "wgdtfjjd-node-3",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "wgdtfjjd-node-4",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "wgdtfjjd-node-5",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "wgdtfjjd-node-6",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "wgdtfjjd-node-7",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "c03befe5c785eceb207c94b2e0dbea245458911bb542e73898a5f231497a0c2c"
+    },
+    {
+      "image": "gpc-results.png",
+      "route": "/results?ownerId=alice&resultName=fdhm",
+      "case": "gpc",
+      "jobId": "fdhm",
+      "sha256": "f891d1d83c188580c76ec56de4324cb00ff9f30438317db44ceead60889aeb01"
+    },
+    {
+      "image": "gpc-detail.png",
+      "route": "/results?ownerId=alice&resultName=fdhm",
+      "case": "gpc",
+      "jobId": "fdhm",
+      "sha256": "ac0f2b28d93a9974c729a9de38370b691aafc68663343a424993160a08545f0a"
+    },
+    {
+      "image": "data_classification-canvas.png",
+      "route": "/dag?projectId=kytxprtk&graphId=cvnemgze",
+      "case": "data_classification",
+      "status": "SUCCEED",
+      "projectId": "kytxprtk",
+      "graphId": "cvnemgze",
+      "jobId": "fweh",
+      "nodes": [
+        {
+          "id": "cvnemgze-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "cvnemgze-node-2",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "fd22912a26efb8282fe76cc9906b80c748a91cedfd98e4ec5ea16ea0f3ec86a6"
+    },
+    {
+      "image": "data_classification-results.png",
+      "route": "/results?ownerId=alice&resultName=fweh",
+      "case": "data_classification",
+      "jobId": "fweh",
+      "sha256": "665f489ce795859e931d17c66b3e4c81a784282868143a9361fb413f9d9111c5"
+    },
+    {
+      "image": "data_classification-detail.png",
+      "route": "/results?ownerId=alice&resultName=fweh",
+      "case": "data_classification",
+      "jobId": "fweh",
+      "sha256": "3ebaf6eacb6fc2a9d4316781095cda24571f2a00a31f643ba4ff819c48a73896"
+    },
+    {
+      "image": "differential_privacy-canvas.png",
+      "route": "/dag?projectId=vmleliak&graphId=nednbcrl",
+      "case": "differential_privacy",
+      "status": "SUCCEED",
+      "projectId": "vmleliak",
+      "graphId": "nednbcrl",
+      "jobId": "qazh",
+      "nodes": [
+        {
+          "id": "nednbcrl-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "nednbcrl-node-2",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "11feb16a70343ec35fd9ee24f5547ff825d33181d312af48a56b165a126783b6"
+    },
+    {
+      "image": "differential_privacy-results.png",
+      "route": "/results?ownerId=alice&resultName=qazh",
+      "case": "differential_privacy",
+      "jobId": "qazh",
+      "sha256": "b8927c3ec2dab84718ff986ba7edb3d98fe1ed2d8c96b9cd780bd4d179c2863e"
+    },
+    {
+      "image": "differential_privacy-detail.png",
+      "route": "/results?ownerId=alice&resultName=qazh",
+      "case": "differential_privacy",
+      "jobId": "qazh",
+      "sha256": "204ac19d6a852e8f793f3548a050da48ee5a284d0b1308d49c601b526002847b"
+    },
+    {
+      "image": "differential_privacy_noisy_count-canvas.png",
+      "route": "/dag?projectId=asskmqmj&graphId=njvfavgt",
+      "case": "differential_privacy_noisy_count",
+      "status": "SUCCEED",
+      "projectId": "asskmqmj",
+      "graphId": "njvfavgt",
+      "jobId": "bxgl",
+      "nodes": [
+        {
+          "id": "njvfavgt-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "njvfavgt-node-2",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "f725c1a734392d22b5507e62fb18d32d1c7444d71ca5861f3d7fb8acd96de0db"
+    },
+    {
+      "image": "differential_privacy_noisy_count-results.png",
+      "route": "/results?ownerId=alice&resultName=bxgl",
+      "case": "differential_privacy_noisy_count",
+      "jobId": "bxgl",
+      "sha256": "3a1a7d44d69cf034b3e4651b537237057853f0eb6d6fca606183a4e6ec7a3765"
+    },
+    {
+      "image": "differential_privacy_noisy_count-detail.png",
+      "route": "/results?ownerId=alice&resultName=bxgl",
+      "case": "differential_privacy_noisy_count",
+      "jobId": "bxgl",
+      "sha256": "0cab3da4a363f35fbb2564e9fac84cb09b81dd2f8fa32009b7e3e25a2ef6c7aa"
+    },
+    {
+      "image": "differential_privacy_noisy_histogram-canvas.png",
+      "route": "/dag?projectId=scgkhain&graphId=phxyjsxq",
+      "case": "differential_privacy_noisy_histogram",
+      "status": "SUCCEED",
+      "projectId": "scgkhain",
+      "graphId": "phxyjsxq",
+      "jobId": "pmgb",
+      "nodes": [
+        {
+          "id": "phxyjsxq-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "phxyjsxq-node-2",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "e0e0f7b34e4207b3db9a1001cd220bd7b6c7488a4715b420176ec44676b54b08"
+    },
+    {
+      "image": "differential_privacy_noisy_histogram-results.png",
+      "route": "/results?ownerId=alice&resultName=pmgb",
+      "case": "differential_privacy_noisy_histogram",
+      "jobId": "pmgb",
+      "sha256": "3e5f9ce28d35952c0e623471c4bb6621461af12d444ac2e7ab5dbd9bd1a38e65"
+    },
+    {
+      "image": "differential_privacy_noisy_histogram-detail.png",
+      "route": "/results?ownerId=alice&resultName=pmgb",
+      "case": "differential_privacy_noisy_histogram",
+      "jobId": "pmgb",
+      "sha256": "bb4e641fb272b1ca32798b49d670c0f11d0610e299c151d7805d52f8f7e0b1ee"
+    },
+    {
+      "image": "differential_privacy_noisy_mean-canvas.png",
+      "route": "/dag?projectId=dmscqnii&graphId=krqbmdwn",
+      "case": "differential_privacy_noisy_mean",
+      "status": "SUCCEED",
+      "projectId": "dmscqnii",
+      "graphId": "krqbmdwn",
+      "jobId": "zilp",
+      "nodes": [
+        {
+          "id": "krqbmdwn-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "krqbmdwn-node-2",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "6a8696a1557247f267eb54e5a372c78d8ccdd548db3cf1d349eace1d8092c1dd"
+    },
+    {
+      "image": "differential_privacy_noisy_mean-results.png",
+      "route": "/results?ownerId=alice&resultName=zilp",
+      "case": "differential_privacy_noisy_mean",
+      "jobId": "zilp",
+      "sha256": "b961ae482e7a33e5b45cd1711393fd371e0f086a36b95281a57394cae2c80989"
+    },
+    {
+      "image": "differential_privacy_noisy_mean-detail.png",
+      "route": "/results?ownerId=alice&resultName=zilp",
+      "case": "differential_privacy_noisy_mean",
+      "jobId": "zilp",
+      "sha256": "2dd4504c709f4ce886321f1a2b4f631d444a6cad015816881458e6bf58154cbd"
+    },
+    {
+      "image": "differential_privacy_noisy_sum-canvas.png",
+      "route": "/dag?projectId=tcqffyjy&graphId=vomblrsq",
+      "case": "differential_privacy_noisy_sum",
+      "status": "SUCCEED",
+      "projectId": "tcqffyjy",
+      "graphId": "vomblrsq",
+      "jobId": "jubo",
+      "nodes": [
+        {
+          "id": "vomblrsq-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "vomblrsq-node-2",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "eb649a6015ba101b41c3d9fe2714bbf0ca5c9b0ca1bc499f2918ee949efba23c"
+    },
+    {
+      "image": "differential_privacy_noisy_sum-results.png",
+      "route": "/results?ownerId=alice&resultName=jubo",
+      "case": "differential_privacy_noisy_sum",
+      "jobId": "jubo",
+      "sha256": "d6ebd748299095ea30feba9f8680f08e309184233ac36e8046e5cafaff11a914"
+    },
+    {
+      "image": "differential_privacy_noisy_sum-detail.png",
+      "route": "/results?ownerId=alice&resultName=jubo",
+      "case": "differential_privacy_noisy_sum",
+      "jobId": "jubo",
+      "sha256": "66954aab5c1ecba788f78356c0d0f451be19943d1a09aebb76ad2f4ea3d8a06b"
+    },
+    {
+      "image": "k_anonymity-canvas.png",
+      "route": "/dag?projectId=prvquqch&graphId=vuwpycdx",
+      "case": "k_anonymity",
+      "status": "SUCCEED",
+      "projectId": "prvquqch",
+      "graphId": "vuwpycdx",
+      "jobId": "bvmt",
+      "nodes": [
+        {
+          "id": "vuwpycdx-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "vuwpycdx-node-2",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "5001c53030b9db56f8cc24b2024ce478085c68993fe7a512b6bf9499781fe3d2"
+    },
+    {
+      "image": "k_anonymity-results.png",
+      "route": "/results?ownerId=alice&resultName=bvmt",
+      "case": "k_anonymity",
+      "jobId": "bvmt",
+      "sha256": "0e035d92beee06ba33b15f7ab1079f2d88d5226a31ecc6686d8bf02dc8d40a9b"
+    },
+    {
+      "image": "k_anonymity-detail.png",
+      "route": "/results?ownerId=alice&resultName=bvmt",
+      "case": "k_anonymity",
+      "jobId": "bvmt",
+      "sha256": "9411562a18cf96ca49874066255e8cb1e9eb9d77deebbaad6f3c5c902954c4b4"
+    },
+    {
+      "image": "local_differential_privacy-canvas.png",
+      "route": "/dag?projectId=djyhoogz&graphId=kwyudzvb",
+      "case": "local_differential_privacy",
+      "status": "SUCCEED",
+      "projectId": "djyhoogz",
+      "graphId": "kwyudzvb",
+      "jobId": "sfqt",
+      "nodes": [
+        {
+          "id": "kwyudzvb-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "kwyudzvb-node-2",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "35c4e1fc7b0cc9918760fe7eb75094f51d5f61bef4d21083c56d6d3b3c493d71"
+    },
+    {
+      "image": "local_differential_privacy-results.png",
+      "route": "/results?ownerId=alice&resultName=sfqt",
+      "case": "local_differential_privacy",
+      "jobId": "sfqt",
+      "sha256": "3c8cc63de36168b5523d7af77c36d143e10a5dc12aa11220bbe0931c3d7c7a93"
+    },
+    {
+      "image": "local_differential_privacy-detail.png",
+      "route": "/results?ownerId=alice&resultName=sfqt",
+      "case": "local_differential_privacy",
+      "jobId": "sfqt",
+      "sha256": "ea57a31c6e1c0650c7bdd74db8f499c244ea43d4a4512161c45d302793c843bc"
+    },
+    {
+      "image": "query_obfuscation-canvas.png",
+      "route": "/dag?projectId=wvftajyq&graphId=gfnejymf",
+      "case": "query_obfuscation",
+      "status": "SUCCEED",
+      "projectId": "wvftajyq",
+      "graphId": "gfnejymf",
+      "jobId": "txvj",
+      "nodes": [
+        {
+          "id": "gfnejymf-node-1",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "078da7ac85bd4c0d33b388fa57565de5f1e7cdfd4787e5dadd370b0f58912a47"
+    },
+    {
+      "image": "query_obfuscation-results.png",
+      "route": "/results?ownerId=alice&resultName=txvj",
+      "case": "query_obfuscation",
+      "jobId": "txvj",
+      "sha256": "c03c02b44c568475783e0b26e4d2be8ea07cdeda4dbf2a2559fd46190e0c1719"
+    },
+    {
+      "image": "query_obfuscation-detail.png",
+      "route": "/results?ownerId=alice&resultName=txvj",
+      "case": "query_obfuscation",
+      "jobId": "txvj",
+      "sha256": "be0bf84781b8c191ddb67ef29eb868b31162eb251ed2f9e5026e8608e68c851b"
+    },
+    {
+      "image": "query_obfuscation_batch-canvas.png",
+      "route": "/dag?projectId=jejsswxi&graphId=lvbsldan",
+      "case": "query_obfuscation_batch",
+      "status": "SUCCEED",
+      "projectId": "jejsswxi",
+      "graphId": "lvbsldan",
+      "jobId": "jguf",
+      "nodes": [
+        {
+          "id": "lvbsldan-node-1",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "51406dd5f14b2dee6bdad0c184fa5bebc6a7ba96790ced717397e89995e241af"
+    },
+    {
+      "image": "query_obfuscation_batch-results.png",
+      "route": "/results?ownerId=alice&resultName=jguf",
+      "case": "query_obfuscation_batch",
+      "jobId": "jguf",
+      "sha256": "e5fcf80320d67e16a1f9e6d0a9c7bc17c5be13d1fac2f92b883d48b043cefaef"
+    },
+    {
+      "image": "query_obfuscation_batch-detail.png",
+      "route": "/results?ownerId=alice&resultName=jguf",
+      "case": "query_obfuscation_batch",
+      "jobId": "jguf",
+      "sha256": "91c8bfeec6e6644eb59ba2c79e2c1975d0f577e958b0f1d30169a0baf0f950d1"
+    },
+    {
+      "image": "sanitization-canvas.png",
+      "route": "/dag?projectId=uevhrgrp&graphId=xnerghxx",
+      "case": "sanitization",
+      "status": "SUCCEED",
+      "projectId": "uevhrgrp",
+      "graphId": "xnerghxx",
+      "jobId": "ggpf",
+      "nodes": [
+        {
+          "id": "xnerghxx-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "xnerghxx-node-2",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "ebea046e17c13a5ecde99bae1b7a54a62a950c75d0d361cf5fb2ae4569ac3a8d"
+    },
+    {
+      "image": "sanitization-results.png",
+      "route": "/results?ownerId=alice&resultName=ggpf",
+      "case": "sanitization",
+      "jobId": "ggpf",
+      "sha256": "ee5770be881abb1674dc981e9f8c7f13af5ec58dcf505d22b7bb300747a249fa"
+    },
+    {
+      "image": "sanitization-detail.png",
+      "route": "/results?ownerId=alice&resultName=ggpf",
+      "case": "sanitization",
+      "jobId": "ggpf",
+      "sha256": "2cead9194cc9b13ccf68d2bcf0926dff0c029cd292250e00e40803bd1a47d710"
+    },
+    {
+      "image": "l_diversity-canvas.png",
+      "route": "/dag?projectId=oixmdwlq&graphId=faaiymgh",
+      "case": "l_diversity",
+      "status": "SUCCEED",
+      "projectId": "oixmdwlq",
+      "graphId": "faaiymgh",
+      "jobId": "dfyf",
+      "nodes": [
+        {
+          "id": "faaiymgh-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "faaiymgh-node-2",
+          "status": "SUCCEED"
+        }
+      ],
+      "sha256": "6a1a39aaaf127e58101b6d29dccd3891b6f0a290b23e36d11bd58538b94100c4"
+    },
+    {
+      "image": "l_diversity-results.png",
+      "route": "/results?ownerId=alice&resultName=dfyf",
+      "case": "l_diversity",
+      "jobId": "dfyf",
+      "sha256": "95504c71b62280bb420778d6adfe469dc3d8d0e24a7ea35b00f54680c4214304"
+    },
+    {
+      "image": "l_diversity-detail.png",
+      "route": "/results?ownerId=alice&resultName=dfyf",
+      "case": "l_diversity",
+      "jobId": "dfyf",
+      "sha256": "0746f0f6ac350dceeaa40c6e3b3133595dcf8f8e8b74ccf146e2b733a1826f3c"
+    },
+    {
+      "image": "gpc-large-failed-canvas.png",
+      "route": "/dag?projectId=zpgrfrep&graphId=qbnkutsd",
+      "case": "gpc-large-failed",
+      "status": "FAILED",
+      "projectId": "zpgrfrep",
+      "graphId": "qbnkutsd",
+      "jobId": "wyki",
+      "nodes": [
+        {
+          "id": "qbnkutsd-node-1",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "qbnkutsd-node-2",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "qbnkutsd-node-3",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "qbnkutsd-node-4",
+          "status": "SUCCEED"
+        },
+        {
+          "id": "qbnkutsd-node-5",
+          "status": "FAILED"
+        },
+        {
+          "id": "qbnkutsd-node-6",
+          "status": "STOPPED"
+        },
+        {
+          "id": "qbnkutsd-node-7",
+          "status": "STOPPED"
+        }
+      ],
+      "sha256": "46de545bdab40ab5db8bae345ccc3cc1e03604c5be05d8b46ef778b06f6e9663"
+    },
+    {
+      "image": "predefined-modeling-project-wizard.png",
+      "route": "/projects",
+      "sha256": "2ad91dee1670a0e1c1e03db566a22e917c91d35a3b498358a7dce776883c17bb"
+    },
+    {
+      "image": "predefined-modeling-canvas-wizard.png",
+      "route": "/dag?projectId=jfhqjlgb&graphId=tysfwkst",
+      "sha256": "3db88e0f3428813d3cd19c480098b4228f86b23d039e281c29bb868153ce9db0"
+    },
+    {
+      "image": "predefined-modeling-configured.png",
+      "route": "/dag?projectId=jfhqjlgb&graphId=tysfwkst",
+      "sha256": "9fcb959b918166eca84956822dc03d9f1350cdff24c8faea3958a19f80e2bbe2"
+    },
+    {
+      "image": "predefined-modeling-compact.png",
+      "route": "/dag?projectId=jfhqjlgb&graphId=tysfwkst",
+      "sha256": "1d18a56dc779419dc446fa0f9c9b05ac92351fcbd94366c0ff6b655767bd6ea6"
+    },
+    {
+      "image": "predefined-modeling-created.png",
+      "route": "/dag?projectId=jfhqjlgb&graphId=emqpowfa",
+      "status": "DRAFT",
+      "note": "Created via the real UI; execution evidence is recorded separately for all eight exported templates.",
+      "sha256": "92de8378128e3de0a4f13db391d54c3fd16982b4b0b836c1d8ca6219901131fc"
+    }
+  ],
+  "errors": []
+}

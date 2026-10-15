@@ -1589,6 +1589,9 @@
       },
       "service.JobListRequest": {
         "properties": {
+          "endTime": {
+            "type": "string"
+          },
           "graphId": {
             "type": "string"
           },
@@ -1604,8 +1607,17 @@
           "projectId": {
             "type": "string"
           },
+          "searchKey": {
+            "type": "string"
+          },
           "size": {
             "type": "integer"
+          },
+          "startTime": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -2672,6 +2684,12 @@
           "size": {
             "type": "integer"
           },
+          "sort": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
           "status": {
             "type": "string"
           }
@@ -3235,6 +3253,9 @@
       },
       "service.ScheduleListProjectJobRequest": {
         "properties": {
+          "endTime": {
+            "type": "string"
+          },
           "graphId": {
             "type": "string"
           },
@@ -3248,6 +3269,15 @@
             "type": "string"
           },
           "scheduleTaskId": {
+            "type": "string"
+          },
+          "searchKey": {
+            "type": "string"
+          },
+          "startTime": {
+            "type": "string"
+          },
+          "status": {
             "type": "string"
           }
         },
@@ -3816,6 +3846,12 @@
           },
           "size": {
             "type": "integer"
+          },
+          "sort": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
           }
         },
         "type": "object"

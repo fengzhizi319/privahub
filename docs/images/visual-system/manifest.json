@@ -1,0 +1,76 @@
+{
+  "completed": true,
+  "records": [
+    {
+      "image": "01-dashboard.png",
+      "sha256": "bc252ed4e4cb4831c58c1af58ba1e91eb859c42bbb7a32c2713728b8d23027e0"
+    },
+    {
+      "image": "02-workbench.png",
+      "sha256": "45b0eefac953ee81029b76efd8a355b503a239fb9b55e97f432758f30470af5b"
+    },
+    {
+      "image": "03-data-tables.png",
+      "sha256": "53809bbde9d1be0b80084b09407df70a157c9e260e7328bf59bf686b5bbae9be"
+    },
+    {
+      "image": "04-models.png",
+      "sha256": "716e349eb991a0342ba0abf526e7fcfb3469188320065caa9c465c55d38b2c71"
+    },
+    {
+      "image": "05-results.png",
+      "sha256": "59ca56453dba3a05eb81954fa57da73c3e02d366cbf60d82f867db0348dd6f26"
+    },
+    {
+      "image": "06-job-records.png",
+      "sha256": "3b8ca190da8870a0a79a1fba3c6b1c6fe47a1d3213b0f3311a9e2b264f44b2c4"
+    },
+    {
+      "image": "07-job-search.png",
+      "sha256": "2aa888b507258e91746af13de4ee55b3fd227cff556c27690494457a01ef2f4f"
+    },
+    {
+      "image": "08-project-details.png",
+      "sha256": "214922f4cef7514c20cb5551568e5b0c141d526fe9ae71de77a79f6b444c2735"
+    },
+    {
+      "image": "09-dag-config.png",
+      "sha256": "b16d389981d429ee5b1422e10d7904f27b3fa4d57a771fa510bdcb2afecc7c17"
+    },
+    {
+      "image": "10-models-dark.png",
+      "sha256": "22748fab4241ba197fd4a470075dd3dce40c55b6451b3d19e00d11e8dc28f8fd"
+    },
+    {
+      "image": "11-models-mobile-dark.png",
+      "sha256": "0339c27e796989d2ea72460f06686c2c58d811c67e1e10bd8b5b8bad532d9c6a"
+    },
+    {
+      "image": "12-dashboard-mobile.png",
+      "sha256": "47c46b076d2259a81dd5d27d89ba4156b95dfa499af425ac27ef3ea6bf97a611"
+    },
+    {
+      "image": "13-workbench-mobile.png",
+      "sha256": "a02928a2c1f88344f3583d4c460f8e65a8a44f4cd9f7d062a9d16eb90071fdf3"
+    },
+    {
+      "image": "14-data-tables-mobile.png",
+      "sha256": "19333072d935128c4530ec6c4714e59c673dd78621d698a52d618ea7cb5ce420"
+    },
+    {
+      "image": "15-results-mobile.png",
+      "sha256": "32731b816ef9403cef07ba0bbcbf460b44efb17c5746980095c01b9619946330"
+    },
+    {
+      "image": "16-jobs-mobile.png",
+      "sha256": "4bbebb22aafe28caeff56dbfeb0ea8dfa7a387b74b1ed1c7072ed5484cbeb950"
+    }
+  ],
+  "errors": [],
+  "jobQuery": {
+    "projectId": "jejsswxi",
+    "total": 1,
+    "jobId": "jguf",
+    "searchTotal": 1
+  }
+}

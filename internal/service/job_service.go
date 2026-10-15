@@ -59,6 +59,12 @@ func (s *JobService) SetKuscia(k GraphKusciaAPI) { s.kuscia = k }
 
 // JobListRequest mirrors Java ListProjectJobRequest (page / size are legacy aliases).
 type JobListRequest struct {
+	// Optional filters are applied before pagination, never just to the current page.
+	SearchKey string `json:"searchKey,omitempty"`
+	Status    string `json:"status,omitempty"`
+	StartTime string `json:"startTime,omitempty"`
+	EndTime   string `json:"endTime,omitempty"`
+
 	ProjectID string `json:"projectId"`
 	GraphID   string `json:"graphId"`
 	PageNum   int    `json:"pageNum"`
@@ -189,9 +195,17 @@ func (s *JobService) ListJobs(ctx context.Context, req *JobListRequest) (*JobLis
 	if size < 1 {
 		size = 10
 	}
+	if size > 100 {
+		size = 100
+	}
 	q := s.db.WithContext(ctx).Model(&model.ProjectJobDO{}).Where("project_id = ?", req.ProjectID)
 	if req.GraphID != "" {
 		q = q.Where("graph_id = ?", req.GraphID)
+	}
+	var filterErr error
+	q, filterErr = applyJobListFilters(q, req.ProjectID, req.SearchKey, req.Status, req.StartTime, req.EndTime)
+	if filterErr != nil {
+		return nil, filterErr
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {

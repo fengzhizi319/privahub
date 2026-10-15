@@ -841,6 +841,16 @@ func TestScheduled_ListProjectJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	tk := f.tasks(t)[0]
+	// All future triggers have pre-rendered RUNNING job shells. They are not
+	// execution history until claimed by the engine (or marked as misfired).
+	pending, err := f.svc.ListProjectJob(f.ctx, &ScheduleListProjectJobRequest{ProjectID: "p1", GraphID: "g1"})
+	if err != nil || pending.Total != 0 || len(pending.Data) != 0 {
+		t.Fatalf("untriggered jobs leaked into execution history: %+v, %v", pending, err)
+	}
+	if err := f.db.Model(&model.ProjectScheduleTaskDO{}).Where("id = ?", tk.ID).
+		Update("status", model.ScheduledStatusRunning).Error; err != nil {
+		t.Fatal(err)
+	}
 	f.db.Create(&model.ProjectResultDO{ProjectID: "p1", Kind: "FedTable", NodeID: "alice", RefID: "t1", JobID: tk.ScheduleJobID})
 	f.db.Create(&model.ProjectResultDO{ProjectID: "p1", Kind: "Model", NodeID: "alice", RefID: "m1", JobID: tk.ScheduleJobID})
 	f.db.Create(&model.ProjectResultDO{ProjectID: "p1", Kind: "Report", NodeID: "alice", RefID: "rp1", JobID: tk.ScheduleJobID})

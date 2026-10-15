@@ -1,0 +1,63 @@
+{
+  "completed": true,
+  "projectId": "zphqyhdq",
+  "records": [
+    {
+      "algorithm": "ss_sgd",
+      "graphId": "bzpsvzhb",
+      "nodeCount": 7,
+      "edgeCount": 7,
+      "image": "ss_sgd.png"
+    },
+    {
+      "algorithm": "ss_glm",
+      "graphId": "vpcotonp",
+      "nodeCount": 7,
+      "edgeCount": 7,
+      "image": "ss_glm.png"
+    },
+    {
+      "algorithm": "sgb",
+      "graphId": "xyedjhsa",
+      "nodeCount": 7,
+      "edgeCount": 7,
+      "image": "sgb.png"
+    },
+    {
+      "algorithm": "ss_xgb",
+      "graphId": "xuvkomjw",
+      "nodeCount": 7,
+      "edgeCount": 7,
+      "image": "ss_xgb.png"
+    },
+    {
+      "algorithm": "gnb",
+      "graphId": "xgfcqccy",
+      "nodeCount": 7,
+      "edgeCount": 7,
+      "image": "gnb.png"
+    },
+    {
+      "algorithm": "gpc",
+      "graphId": "uokqtxmr",
+      "nodeCount": 7,
+      "edgeCount": 7,
+      "image": "gpc.png"
+    },
+    {
+      "algorithm": "knn",
+      "graphId": "nbsuzwhy",
+      "nodeCount": 7,
+      "edgeCount": 7,
+      "image": "knn.png"
+    },
+    {
+      "algorithm": "kmeans",
+      "graphId": "lxguaqms",
+      "nodeCount": 6,
+      "edgeCount": 6,
+      "image": "kmeans.png"
+    }
+  ],
+  "errors": []
+}
