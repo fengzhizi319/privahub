@@ -206,7 +206,7 @@ export const PublishModelDrawer: React.FC<{
                   </div>
                   {expanded[idx] && (
                     <div className="rounded border border-gray-100 dark:border-gray-800">
-                      <div className="grid grid-cols-2 gap-2 px-3 py-1.5 bg-gray-50 dark:bg-gray-850 text-[11px] text-gray-500">
+                      <div className="grid grid-cols-2 gap-2 px-3 py-1.5 bg-gray-50 dark:bg-gray-800 text-[11px] text-gray-500">
                         <span>{t('models.offlineFeature')}</span>
                         <span className="flex items-center justify-between">
                           {t('models.onlineFeature')}
@@ -260,7 +260,7 @@ export const PublishModelDrawer: React.FC<{
                     setResources((all) => ({ ...all, [nodeId]: { ...res, [k]: Number(v) } }));
                   const name = parties.find((p) => p.nodeId === nodeId)?.nodeName || nodeId;
                   return (
-                    <div key={nodeId} className="rounded-lg bg-gray-50 dark:bg-gray-850 p-3">
+                    <div key={nodeId} className="rounded-lg bg-gray-50 dark:bg-gray-800 p-3">
                       <div className="text-xs font-semibold mb-2">
                         {name} {t('models.predictNode')}
                       </div>

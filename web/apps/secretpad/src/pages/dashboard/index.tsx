@@ -262,7 +262,7 @@ export const DashboardPage: React.FC = () => {
                 <div
                   key={proj.projectId}
                   onClick={() => navigate({ to: '/projects' })}
-                  className="p-3.5 rounded-xl border border-gray-100 dark:border-gray-800 hover:border-blue-500/40 bg-gray-50/50 dark:bg-gray-850/50 cursor-pointer transition-all flex items-center justify-between"
+                  className="p-3.5 rounded-xl border border-gray-100 dark:border-gray-800 hover:border-blue-500/40 bg-gray-50/50 dark:bg-gray-800/50 cursor-pointer transition-all flex items-center justify-between"
                 >
                   <div>
                     <div className="font-semibold text-sm text-gray-900 dark:text-gray-100 flex items-center gap-2">

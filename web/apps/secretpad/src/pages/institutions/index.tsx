@@ -75,7 +75,7 @@ export const InstitutionsPage: React.FC = () => {
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead className="bg-gray-50 dark:bg-gray-850 text-gray-500 font-semibold border-b border-gray-200 dark:border-gray-800">
+            <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 font-semibold border-b border-gray-200 dark:border-gray-800">
               <tr>
                 <th className="p-4">{t('institutions.nodeName')}</th>
                 <th className="p-4">{t('institutions.status')}</th>
@@ -96,7 +96,7 @@ export const InstitutionsPage: React.FC = () => {
               {nodes.map((node) => {
                 const deleteReason = node.allowDeletion === false ? (node.isMainNode ? t('p2p.mainNodeNoDelete') : t('p2p.authorizedNoDelete')) : null;
                 return (
-                  <tr key={node.nodeId} className="hover:bg-gray-50/50 dark:hover:bg-gray-850/50">
+                  <tr key={node.nodeId} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50">
                     <td className="p-4">
                       <div className="font-semibold">
                         {node.isMainNode && (

@@ -5,12 +5,16 @@ import { ToastContainer, Button } from '@secretpad/design-system';
 import { LoginPage } from '../pages/login';
 import { landingAfterLogin } from './landing';
 import { clearStoredSession } from '@secretpad/api-client';
+import { useTranslation } from '../shared/lib/i18n';
 
-export const PageFallback: React.FC = () => (
-  <div className="min-h-[60vh] flex items-center justify-center">
-    <span className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" aria-label="loading" />
-  </div>
-);
+export const PageFallback: React.FC = () => {
+  const { t } = useTranslation();
+  return (
+    <div className="min-h-[60vh] flex items-center justify-center">
+      <span className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" aria-label={t('app.loading')} />
+    </div>
+  );
+};
 
 export const RootComponent: React.FC = () => (
   <>
@@ -42,6 +46,7 @@ const isAuthError = (error: Error): boolean => {
 };
 
 export const RouteErrorComponent: React.FC<{ error: Error; reset: () => void }> = ({ error, reset }) => {
+  const { t } = useTranslation();
   if (isAuthError(error)) {
     // Clear stale credentials and redirect to login. Use replace to avoid
     // leaving the broken route in the history stack.
@@ -62,14 +67,14 @@ export const RouteErrorComponent: React.FC<{ error: Error; reset: () => void }> 
         <div className="text-4xl mb-4" aria-hidden>
           ⚠️
         </div>
-        <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Page failed to load</h1>
+        <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">{t('app.errorTitle')}</h1>
         <p className="text-xs text-gray-400 dark:text-gray-500 font-mono break-all mb-6">{error.message}</p>
         <div className="flex justify-center gap-3">
           <Button variant="outline" onClick={reset}>
-            Try again
+            {t('app.tryAgain')}
           </Button>
           <Button variant="primary" onClick={() => (window.location.href = '/dashboard')}>
-            Back to dashboard
+            {t('app.backToDashboard')}
           </Button>
         </div>
       </div>

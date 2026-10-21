@@ -16,7 +16,9 @@ server:
 
 database:
   driver: "sqlite"
-  dsn: "privahub-dev.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+  # Relative to the backend working directory (privahub/); mirrors the
+  # production layout where the DB lives next to uploads under /app/data.
+  dsn: "data/privahub-dev.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
 
 # Ports below match the default Docker Kuscia host mappings. scripts/dev-start.sh
 # overrides them when KUSCIA_*_HOST_PORT is set, via PRIVAHUB_KUSCIA_API_PORT /

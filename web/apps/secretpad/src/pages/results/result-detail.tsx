@@ -20,9 +20,6 @@ import { mapGraphToDAG } from '../dag/adapters';
 import { triggerBlobDownload } from '../../features/job-detail';
 import { reportCsvBlob, type ReportTab as CsvReportTab } from './report-csv';
 
-const KIND_ZH: Record<string, string> = { table: '表', model: '模型', rule: '规则', report: '报告' };
-const FRAME_LABELS = { fullscreen: '全屏', exitFullscreen: '退出全屏' };
-
 function buildLineageTree(nodeId: string, nodes: Array<{ id: string; name: string; codeName?: string }>, edges: Array<{ source: string; target: string }>, seen = new Set<string>()): LineageNode {
   const n = nodes.find((x) => x.id === nodeId);
   seen.add(nodeId);
@@ -57,7 +54,7 @@ export const ResultDetailView: React.FC<{ detail: NodeResultDetailVO; result: No
   /** 报告下载：与结果列表相同的 CSV 导出（旧 result-details 报告 CSV 下载）。 */
   const downloadReport = () => {
     if (tabs.length === 0) {
-      toast.warning('报告为空，无可下载内容');
+      toast.warning(t('results.reportEmpty'));
       return;
     }
     triggerBlobDownload(reportCsvBlob(tabs as unknown as CsvReportTab[]), `${vo.domainDataId || vo.productName || 'report'}.csv`);
@@ -80,11 +77,11 @@ export const ResultDetailView: React.FC<{ detail: NodeResultDetailVO; result: No
     if (!isTee) return null;
     switch (vo.pullFromTeeStatus) {
       case 'SUCCESS':
-        return <Badge status="success">获取成功</Badge>;
+        return <Badge status="success">{t('results.fetchSuccess')}</Badge>;
       case 'RUNNING':
-        return <Badge status="processing">获取中</Badge>;
+        return <Badge status="processing">{t('results.fetching')}</Badge>;
       case 'FAILED':
-        return <Badge status="error">获取失败</Badge>;
+        return <Badge status="error">{t('results.fetchFailed')}</Badge>;
       default:
         return null;
     }
@@ -100,27 +97,27 @@ export const ResultDetailView: React.FC<{ detail: NodeResultDetailVO; result: No
       <Tabs activeKey={activeTab} onChange={setActiveTab} items={[{key:'basics',label:t('display.basics')},{key:'content',label:t('display.resultContent')},{key:'lineage',label:t('dagx.lineage')}]}/>
       <div hidden={activeTab !== 'basics'} className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
         <div>
-          <span className="text-gray-500">结果类型：</span>
-          {KIND_ZH[vo.datatableType || 'table'] || vo.datatableType}
+          <span className="text-gray-500">{t('results.resultType')}: </span>
+          {t(`results.kind.${vo.datatableType || 'table'}`)}
         </div>
         <div>
-          <span className="text-gray-500">来源项目：</span>
+          <span className="text-gray-500">{t('results.sourceProject')}: </span>
           {vo.sourceProjectName || vo.sourceProjectId || '-'}
         </div>
         <div>
-          <span className="text-gray-500">所属训练流：</span>
+          <span className="text-gray-500">{t('results.trainFlow')}: </span>
           {vo.trainFlow || graph?.name || '-'}
         </div>
         <div>
-          <span className="text-gray-500">生成时间：</span>
+          <span className="text-gray-500">{t('results.generatedAt')}: </span>
           {formatTimestamp(vo.gmtCreate) || '-'}
         </div>
         <div className="col-span-2 break-all">
-          <span className="text-gray-500">路径：</span>
+          <span className="text-gray-500">{t('results.path')}: </span>
           {vo.relativeUri || '-'}
         </div>
         <div className="col-span-2 break-all flex items-center gap-2">
-          <span className="text-gray-500">任务ID：</span>
+          <span className="text-gray-500">{t('results.jobId')}: </span>
           <span className="font-mono">{vo.jobId || '-'}</span>
           {vo.jobId && (
             <button type="button" className="text-blue-500 hover:underline" onClick={() => void navigator.clipboard?.writeText(vo.jobId || '')}>
@@ -136,7 +133,7 @@ export const ResultDetailView: React.FC<{ detail: NodeResultDetailVO; result: No
           <div className="flex items-center justify-between">
             <span className="font-semibold">{t('dagx.lineage')}</span>
             <Button size="sm" variant="ghost" onClick={() => setFullscreen(true)}>
-              ⛶ 全屏
+              ⛶ {t('common.fullscreen')}
             </Button>
           </div>
           <DagPreview nodes={dag.nodes} edges={dag.edges} highlight={highlight.size ? highlight : new Set(dag.nodes.map((n) => n.id))} focusId={focusId} />
@@ -152,28 +149,28 @@ export const ResultDetailView: React.FC<{ detail: NodeResultDetailVO; result: No
       <div hidden={activeTab !== 'content'} className="space-y-4">
       {vo.datatableType === 'report' && (
         <div className="space-y-2">
-          <div className="font-semibold">报告</div>
-          {tabs.length > 0 && codeName ? <ReportTabsView tabs={tabs} codeName={codeName} id={vo.domainDataId || ''} /> : <div className="text-gray-400">暂无结果</div>}
+          <div className="font-semibold">{t('results.reportTitle')}</div>
+          {tabs.length > 0 && codeName ? <ReportTabsView tabs={tabs} codeName={codeName} id={vo.domainDataId || ''} /> : <div className="text-gray-400">{t('results.noResult')}</div>}
         </div>
       )}
 
       {vo.datatableType !== 'report' && columns.length > 0 && (
         <div className="space-y-2">
-          <div className="font-semibold">表字段</div>
+          <div className="font-semibold">{t('results.tableColumns')}</div>
           {classification && (
             <div className="p-2 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 text-blue-700 dark:text-blue-300">
-              数据分类分级结果表：该表由隐私/数据分类分级组件生成，额外包含 __final_level__（行最终敏感等级 L1~L5）、__needs_review__（是否需要人工复核）、__tags_json__（命中标签集合）三个系统字段。
+              {t('results.classificationNote')}
             </div>
           )}
-          <ChartFrame labels={FRAME_LABELS}>
+          <ChartFrame labels={{ fullscreen: t('common.fullscreen'), exitFullscreen: t('results.exitFullscreen') }}>
             {(full) => (
               <div className={`${full ? '' : 'max-h-72'} overflow-auto rounded-lg border border-gray-200 dark:border-gray-700`}>
                 <table className="w-full">
                   <thead>
                     <tr className="bg-gray-50 dark:bg-gray-800 text-left">
-                      <th className="px-2 py-1">字段名称</th>
-                      <th className="px-2 py-1">类型</th>
-                      <th className="px-2 py-1">描述</th>
+                      <th className="px-2 py-1">{t('results.fieldName')}</th>
+                      <th className="px-2 py-1">{t('results.fieldType')}</th>
+                      <th className="px-2 py-1">{t('results.fieldDescription')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -203,17 +200,17 @@ export const ResultDetailView: React.FC<{ detail: NodeResultDetailVO; result: No
       <div className="flex justify-end gap-2">
         {vo.datatableType === 'report' && (
           <Button size="sm" variant="primary" disabled={tabs.length === 0} onClick={downloadReport}>
-            下载报告
+            {t('results.downloadReport')}
           </Button>
         )}
         {vo.datatableType !== 'report' && vo.pullFromTeeStatus === 'FAILED' && (
           <Button size="sm" variant="primary" loading={retrying} disabled={!!disabledReason} title={disabledReason} onClick={() => void download()}>
-            重新获取
+            {t('results.refetch')}
           </Button>
         )}
         {vo.datatableType !== 'report' && (vo.pullFromTeeStatus === 'SUCCESS' || !vo.pullFromTeeStatus) && (
           <Button size="sm" variant="primary" loading={retrying} disabled={!!disabledReason} title={disabledReason} onClick={() => void download()}>
-            下载结果
+            {t('results.downloadResult')}
           </Button>
         )}
       </div>

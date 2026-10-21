@@ -5,7 +5,7 @@
 - **Base URL**: `http://localhost:8080/api/v1alpha1`
 - **认证方式**: JWT Bearer Token (除登录外所有接口)
 - **内容类型**: `application/json`
-- **路由总数**: 143
+- **路由总数**: 157 条主路由（另有内部端口 6 条）；本文按模块摘录，完整清单以 `router.go` 为准
 
 ## 统一响应格式
 

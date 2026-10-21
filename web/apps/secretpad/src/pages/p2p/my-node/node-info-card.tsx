@@ -128,7 +128,7 @@ export const NodeInfoCard: React.FC<{ node: NodeDetailJava; headerExtra?: React.
         <div className="mt-5">
           <div className="text-sm font-semibold mb-2">{t('p2p.nodeFunc')}</div>
           {NODE_FUNCS.map((f) => (
-            <div key={f.nameKey} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-850 text-xs">
+            <div key={f.nameKey} className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-800 text-xs">
               <div>
                 <div className="font-semibold">{t(f.nameKey)}</div>
                 <div className="text-gray-500">{t(f.descKey)}</div>

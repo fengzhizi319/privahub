@@ -192,7 +192,7 @@ export const Modal: React.FC<ModalProps> = ({
         {/* Only the body scrolls: long template forms must keep submit/close reachable. */}
         <div className="p-4 sm:p-6 min-h-0 overflow-y-auto">{children}</div>
         {footer && (
-          <div className="px-4 sm:px-6 py-3 sm:py-4 shrink-0 bg-gray-50 dark:bg-gray-850 border-t border-gray-100 dark:border-gray-800 flex flex-wrap justify-end gap-2 sm:gap-3">
+          <div className="px-4 sm:px-6 py-3 sm:py-4 shrink-0 bg-gray-50 dark:bg-gray-800 border-t border-gray-100 dark:border-gray-800 flex flex-wrap justify-end gap-2 sm:gap-3">
             {footer}
           </div>
         )}

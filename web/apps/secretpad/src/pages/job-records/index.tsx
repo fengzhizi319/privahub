@@ -186,7 +186,7 @@ export const JobRecordsPage: React.FC = () => {
 
       <Card bodyClassName="p-0">
         <TableView id="job-records"><table className="w-full text-left text-xs">
-          <thead className="bg-gray-50 dark:bg-gray-850 text-gray-500 font-semibold uppercase border-b border-gray-200 dark:border-gray-800">
+          <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 font-semibold uppercase border-b border-gray-200 dark:border-gray-800">
             <tr>
               <th className="p-4 w-8">
                 <input
@@ -224,7 +224,7 @@ export const JobRecordsPage: React.FC = () => {
               const isRunning = st === NODE_STATUS.RUNNING;
               const graphName = (job as { graph?: { name?: string } }).graph?.name;
               return (
-                <tr key={job.jobId} className="hover:bg-gray-50/50 dark:hover:bg-gray-850/50">
+                <tr key={job.jobId} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50">
                   <td className="p-4">
                     <input
                       type="checkbox"

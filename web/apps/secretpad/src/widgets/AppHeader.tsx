@@ -7,6 +7,7 @@ import { Button } from '@secretpad/design-system';
 import { useAuthStore } from '../features/auth/model/auth-store';
 import { useGuideTourStore } from '../features/guide-tour';
 import { useThemeStore } from '../shared/lib/theme';
+import type { ThemeMode } from '../shared/lib/theme';
 import type { Locale } from '../shared/lib/i18n';
 import { useTranslation } from '../shared/lib/i18n';
 import { usePlatform } from '../shared/lib/platform';
@@ -22,7 +23,7 @@ const PENDING_POLL_MS = 30_000;
 
 export const AppHeader: React.FC<AppHeaderProps> = ({ title = 'Console Overview', onOpenNavigation }) => {
   const { user, logout } = useAuthStore();
-  const { resolved, toggle } = useThemeStore();
+  const { mode, setMode } = useThemeStore();
   const { t, locale, setLocale } = useTranslation();
   const navigate = useNavigate();
   const { platformType, ownerId, isAutonomy, isEdge, isCenterAdmin, deployMode } = usePlatform();
@@ -146,9 +147,17 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ title = 'Console Overview'
           <option value="en-US">{t('header.en')}</option>
         </select>
 
-        <Button size="sm" variant="ghost" className="hidden sm:inline-flex" onClick={toggle} title={t('header.toggleTheme')}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true">{resolved === 'light' ? <path d="M20 15A8 8 0 0 1 9 4 8 8 0 1 0 20 15Z" /> : <><circle cx="12" cy="12" r="4" /><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2" /></>}</svg>
-        </Button>
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value as ThemeMode)}
+          aria-label={t('header.theme')}
+          title={t('header.theme')}
+          className="hidden sm:block text-xs bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-2 py-1 text-gray-700 dark:text-gray-200 focus:outline-none focus:border-blue-500"
+        >
+          <option value="light">{t('header.light')}</option>
+          <option value="dark">{t('header.dark')}</option>
+          <option value="system">{t('header.system')}</option>
+        </select>
 
         <button
           type="button"
@@ -246,17 +255,28 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ title = 'Console Overview'
               >
                 🌐 {t('header.language')}: {locale === 'zh-CN' ? t('header.en') : t('header.zh')}
               </button>
-              <button
-                role="menuitem"
-                type="button"
-                className="w-full text-left px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-800 sm:hidden"
-                onClick={() => {
-                  toggle();
-                  setMenuOpen(false);
-                }}
-              >
-                {resolved === 'light' ? '🌙' : '☀️'} {t('header.toggleTheme')}
-              </button>
+              <div className="px-4 py-2 sm:hidden">
+                <div className="text-[11px] text-gray-500 mb-1">◐ {t('header.theme')}</div>
+                <div className="flex gap-1">
+                  {(['light', 'dark', 'system'] as ThemeMode[]).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => {
+                        setMode(m);
+                        setMenuOpen(false);
+                      }}
+                      className={`flex-1 px-2 py-1 rounded-lg border text-[11px] ${
+                        mode === m
+                          ? 'border-blue-500 text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40'
+                          : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800'
+                      }`}
+                    >
+                      {t(`header.${m}`)}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <button
                 role="menuitem"
                 type="button"

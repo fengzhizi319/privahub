@@ -67,7 +67,7 @@ const LINE_CLASS = 'bg-gray-300 dark:bg-gray-700';
  * 明细键值对以“标签: 值”形式列在下方。
  */
 const NodeCard: React.FC<{ node: LineageNode }> = ({ node }) => (
-  <div className="min-w-[180px] max-w-[240px] rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-850 shadow-sm px-3 py-2 flex-shrink-0">
+  <div className="min-w-[180px] max-w-[240px] rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-sm px-3 py-2 flex-shrink-0">
     {/* 首行：图标 + 标题 + 徽标 */}
     <div className="flex items-center gap-2">
       {node.icon && <span className="text-base leading-none">{node.icon}</span>}

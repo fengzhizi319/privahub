@@ -229,7 +229,7 @@ export const FeatureDatasourcePage: React.FC = () => {
                   {/* 字段表格 */}
                   <div className="overflow-x-auto">
                     <table className="w-full text-left text-xs">
-                      <thead className="bg-gray-50 dark:bg-gray-850 text-gray-500 uppercase tracking-wider font-semibold border-b border-gray-200 dark:border-gray-800">
+                      <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 uppercase tracking-wider font-semibold border-b border-gray-200 dark:border-gray-800">
                         <tr>
                           <th className="p-2.5">{t('featureDs.colName')}</th>
                           <th className="p-2.5">{t('featureDs.colType')}</th>
@@ -243,7 +243,7 @@ export const FeatureDatasourcePage: React.FC = () => {
                           </tr>
                         )}
                         {(ds.columns ?? []).map((col, idx) => (
-                          <tr key={idx} className="hover:bg-gray-50/50 dark:hover:bg-gray-850/50">
+                          <tr key={idx} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50">
                             <td className="p-2.5 font-mono text-blue-600 dark:text-blue-400">{col.colName || '-'}</td>
                             <td className="p-2.5 font-mono text-gray-500">{col.colType || '-'}</td>
                             <td className="p-2.5 text-gray-500">{col.colComment || '-'}</td>
@@ -316,7 +316,7 @@ export const FeatureDatasourcePage: React.FC = () => {
               type="text"
               value={dsUrl}
               onChange={(e) => setDsUrl(e.target.value)}
-              placeholder="jdbc:mysql://host:3306/db 或 /path/to/file.csv"
+              placeholder={t('featureDs.urlPlaceholder')}
               className="w-full p-2.5 rounded-lg bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-gray-100 font-mono focus:outline-none focus:border-blue-500"
               required
             />

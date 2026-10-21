@@ -348,7 +348,7 @@ export const DataTablesPage: React.FC = () => {
       <Card bodyClassName="p-0">
         <div className="overflow-x-auto">
           <TableView id="data-tables"><table className="w-full text-left text-xs">
-            <thead className="bg-gray-50 dark:bg-gray-850 text-gray-500 font-semibold border-b border-gray-200 dark:border-gray-800">
+            <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 font-semibold border-b border-gray-200 dark:border-gray-800">
               <tr>
                 {batchMode && <th className="p-3 w-8" />}
                 <th className="p-3">{t('dtList.name')}</th>
@@ -380,7 +380,7 @@ export const DataTablesPage: React.FC = () => {
                 const block = datatableDeleteBlock(r);
                 const k = rowKey(r);
                 return (
-                  <tr key={k} className="hover:bg-gray-50/50 dark:hover:bg-gray-850/50">
+                  <tr key={k} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50">
                     {batchMode && (
                       <td className="p-3">
                         <input

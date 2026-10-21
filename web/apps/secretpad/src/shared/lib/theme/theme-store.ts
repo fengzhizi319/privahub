@@ -84,19 +84,25 @@ export function initTheme(): ResolvedTheme {
   const mode = getStoredMode();
   const resolved = resolveTheme(mode);
   applyTheme(resolved);
-
-  // 当模式为 system 时，监听系统配色变化，实时重新应用。
-  if (mode === 'system' && typeof window !== 'undefined' && window.matchMedia) {
-    const mql = window.matchMedia('(prefers-color-scheme: dark)');
-    mql.addEventListener('change', (e) => {
-      // 仅当仍处于 system 模式时跟随系统（避免覆盖用户后续的手动选择）。
-      if (getStoredMode() === 'system') {
-        applyTheme(e.matches ? 'dark' : 'light');
-      }
-    });
-  }
-
+  bindSystemThemeListener();
   return resolved;
+}
+
+let systemListenerBound = false;
+
+/**
+ * 监听系统配色变化（只注册一次）。仅当用户当前选择为 system 时生效，
+ * 同时同步 store 的 resolved，保证 header 等订阅方与实际主题一致。
+ */
+function bindSystemThemeListener(): void {
+  if (systemListenerBound || typeof window === 'undefined' || !window.matchMedia) return;
+  systemListenerBound = true;
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+    if (useThemeStore.getState().mode !== 'system') return;
+    const next: ResolvedTheme = e.matches ? 'dark' : 'light';
+    applyTheme(next);
+    useThemeStore.setState({ resolved: next });
+  });
 }
 
 /**
@@ -114,6 +120,7 @@ export const useThemeStore = create<ThemeState>((set) => ({
       localStorage.setItem(STORAGE_KEY, mode);
     }
     applyTheme(resolved);
+    if (mode === 'system') bindSystemThemeListener();
     set({ mode, resolved });
   },
 

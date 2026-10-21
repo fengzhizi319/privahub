@@ -28,9 +28,9 @@ export const NodeInstancesSection: React.FC<{ instances?: NodeInstanceJava[]; re
       </div>
       <div className="overflow-x-auto rounded-lg border border-gray-100 dark:border-gray-800">
         <table className="w-full text-left text-xs">
-          <thead className="bg-gray-50 dark:bg-gray-850 text-gray-500">
+          <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500">
             <tr>
-              <th className="p-2">HostName</th>
+              <th className="p-2">{t('nodes.hostName')}</th>
               <th className="p-2">{t('nodes.status')}</th>
               <th className="p-2">{t('nodes.instanceVersion')}</th>
               <th className="p-2">{t('nodes.instanceCreateTime')}</th>

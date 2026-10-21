@@ -32,6 +32,8 @@ export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     document.documentElement.lang = locale === 'zh-CN' ? 'zh' : 'en';
+    const title = getValue(dictionaries[locale], 'app.title');
+    if (title) document.title = title;
   }, [locale]);
 
   const setLocale = (next: Locale) => {

@@ -152,7 +152,7 @@ export const WorkbenchPage: React.FC = () => {
                   {/* 步骤节点：点击跳转对应功能页。 */}
                   <button
                     onClick={() => navigate({ to: step.target })}
-                    className="flex flex-col items-center gap-1.5 px-4 py-3 rounded-xl bg-white dark:bg-gray-850 border border-gray-200 dark:border-gray-700 hover:border-blue-500/60 hover:shadow-sm transition-all flex-shrink-0 min-w-[92px]"
+                    className="flex flex-col items-center gap-1.5 px-4 py-3 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:border-blue-500/60 hover:shadow-sm transition-all flex-shrink-0 min-w-[92px]"
                   >
                     <span className="text-xl">{step.icon}</span>
                     <span className="text-[11px] font-medium text-gray-700 dark:text-gray-300">
@@ -234,7 +234,7 @@ export const WorkbenchPage: React.FC = () => {
                   <div
                     key={proj.projectId}
                     onClick={() => navigate({ to: '/p2p/projects' })}
-                    className="p-3.5 rounded-xl border border-gray-100 dark:border-gray-800 hover:border-blue-500/40 bg-gray-50/50 dark:bg-gray-850/50 cursor-pointer transition-all flex items-center justify-between"
+                    className="p-3.5 rounded-xl border border-gray-100 dark:border-gray-800 hover:border-blue-500/40 bg-gray-50/50 dark:bg-gray-800/50 cursor-pointer transition-all flex items-center justify-between"
                   >
                     <div>
                       <div className="font-semibold text-sm text-gray-900 dark:text-gray-100">

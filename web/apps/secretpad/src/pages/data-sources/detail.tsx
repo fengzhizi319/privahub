@@ -121,7 +121,7 @@ export const DataSourceDetailPage: React.FC = () => {
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
-            <thead className="bg-gray-50 dark:bg-gray-850 text-gray-500 font-semibold border-b border-gray-200 dark:border-gray-800">
+            <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 font-semibold border-b border-gray-200 dark:border-gray-800">
               <tr>
                 <th className="p-4">{t('dataSources.nodeName')}</th>
                 <th className="p-4">{t('dataSources.id')}</th>

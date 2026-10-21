@@ -174,7 +174,7 @@ export const ModelsPage: React.FC = () => {
       <Card bodyClassName="p-0">
         <div className="overflow-x-auto">
           <TableView id="models"><table className="w-full text-left text-xs">
-            <thead className="bg-gray-50 dark:bg-gray-850 text-gray-500 font-semibold border-b border-gray-200 dark:border-gray-800">
+            <thead className="bg-gray-50 dark:bg-gray-800 text-gray-500 font-semibold border-b border-gray-200 dark:border-gray-800">
               <tr>
                 <th className="p-3">{t('models.name')}</th>
                 <th className="p-3">{t('models.modelId')}</th>
@@ -207,7 +207,7 @@ export const ModelsPage: React.FC = () => {
               {models.map((m) => {
                 const s = m.modelStats || '';
                 return (
-                  <tr key={m.modelId} className="hover:bg-gray-50/50 dark:hover:bg-gray-850/50">
+                  <tr key={m.modelId} className="hover:bg-gray-50/50 dark:hover:bg-gray-800/50">
                     <td className="p-3 font-semibold">
                       <button type="button" className="text-blue-600 dark:text-blue-400 hover:underline" onClick={() => setDetail(m)}>
                         {m.modelName || m.modelId}

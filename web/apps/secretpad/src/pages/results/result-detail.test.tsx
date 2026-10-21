@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import type { NodeResultDetailVO } from '@secretpad/api-client';
 
@@ -23,6 +23,9 @@ const reportDetail = {
 } as unknown as NodeResultDetailVO;
 
 describe('ResultDetailView', () => {
+  beforeEach(() => localStorage.setItem('secretpad-locale', 'zh-CN'));
+  afterEach(() => localStorage.clear());
+
   it('downloads a report as CSV from the detail drawer (same export as the list)', async () => {
     render(
       <I18nProvider>

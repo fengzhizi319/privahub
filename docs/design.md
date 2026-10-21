@@ -20,14 +20,14 @@ Privahub 是隐私计算平台 SecretPad 后端的 Go 语言实现，完整迁�
 │  │  → AuditLog → RateLimiter → BodyLimit → JWTAuth     │   │
 │  └─────────────────────────────────────────────────────┘   │
 │  ┌─────────────────────────────────────────────────────┐   │
-│  │              Router (143 routes)                     │   │
-│  │  /api/v1alpha1/* → 17 Handlers                      │   │
+│  │              Router (157 routes)                     │   │
+│  │  /api/v1alpha1/* → 19 Handlers                      │   │
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
                               │
                               ▼
 ┌─────────────────────────────────────────────────────────────┐
-│                   Service Layer (22)                         │
+│                   Service Layer (27)                         │
 │  Auth │ Project │ Graph │ Job │ Node │ Datatable │ ...      │
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -172,12 +172,12 @@ type App struct {
     // Services
     AuthService  *service.AuthService
     ProjectService *service.ProjectService
-    // ... 22 services
+    // ... 27 services
     
     // Handlers
     AuthHandler  *v1.AuthHandler
     ProjectHandler *v1.ProjectHandler
-    // ... 17 handlers
+    // ... 19 handlers
 }
 ```
 
@@ -256,10 +256,10 @@ if err := kusciaClient.CreateDomain(ctx, req); err != nil {
 
 | 端口 | 用途 | 认证 |
 |------|------|------|
-| 8080 | 主 HTTP 服务 | JWT |
-| 9001 | 内部端口 (集群通信) | 无 |
+| 8080 | 主 HTTP 服务（含 `/metrics`） | JWT；指标按 `metrics_access` |
+| 9001 | 内部端口 (集群通信) | `server.inner_auth` |
 | 9090 | gRPC (预留) | - |
-| 9091 | Prometheus 指标 | 无 |
+| 9091 | 指标端口配置预留（当前未单独监听） | - |
 
 ## 7. 配置管理
 

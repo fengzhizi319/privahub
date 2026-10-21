@@ -165,7 +165,7 @@ export const CooperativeNodeDetailDrawer: React.FC<{
         <div className="space-y-4">
           <div>
             <div className="text-sm font-semibold mb-1">{t('coop.coopBasicInfo')}</div>
-            <div className="rounded-lg bg-gray-50 dark:bg-gray-850 px-3 py-1">
+            <div className="rounded-lg bg-gray-50 dark:bg-gray-800 px-3 py-1">
               {p2p && (
                 <>
                   <InfoRow label={t('coop.instName')}>{d.srcNode?.instName || '-'}</InfoRow>

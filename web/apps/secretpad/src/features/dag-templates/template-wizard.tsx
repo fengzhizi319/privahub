@@ -97,6 +97,7 @@ function ColumnSelect({
   multiple?: boolean;
   disabled?: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="space-y-2">
       <label className="block font-semibold text-gray-700 dark:text-gray-300">{label}</label>
@@ -116,7 +117,7 @@ function ColumnSelect({
         className="w-full p-2 rounded-lg bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:border-blue-500"
         size={multiple && columns.length > 0 ? Math.min(5, columns.length) : 1}
       >
-        {!multiple && <option value="">请选择列</option>}
+        {!multiple && <option value="">{t('dag.selectColumn')}</option>}
         {columns.map((c) => (
           <option key={c.name} value={c.name}>
             {c.name} {c.type ? `(${c.type})` : ''}
@@ -124,7 +125,7 @@ function ColumnSelect({
         ))}
       </select>
       {multiple && Array.isArray(value) && value.length > 0 && (
-        <div className="text-xs text-gray-500">已选择 {value.length} 列</div>
+        <div className="text-xs text-gray-500">{t('dag.selectedColumns', { count: value.length })}</div>
       )}
     </div>
   );
