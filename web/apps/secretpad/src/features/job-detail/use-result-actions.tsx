@@ -57,7 +57,12 @@ export function useResultActions(opts: { projectId: string; graphId?: string; co
       onViewNodeResult: (row: OutputRow) => {
         // node/result/list nameFilter matches the domainDataId (ref_id), not the file path.
         const name = row.tableId || row.domainDataId || '';
-        if (typeof window !== 'undefined') window.open(`/results?ownerId=${encodeURIComponent(row.nodeId || '')}&resultName=${encodeURIComponent(name)}`, '_blank');
+        if (typeof window !== 'undefined')
+          window.open(
+            `/results?ownerId=${encodeURIComponent(row.nodeId || '')}&resultName=${encodeURIComponent(name)}`,
+            '_blank',
+            'noopener,noreferrer'
+          );
       },
     }),
     [opts.projectId, opts.graphId],

@@ -7,7 +7,7 @@
  * 3. 编辑数据表名称、描述、空缺值与数据表结构（字段名 / 类型 / 描述）；
  * 4. 调用 `data/create`（Java `CreateDataRequest`）完成数据表注册。
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
 import { Button, FormField, Input, Modal, Select, Steps, Textarea, toast } from '@secretpad/design-system';
 import type { Node, UploadDataResultVO } from '@secretpad/api-client';
@@ -50,6 +50,12 @@ export const DataUploadModal: React.FC<DataUploadModalProps> = ({
   const [nullStrsText, setNullStrsText] = useState(DEFAULT_NULL_STRS_TEXT);
   const [fields, setFields] = useState<SchemaField[]>([]);
   const [touched, setTouched] = useState(false);
+  /**
+   * 文件选择竞态保护：`pickFile` 内 `readCsvHead` 需要异步读取前 64KB，
+   * 快速连续选择文件时先发起的调用可能后完成，从而覆盖新选择的文件状态。
+   * 以单调递增序号标记每次调用，仅让“最新一次”调用的结果写入 state。
+   */
+  const pickFileSeq = useRef(0);
 
   useEffect(() => {
     if (isOpen) setNodeId(fixedNodeId || defaultNodeId || '');
@@ -72,6 +78,8 @@ export const DataUploadModal: React.FC<DataUploadModalProps> = ({
   };
 
   const pickFile = async (f: File | null) => {
+    // 每次调用自增序号；await 之后若已有更新的调用发起，本次结果作废。
+    const seq = ++pickFileSeq.current;
     setFile(null);
     setFields([]);
     if (!f) return;
@@ -83,13 +91,14 @@ export const DataUploadModal: React.FC<DataUploadModalProps> = ({
     setParsing(true);
     try {
       const preview = await readCsvHead(f);
+      if (seq !== pickFileSeq.current) return; // 过期调用：已有更新的文件选择。
       if (preview.header.length === 0) throw new Error('empty');
       setFields(schemaFromCsvPreview(preview, parseNullStrs(nullStrsText) ?? ['']));
       setFile(f);
     } catch {
-      toast.error(t('dataUpload.parseError'));
+      if (seq === pickFileSeq.current) toast.error(t('dataUpload.parseError'));
     } finally {
-      setParsing(false);
+      if (seq === pickFileSeq.current) setParsing(false);
     }
   };
 

@@ -18,8 +18,9 @@ import { captureException } from './sentry';
  *    未设置（默认）时**不产生任何网络请求**。
  *    - Privahub 后端没有指标采集端点（旧的 `/api/v1alpha1/v1/metrics` 并不存在，
  *      只会 404）；而且 `/api/**` 走 Cookie 会话 + CSRF 校验，sendBeacon 无法携带
- *      `X-CSRF-Token` 头，会被拒绝。因此端点应是一个无需会话的独立采集服务，
- *      并需同步放开 CSP 的 `connect-src`。
+ *      `X-CSRF-Token` 头，会被拒绝。因此端点应是一个无需会话的独立采集服务；
+ *      构建期配置本变量时，`vite.config.ts` 的 CSP 插件会自动把端点 origin
+ *      追加到 `connect-src`（与 `VITE_SENTRY_DSN` 共用同一放行机制）。
  *    - 同时把「较差」的指标作为异常线索交给 Sentry（未配置 DSN 时为 no-op）。
  * 3. 所有上报均为「尽力而为」，任何失败都被静默吞掉，绝不影响业务。
  */

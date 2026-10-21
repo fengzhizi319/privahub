@@ -146,13 +146,27 @@ export const ResultList: React.FC<{ onOpenDetail: (result: NodeAllResultsVO) => 
 
   const selectedRows = Object.values(selected);
   const batchDownload = useMutation({
+    // 逐项独立 try/catch：单个结果下载失败不中断其余下载，
+    // 结束后汇总展示成功/失败数量，而非首个错误即放弃。
     mutationFn: async () => {
       const targets = selectedRows.filter((r) => canDownload(r) || r.datatableType === 'report');
-      for (const r of targets) await download(r);
-      return targets.length;
+      let succeeded = 0;
+      let failed = 0;
+      for (const r of targets) {
+        try {
+          await download(r);
+          succeeded += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+      return { succeeded, failed, total: targets.length };
     },
-    onSuccess: (n) => toast.success(t('results.batchDownloaded', { count: n })),
-    onError: (e) => toast.error(errorText(e)),
+    onSuccess: ({ succeeded, failed }) => {
+      if (failed > 0) toast.warning(t('results.batchDownloadPartial', { succeeded, failed }));
+      else toast.success(t('results.batchDownloaded', { count: succeeded }));
+    },
+    onSettled: invalidate,
   });
   const deletable = selectedRows.filter((r) => (r.datatableType || 'table') === 'table');
   const batchDelete = useMutation({
