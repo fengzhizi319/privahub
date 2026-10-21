@@ -1,0 +1,107 @@
+# =============================================================================
+# privaconsole (privahub web console) CI.
+#
+# Local parity (from the repo root):
+#   corepack enable
+#   corepack pnpm install --frozen-lockfile
+#   corepack pnpm run typecheck && corepack pnpm test && corepack pnpm run lint
+#   corepack pnpm run build
+#   corepack pnpm audit --prod --registry=https://registry.npmjs.org
+#
+# Rules: actions pinned by commit SHA; no continue-on-error / `|| true` on
+# gates. The repo .npmrc points at npmmirror (no audit endpoint), so the audit
+# always queries registry.npmjs.org explicitly.
+# =============================================================================
+name: ci
+
+on:
+  push:
+    branches: [main, "feat/**", "release/**"]
+  pull_request:
+  schedule:
+    - cron: "23 3 * * 1" # weekly: new advisories for unchanged dependencies
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "22"
+  HUSKY: "0" # the prepare script installs hooks relative to the privahub checkout
+
+jobs:
+  verify:
+    name: install / typecheck / test / lint / build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: enable corepack (pnpm version from packageManager)
+        run: corepack enable
+      - name: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile
+      - name: typecheck
+        run: pnpm run typecheck
+      - name: test
+        run: pnpm test
+      - name: lint
+        run: pnpm run lint
+      - name: build
+        run: pnpm run build
+      - name: build output sanity (CSP meta present, no source maps shipped)
+        run: |
+          test -f apps/secretpad/dist/index.html
+          grep -q 'Content-Security-Policy' apps/secretpad/dist/index.html
+          if find apps/secretpad/dist -name '*.map' | grep -q .; then
+            echo "source maps must not be shipped in the production bundle" >&2
+            exit 1
+          fi
+
+  audit:
+    name: pnpm audit --prod
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - run: corepack enable
+      - name: pnpm audit (production deps, high+)
+        run: pnpm audit --prod --audit-level high --registry=https://registry.npmjs.org
+
+  secrets:
+    name: gitleaks (full history)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.x"
+          cache: false
+      - name: gitleaks git (history) + dir (tree)
+        run: |
+          go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --config .gitleaks.toml --redact --no-banner --exit-code 1 .
+          go run github.com/zricethezav/gitleaks/v8@v8.30.1 dir --config .gitleaks.toml --redact --no-banner --exit-code 1 .
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.x"
+          cache: false
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color

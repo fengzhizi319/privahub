@@ -1,0 +1,17 @@
+# gitleaks configuration for privaconsole (the privahub web console).
+# CI: .github/workflows/ci.yml job "secrets" scans the FULL git history.
+# Allowlist entries must be narrow and justified; a real leak is handled per
+# privahub docs/security/runbooks/credential-leak.md (rotate first).
+title = "privaconsole gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Dependencies, build output and generated coverage are not ours"
+paths = ['''(^|/)node_modules/''', '''(^|/)dist/''', '''(^|/)coverage/''', '''^pnpm-lock\.yaml$''']
+
+[[allowlists]]
+description = "Test fixtures: MSW handlers / specs use fake tokens (e.g. 'test-token')"
+paths = ['''(^|/)(test|__tests__|mocks)/''', '''\.(test|spec)\.tsx?$''']
+regexes = ['''(?i)(fake|mock|test|dummy)[-_]?(token|password|secret)''']
