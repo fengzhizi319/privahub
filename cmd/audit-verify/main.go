@@ -8,6 +8,9 @@
 //	audit-verify -config ./config/privahub.yaml
 //	audit-verify -driver sqlite -dsn ./privahub.db -anchor-file /worm/audit.anchor -archive-dir ./data/audit/archive
 //
+// For MySQL the password can be supplied via MYSQL_PWD instead of embedding
+// it in the -dsn argument (which is visible in the process list).
+//
 // Exit codes: 0 chain valid, 2 chain broken, 1 error.
 package main
 
@@ -22,6 +25,7 @@ import (
 	"github.com/fengzhizi319/privahub/internal/audit"
 	"github.com/fengzhizi319/privahub/internal/dao"
 	"github.com/fengzhizi319/privahub/pkg/config"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -30,6 +34,26 @@ import (
 
 func main() {
 	os.Exit(run(os.Args[1:]))
+}
+
+// mysqlDSNFromEnv injects the password from MYSQL_PWD into a go-sql-driver
+// DSN that carries none. This keeps the password out of the process list
+// (visible to any local user via /proc/*/cmdline, a known issue when the DSN
+// is passed as a command-line argument). A DSN that already contains a
+// password — or one that cannot be parsed, or when MYSQL_PWD is unset — is
+// returned unchanged, so the later connection attempt reports the original
+// configuration verbatim.
+func mysqlDSNFromEnv(dsn string) string {
+	pwd := os.Getenv("MYSQL_PWD")
+	if pwd == "" {
+		return dsn
+	}
+	cfg, err := mysqldriver.ParseDSN(dsn)
+	if err != nil || cfg.User == "" || cfg.Passwd != "" {
+		return dsn
+	}
+	cfg.Passwd = pwd
+	return cfg.FormatDSN()
 }
 
 func run(args []string) int {
@@ -68,7 +92,7 @@ func run(args []string) int {
 		sqliteDSN, _ := dao.NormalizeSQLiteDSN(*dsn)
 		dial = sqlite.Open(sqliteDSN)
 	case "mysql":
-		dial = mysql.Open(*dsn)
+		dial = mysql.Open(mysqlDSNFromEnv(*dsn))
 	default:
 		fmt.Fprintf(os.Stderr, "unsupported driver %q\n", *driver)
 		return 1

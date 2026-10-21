@@ -271,11 +271,10 @@ func (s *NodeService) ListNodeResults(ctx context.Context, req *ListNodeResultRe
 	}
 	q = q.Order(order).Order("id DESC")
 	if req.PageSize > 0 {
-		page := req.PageNumber
-		if page < 1 {
-			page = 1
-		}
-		q = q.Offset((page - 1) * req.PageSize).Limit(req.PageSize)
+		// Reuse the shared clamp (page >= 1, 1 <= size <= 1000) so a huge
+		// pageSize cannot pull the whole table in one query.
+		page, size := normalizePage(req.PageNumber, req.PageSize)
+		q = q.Offset((page - 1) * size).Limit(size)
 	}
 	var rows []model.ProjectResultDO
 	if err := q.Find(&rows).Error; err != nil {

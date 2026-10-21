@@ -857,8 +857,10 @@ func (s *DatatableService) ListDatatablesByOwnerID(ctx context.Context, req *Lis
 		size = len(all)
 	}
 	start := size * (page - 1)
+	// Over-the-end paging returns an empty page (total still reported), like
+	// the SQL-paginated services (job_service), instead of an error.
 	if start > len(all) {
-		return nil, bizErr(errcode.SystemOutOfRangeError, "page start index > dataList length.")
+		start = len(all)
 	}
 	end := start + size
 	if end > len(all) {

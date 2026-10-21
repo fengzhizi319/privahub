@@ -767,8 +767,10 @@ func (s *DatasourceService) ListDatasources(ctx context.Context, req *Datasource
 	s.attachRelatedDatas(ctx, filtered)
 
 	start := req.Size * (req.Page - 1)
+	// Over-the-end paging returns an empty page (total still reported), like
+	// the SQL-paginated services (job_service), instead of an error.
 	if start > len(filtered) {
-		return nil, bizErr(errcode.SystemOutOfRangeError, "page start index > datasource  list length.")
+		start = len(filtered)
 	}
 	end := start + req.Size
 	if end > len(filtered) {

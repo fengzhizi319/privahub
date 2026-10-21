@@ -227,8 +227,14 @@ func TestDatasourceService_ListAggregateFilterPage(t *testing.T) {
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, vo.Total)
 	assert.EqualValues(t, 1, vo.TotalPage)
-	_, err = ds.ListDatasources(ctx, &DatasourceListRequest{OwnerID: "inst1", Page: 5, Size: 10})
-	assert.Equal(t, errcode.SystemOutOfRangeError.Code, dataBizCode(err))
+	// Over-the-end paging returns an empty page (total still reported) instead
+	// of SystemOutOfRangeError, matching the SQL-paginated services.
+	full, err := ds.ListDatasources(ctx, &DatasourceListRequest{OwnerID: "inst1", Page: 1, Size: 100})
+	require.NoError(t, err)
+	vo, err = ds.ListDatasources(ctx, &DatasourceListRequest{OwnerID: "inst1", Page: 5, Size: 10})
+	require.NoError(t, err)
+	assert.Empty(t, vo.Infos)
+	assert.Equal(t, full.Total, vo.Total)
 }
 
 func TestDatasourceService_DetailNodesDelete(t *testing.T) {

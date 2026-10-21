@@ -163,18 +163,22 @@ func checkUploadFileName(name string) error {
 	if i < 0 {
 		return bizErr(errcode.DataFileTypeNotSupport, "does not support  type file.")
 	}
-	if suffix := name[i:]; suffix != supportedUploadSuffix {
+	if suffix := name[i:]; !strings.EqualFold(suffix, supportedUploadSuffix) {
 		return bizErr(errcode.DataFileTypeNotSupport, "does not support "+suffix+" type file.")
 	}
 	return nil
 }
 
-func randomInt31() int64 {
+// randomInt31 returns a crypto/rand value in [0, 2^31-1]. A rand failure is
+// returned as an error instead of silently degrading to 0, which would make
+// concurrent uploads race on "<prefix>_0.csv" and fail with a confusing
+// DataFileExistsError.
+func randomInt31() (int64, error) {
 	v, err := rand.Int(rand.Reader, big.NewInt(1<<31-1))
 	if err != nil {
-		return 0
+		return 0, err
 	}
-	return v.Int64()
+	return v.Int64(), nil
 }
 
 // inDir reports whether path is inside dir (both absolute & cleaned).
@@ -201,7 +205,11 @@ func (s *DataService) Upload(ctx context.Context, nodeID, fileName string, src i
 	prefix, suffix := fileName[:i], fileName[i:]
 	var realName, target string
 	for try := 0; try < 5; try++ {
-		realName = fmt.Sprintf("%s_%d%s", prefix, randomInt31(), suffix)
+		n, err := randomInt31()
+		if err != nil {
+			return nil, bizWrap(errcode.SystemUnknownError, err, "Failed to generate file name")
+		}
+		realName = fmt.Sprintf("%s_%d%s", prefix, n, suffix)
 		target = filepath.Join(dir, realName)
 		if _, err := os.Stat(target); os.IsNotExist(err) {
 			break
@@ -389,6 +397,11 @@ func writeTarGz(w io.Writer, root string) error {
 		rel, err := filepath.Rel(parent, p)
 		if err != nil {
 			return err
+		}
+		// The walk starts at root itself, whose relative name is "."; a "./"
+		// tar entry is rejected by strict extractors, so skip it.
+		if rel == "." {
+			return nil
 		}
 		hdr, err := tar.FileInfoHeader(info, "")
 		if err != nil {

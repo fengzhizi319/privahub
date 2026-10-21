@@ -74,6 +74,10 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	// using the tokens from the body (omitted when the browser asks for a
 	// cookie-only session).
 	if err := middleware.IssueBrowserSession(c, resp.TokenPair.AccessToken, resp.TokenPair.RefreshToken, true); err != nil {
+		// Login already persisted the server-side session; revoke it so the
+		// failure does not leave an orphaned session occupying the quota
+		// until the idle timeout.
+		_ = h.authService.Logout(service.WithClientIP(c.Request.Context(), c.ClientIP()), resp.Name, resp.TokenPair.AccessToken)
 		response.FailWithMsg(c, errcode.SystemUnknownError, "cannot issue session")
 		return
 	}
